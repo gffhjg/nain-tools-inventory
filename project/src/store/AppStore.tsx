@@ -186,40 +186,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [applyReceivedStock, addNotification]);
 
   const markPurchaseReceived = useCallback(async (id: string) => {
-    setPurchases((prev) => {
-      const po = prev.find((p) => p.id === id);
-      if (!po || po.status === 'received') return prev;
-      const updated: PurchaseRecord = {
-        ...po,
-        status: 'received',
-        receivedDate: new Date().toISOString().slice(0, 10),
-      };
-      void applyReceivedStock(updated);
-      void api.markPurchaseReceived(id);
-      return prev.map((p) => (p.id === id ? updated : p));
-    });
-  }, [applyReceivedStock]);
+    const po = purchases.find((p) => p.id === id);
+    if (!po || po.status === 'received') return;
+    const updated: PurchaseRecord = {
+      ...po,
+      status: 'received',
+      receivedDate: new Date().toISOString().slice(0, 10),
+    };
+    setPurchases((prev) => prev.map((p) => (p.id === id ? updated : p)));
+    await applyReceivedStock(updated);
+    await api.markPurchaseReceived(id);
+  }, [purchases, applyReceivedStock]);
 
   const updatePurchaseStatus = useCallback(async (id: string, status: PurchaseStatus) => {
-    setPurchases((prev) => {
-      const po = prev.find((p) => p.id === id);
-      if (!po) return prev;
-      const wasReceived = po.status === 'received';
-      const willBeReceived = status === 'received';
-      const updated: PurchaseRecord = {
-        ...po,
-        status,
-        receivedDate: willBeReceived && !po.receivedDate
-          ? new Date().toISOString().slice(0, 10)
-          : po.receivedDate,
-      };
-      if (!wasReceived && willBeReceived) {
-        void applyReceivedStock(updated);
-      }
-      void api.updatePurchaseStatus(id, status);
-      return prev.map((p) => (p.id === id ? updated : p));
-    });
-  }, [applyReceivedStock]);
+    const po = purchases.find((p) => p.id === id);
+    if (!po) return;
+    const wasReceived = po.status === 'received';
+    const willBeReceived = status === 'received';
+    const updated: PurchaseRecord = {
+      ...po,
+      status,
+      receivedDate: willBeReceived && !po.receivedDate
+        ? new Date().toISOString().slice(0, 10)
+        : po.receivedDate,
+    };
+    setPurchases((prev) => prev.map((p) => (p.id === id ? updated : p)));
+    if (!wasReceived && willBeReceived) {
+      await applyReceivedStock(updated);
+    }
+    await api.updatePurchaseStatus(id, status);
+  }, [purchases, applyReceivedStock]);
 
   const addVerification = useCallback(async (v: VerificationRecord) => {
     await api.createVerification(v);

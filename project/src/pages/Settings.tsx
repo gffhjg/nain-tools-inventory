@@ -3,6 +3,7 @@ import { User, Building2, Bell, Shield, Globe, Save, Upload, CheckCircle2, Palet
 import PageHeader from '@/components/PageHeader';
 import { api, APP_VERSION } from '@/lib/api';
 import { getDbInfo, verifyIntegrity } from '@/lib/db';
+import type { CompanySettings } from '@/lib/types';
 
 type Tab = 'profile' | 'business' | 'notifications' | 'security' | 'about';
 
@@ -37,6 +38,8 @@ export default function Settings() {
   const [taxRate, setTaxRate] = useState('18');
   const [theme, setTheme] = useState<(typeof themes)[number]['id']>('light');
   const [saved, setSaved] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [backupMsg, setBackupMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -49,6 +52,10 @@ export default function Settings() {
     getDbInfo().then(setDbInfo).catch(() => {});
     verifyIntegrity().then(setIntegrityStatus).catch(() => {});
   }, [activeTab]);
+
+  useEffect(() => {
+    api.getCompanySettings().then(setCompanySettings).catch(() => {});
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = useCallback(async () => {
@@ -96,9 +103,18 @@ export default function Settings() {
     }
   }, [confirmImport]);
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+  const handleSave = async () => {
+    if (!companySettings) return;
+    setSavingSettings(true);
+    try {
+      await api.updateCompanySettings(companySettings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch {
+      setBackupMsg({ type: 'error', text: 'Failed to save business settings.' });
+    } finally {
+      setSavingSettings(false);
+    }
   };
 
   return (
@@ -107,9 +123,9 @@ export default function Settings() {
         title="Settings"
         subtitle="Manage your account, business info, and preferences."
         actions={
-          <button className="btn-primary" onClick={handleSave}>
-            {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-            <span className="hidden sm:inline">{saved ? 'Saved!' : 'Save Changes'}</span>
+          <button className="btn-primary" onClick={handleSave} disabled={savingSettings}>
+            {savingSettings ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+            <span className="hidden sm:inline">{savingSettings ? 'Saving...' : saved ? 'Saved!' : 'Save Changes'}</span>
           </button>
         }
       />
@@ -117,7 +133,7 @@ export default function Settings() {
       {saved && (
         <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-accent-200 bg-accent-50 px-4 py-3 text-sm font-medium text-accent-700 animate-fade-in">
           <CheckCircle2 className="h-4 w-4" />
-          Settings saved successfully. (Mock save — changes are not persisted.)
+          Business settings saved successfully.
         </div>
       )}
 
@@ -179,12 +195,24 @@ export default function Settings() {
               <p className="text-sm text-slate-500">Information used on invoices and reports.</p>
 
               <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field label="Business Name" defaultValue="Nain Tools & Bolt Co." />
-                <Field label="GST Number" defaultValue="24ABCDE1234F1Z5" />
-                <Field label="Time Zone" defaultValue="IST (UTC+05:30) India" />
+                <ControlledField label="Business Name" value={companySettings?.companyName ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, companyName: v } : s)} />
+                <ControlledField label="GST Number" value={companySettings?.gstin ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, gstin: v } : s)} />
+                <ControlledField label="PAN" value={companySettings?.pan ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, pan: v } : s)} />
+                <ControlledField label="Phone" value={companySettings?.phone ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, phone: v } : s)} />
+                <ControlledField label="Email" value={companySettings?.email ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, email: v } : s)} />
+                <ControlledField label="State" value={companySettings?.state ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, state: v } : s)} />
                 <div className="sm:col-span-2">
-                  <Field label="Business Address" defaultValue="Plot 42, GIDC Industrial Estate, Jamnagar, Gujarat 361004" />
+                  <ControlledField label="Business Address" value={companySettings?.address ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, address: v } : s)} />
                 </div>
+              </div>
+
+              {/* Bank details */}
+              <h4 className="mt-6 text-sm font-semibold text-slate-700">Bank Details</h4>
+              <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <ControlledField label="Bank Name" value={companySettings?.bankName ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, bankName: v } : s)} />
+                <ControlledField label="Account Number" value={companySettings?.bankAccount ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, bankAccount: v } : s)} />
+                <ControlledField label="IFSC Code" value={companySettings?.bankIfsc ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, bankIfsc: v } : s)} />
+                <ControlledField label="Branch" value={companySettings?.bankBranch ?? ''} onChange={(v) => setCompanySettings((s) => s ? { ...s, bankBranch: v } : s)} />
               </div>
 
               {/* Currency selector */}

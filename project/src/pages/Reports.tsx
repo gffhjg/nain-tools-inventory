@@ -1,9 +1,5 @@
 import { useState, useMemo } from 'react';
-import {
-  Download, Calendar, Printer, TrendingUp, TrendingDown, DollarSign,
-  Package, Percent, ShoppingCart, Truck, FileText, BarChart3, AlertTriangle,
-  Trophy, Wallet, Users, IndianRupee, CheckCircle2,
-} from 'lucide-react';
+import { Download, Calendar, Printer, TrendingUp, TrendingDown, DollarSign, Package, Percent, ShoppingCart, Truck, FileText, ChartBar as BarChart3, TriangleAlert as AlertTriangle, Trophy, Wallet, Users, IndianRupee, CircleCheck as CheckCircle2, Clock } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import { useStore } from '@/store/AppStore';
@@ -323,6 +319,50 @@ export default function Reports() {
         bodyHTML += '</tbody></table>';
         break;
       }
+      case 'cust-outstanding': {
+        const outstandingSales = sales.filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft');
+        const byCustomer = new Map<string, { name: string; phone: string; total: number; paid: number; outstanding: number; count: number; lastDate: string }>();
+        for (const s of outstandingSales) {
+          const cust = customers.find((c) => c.name === s.customer);
+          const existing = byCustomer.get(s.customer) ?? { name: s.customer, phone: cust?.phone ?? '—', total: 0, paid: 0, outstanding: 0, count: 0, lastDate: s.date };
+          existing.total += s.grandTotal;
+          existing.paid += s.amountPaid;
+          existing.outstanding += s.grandTotal - s.amountPaid;
+          existing.count++;
+          if (s.date > existing.lastDate) existing.lastDate = s.date;
+          byCustomer.set(s.customer, existing);
+        }
+        const rows = Array.from(byCustomer.values()).sort((a, b) => b.outstanding - a.outstanding);
+        const totalOutstanding = rows.reduce((s, c) => s + c.outstanding, 0);
+        bodyHTML += '<table><thead><tr><th>Customer</th><th>Phone</th><th style="text-align:right;">Invoices</th><th style="text-align:right;">Total Value</th><th style="text-align:right;">Paid</th><th style="text-align:right;">Outstanding</th><th>Last Invoice</th></tr></thead><tbody>';
+        for (const c of rows) {
+          bodyHTML += `<tr><td style="font-weight:600;">${escapeHtml(c.name)}</td><td>${escapeHtml(c.phone)}</td><td style="text-align:right;">${c.count}</td><td style="text-align:right;">${money(c.total)}</td><td style="text-align:right;">${money(c.paid)}</td><td style="text-align:right;font-weight:600;">${money(c.outstanding)}</td><td>${escapeHtml(c.lastDate)}</td></tr>`;
+        }
+        bodyHTML += '</tbody></table>';
+        bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Outstanding</span><span>${money(totalOutstanding)}</span></div></div>`;
+        break;
+      }
+      case 'sup-outstanding': {
+        const pendingPurchases = purchases.filter((p) => p.paymentStatus === 'Pending');
+        const bySupplier = new Map<string, { name: string; phone: string; total: number; count: number; lastDate: string }>();
+        for (const p of pendingPurchases) {
+          const sup = suppliers.find((s) => s.name === p.supplier);
+          const existing = bySupplier.get(p.supplier) ?? { name: p.supplier, phone: sup?.phone ?? '—', total: 0, count: 0, lastDate: p.date };
+          existing.total += p.grandTotal;
+          existing.count++;
+          if (p.date > existing.lastDate) existing.lastDate = p.date;
+          bySupplier.set(p.supplier, existing);
+        }
+        const rows = Array.from(bySupplier.values()).sort((a, b) => b.total - a.total);
+        const totalPayable = rows.reduce((s, c) => s + c.total, 0);
+        bodyHTML += '<table><thead><tr><th>Supplier</th><th>Phone</th><th style="text-align:right;">Pending POs</th><th style="text-align:right;">Payable Amount</th><th>Last PO</th></tr></thead><tbody>';
+        for (const s of rows) {
+          bodyHTML += `<tr><td style="font-weight:600;">${escapeHtml(s.name)}</td><td>${escapeHtml(s.phone)}</td><td style="text-align:right;">${s.count}</td><td style="text-align:right;font-weight:600;">${money(s.total)}</td><td>${escapeHtml(s.lastDate)}</td></tr>`;
+        }
+        bodyHTML += '</tbody></table>';
+        bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Payable</span><span>${money(totalPayable)}</span></div></div>`;
+        break;
+      }
     }
 
     printReport(reportLabel, subtitle, bodyHTML);
@@ -422,10 +462,6 @@ export default function Reports() {
       </div>
     </div>
   );
-}
-
-function Clock({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
 }
 
 /* ---------- Report sub-components ---------- */
