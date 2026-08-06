@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
-import { Upload, Image as ImageIcon } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { Upload, Image as ImageIcon, Plus, List } from 'lucide-react';
 import { productCategories } from '@/lib/constants';
 import type { Product } from '@/lib/types';
+import { useStore } from '@/store/AppStore';
 
 export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>;
 
@@ -26,17 +27,30 @@ const empty: ProductFormData = {
 };
 
 export default function ProductForm({ initial, onSubmit, onCancel }: ProductFormProps) {
+  const { products } = useStore();
   const [form, setForm] = useState<ProductFormData>(empty);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isCustomCategory, setIsCustomCategory] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const availableCategories = useMemo(() => {
+    const list = Array.from(new Set([...productCategories, ...products.map((p) => p.category).filter(Boolean)]));
+    return list;
+  }, [products]);
 
   useEffect(() => {
     if (initial) {
       const { id, status, boxStatus, stock, lastPhysicalObservation, ...rest } = initial;
       void id; void status; void boxStatus; void stock; void lastPhysicalObservation;
       setForm(rest);
+      if (rest.category && !productCategories.includes(rest.category)) {
+        setIsCustomCategory(true);
+      } else {
+        setIsCustomCategory(false);
+      }
     } else {
       setForm(empty);
+      setIsCustomCategory(false);
     }
     setErrors({});
   }, [initial]);
@@ -56,6 +70,7 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
   const validate = (): boolean => {
     const next: Record<string, string> = {};
     if (!form.name.trim()) next.name = 'Product name is required';
+    if (!form.category.trim()) next.category = 'Category is required';
     if (!form.supplier.trim()) next.supplier = 'Supplier is required';
     if (form.price <= 0) next.price = 'Must be greater than 0';
     if (form.cost < 0) next.cost = 'Cannot be negative';
@@ -128,17 +143,68 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
           />
           {errors.name && <p className="mt-1 text-xs text-err-600">{errors.name}</p>}
         </div>
+
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-700">Category</label>
-          <select
-            value={form.category}
-            onChange={(e) => update('category', e.target.value)}
-            className="input"
-          >
-            {productCategories.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-sm font-medium text-slate-700">Category</label>
+            <button
+              type="button"
+              onClick={() => {
+                const nextCustom = !isCustomCategory;
+                setIsCustomCategory(nextCustom);
+                if (nextCustom) {
+                  update('category', '');
+                } else {
+                  update('category', availableCategories[0] || 'Fasteners');
+                }
+              }}
+              className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1 transition"
+            >
+              {isCustomCategory ? (
+                <>
+                  <List className="h-3.5 w-3.5" /> Select List
+                </>
+              ) : (
+                <>
+                  <Plus className="h-3.5 w-3.5" /> Add Custom
+                </>
+              )}
+            </button>
+          </div>
+
+          {isCustomCategory ? (
+            <div>
+              <input
+                type="text"
+                value={form.category}
+                onChange={(e) => update('category', e.target.value)}
+                placeholder="Type custom category..."
+                className={inputCls('category')}
+                autoFocus
+              />
+              {errors.category && <p className="mt-1 text-xs text-err-600">{errors.category}</p>}
+            </div>
+          ) : (
+            <select
+              value={form.category}
+              onChange={(e) => {
+                if (e.target.value === '__custom__') {
+                  setIsCustomCategory(true);
+                  update('category', '');
+                } else {
+                  update('category', e.target.value);
+                }
+              }}
+              className="input"
+            >
+              {availableCategories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+              <option value="__custom__">+ Add Custom Category...</option>
+            </select>
+          )}
         </div>
       </div>
 

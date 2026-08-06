@@ -44,6 +44,7 @@ export type SaleRecord = {
   customer: string;
   customerId: string;
   phone: string;
+  customerAddress?: string;
   customerGstin: string;
   customerState: string;
   customerStateCode: string;
@@ -64,6 +65,15 @@ export type SaleRecord = {
   paymentMethod: PaymentMethod;
   status: SaleStatus;
   channel: 'in-store' | 'online' | 'wholesale';
+  poNumber?: string;
+  poDate?: string;
+  transportMode?: string;
+  vehicleNumber?: string;
+  ewayBill?: string;
+  vendorCode?: string;
+  bankName?: string;
+  bankAccount?: string;
+  bankIfsc?: string;
 };
 
 export type PurchaseLineItem = {

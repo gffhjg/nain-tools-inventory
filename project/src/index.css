@@ -10,38 +10,65 @@
     -moz-osx-font-smoothing: grayscale;
   }
   body {
-    @apply bg-slate-50 text-slate-800 font-sans;
+    @apply bg-slate-50 text-slate-800 font-sans selection:bg-brand-500/20 selection:text-brand-900;
   }
 }
 
 @layer components {
   .card {
-    @apply rounded-2xl bg-white border border-slate-200/80 shadow-soft;
+    @apply rounded-2xl bg-white border border-slate-200/80 shadow-soft transition-all duration-200;
+  }
+  .card-hover {
+    @apply card hover:shadow-md hover:border-slate-300/90;
+  }
+  .card-glass {
+    @apply rounded-2xl bg-white/90 backdrop-blur-md border border-white/60 shadow-soft;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-brand-500/40 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-brand-600 text-white hover:bg-brand-700 active:scale-[0.98] shadow-sm shadow-brand-600/20;
+    @apply btn bg-brand-600 text-white hover:bg-brand-700 active:scale-[0.98] shadow-sm shadow-brand-600/25 hover:shadow-brand-600/40;
   }
   .btn-secondary {
-    @apply btn bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 hover:border-slate-300;
+    @apply btn bg-white text-slate-700 border border-slate-200/90 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-900;
   }
   .btn-ghost {
-    @apply btn text-slate-600 hover:bg-slate-100;
+    @apply btn text-slate-600 hover:bg-slate-100/80 hover:text-slate-900;
+  }
+  .btn-danger {
+    @apply btn bg-rose-600 text-white hover:bg-rose-700 active:scale-[0.98] shadow-sm shadow-rose-600/20;
   }
   .input {
-    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 transition-colors focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20;
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20;
   }
   .badge {
     @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold;
   }
   .table-th {
-    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500;
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 bg-slate-50/80;
   }
   .table-td {
-    @apply px-4 py-3.5 text-sm text-slate-700;
+    @apply px-4 py-3.5 text-sm text-slate-700 border-b border-slate-100/80;
   }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 ::-webkit-scrollbar {

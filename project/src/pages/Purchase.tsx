@@ -90,7 +90,7 @@ export default function Purchase() {
 
   const searchResults = useMemo(() => {
     const q = productSearch.toLowerCase().trim();
-    if (!q) return products.slice(0, 5);
+    if (!q) return [];
     return products
       .filter((p) => p.name.toLowerCase().includes(q))
       .slice(0, 6);
@@ -349,7 +349,7 @@ export default function Purchase() {
         onClose={() => setModalOpen(false)}
         title="Create New Purchase"
         subtitle={`PO ${poNumber} · ${date}`}
-        size="lg"
+        size="xl"
         footer={
           <>
             <button className="btn-secondary" onClick={() => setModalOpen(false)}>Cancel</button>

@@ -1,16 +1,16 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   Plus, Search, Download, Eye, ShoppingCart, TrendingUp, Clock, CheckCircle2,
-  Trash2, Minus, Printer, Package, AlertTriangle,
+  Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import { printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
-import { GST_RATE, computeGrandTotal } from '@/lib/constants';
-import { downloadCSV, toCSV } from '@/utils/analytics';
-import type { SaleRecord, SaleStatus, InvoiceLineItem, PaymentMethod, DiscountType } from '@/lib/types';
+import { GST_RATE, computeGrandTotal, computeDiscountAmount } from '@/lib/constants';
+import { downloadCSV, toCSV, money } from '@/utils/analytics';
+import type { SaleRecord, SaleStatus, InvoiceLineItem, PaymentMethod, DiscountType, Customer } from '@/lib/types';
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -27,12 +27,14 @@ function nextInvoice(existing: SaleRecord[]): string {
 type DraftLine = InvoiceLineItem;
 
 export default function Sales() {
-  const { sales, products, addSale } = useStore();
+  const { sales, products, customers, addSale, addCustomer } = useStore();
   const [search, setSearch] = useState('');
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [customer, setCustomer] = useState('');
   const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
   const [date, setDate] = useState(todayISO());
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [discount, setDiscount] = useState(0);
@@ -42,18 +44,47 @@ export default function Sales() {
   const [amountPaid, setAmountPaid] = useState(0);
   const [productSearch, setProductSearch] = useState('');
 
-  const saleStatusOptions: { value: SaleStatus; label: string }[] = [
-    { value: 'draft', label: 'Draft' },
-    { value: 'paid', label: 'Paid' },
-    { value: 'partially-paid', label: 'Partially Paid' },
-    { value: 'pending', label: 'Pending' },
-    { value: 'cancelled', label: 'Cancelled' },
-  ];
-
   const [viewing, setViewing] = useState<SaleRecord | null>(null);
   const [stockError, setStockError] = useState('');
 
-  const invoiceNumber = useMemo(() => nextInvoice(sales), [sales]);
+  const autoInvoiceNumber = useMemo(() => nextInvoice(sales), [sales]);
+  const [customInvoiceNumber, setCustomInvoiceNumber] = useState('');
+  const invoiceNumber = customInvoiceNumber.trim() || autoInvoiceNumber;
+
+  const [poNumber, setPoNumber] = useState('');
+  const [poDate, setPoDate] = useState('');
+  const [transportMode, setTransportMode] = useState('');
+  const [vehicleNumber, setVehicleNumber] = useState('');
+  const [ewayBill, setEwayBill] = useState('');
+  const [vendorCode, setVendorCode] = useState('');
+
+  const [bankName, setBankName] = useState('HDFC BANK');
+  const [bankAccount, setBankAccount] = useState('50200088182531');
+  const [bankIfsc, setBankIfsc] = useState('HDFC0002034');
+
+  const [previewCopyTag, setPreviewCopyTag] = useState('Original For Recipient');
+  const [exportCopies, setExportCopies] = useState<Record<string, boolean>>({
+    'Original For Recipient': true,
+    'Duplicate For Transporter': true,
+    'Triplicate For Supplier': true,
+    'Extra Copy': true,
+  });
+
+  const [applyGst, setApplyGst] = useState(true);
+  const [gstRate, setGstRate] = useState<number>(18);
+  const [gstTaxType, setGstTaxType] = useState<'local' | 'central'>('local');
+
+  // Global Keyboard Shortcuts (F2 for New Invoice)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        openNewSale();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -61,7 +92,7 @@ export default function Sales() {
       (s) =>
         s.invoice.toLowerCase().includes(q) ||
         s.customer.toLowerCase().includes(q) ||
-        s.phone.toLowerCase().includes(q),
+        s.phone.toLowerCase().includes(q)
     );
   }, [sales, search]);
 
@@ -75,30 +106,72 @@ export default function Sales() {
     return { total, paid, outstanding, count };
   }, [sales]);
 
-  const statCards = [
-    { label: 'Total Sales Revenue', value: `₹${summary.total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: ShoppingCart, tone: 'bg-brand-50 text-brand-600' },
-    { label: 'Paid Invoices', value: `₹${summary.paid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: CheckCircle2, tone: 'bg-accent-50 text-accent-600' },
-    { label: 'Outstanding Amount', value: `₹${summary.outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Clock, tone: 'bg-warn-50 text-warn-600' },
-    { label: 'Total Orders', value: String(summary.count), icon: TrendingUp, tone: 'bg-slate-100 text-slate-600' },
-  ];
-
   const subtotal = useMemo(
     () => lines.reduce((s, l) => s + l.price * l.qty, 0),
-    [lines],
+    [lines]
   );
-  const { discountAmount, gstAmount, grandTotal } = computeGrandTotal(subtotal, discount, discountType, GST_RATE);
+  
+  const effectiveGstRate = applyGst ? gstRate : 0;
+  const splitRate = (gstRate / 2).toFixed(1).replace(/\.0$/, '');
+  const { discountAmount, gstAmount, grandTotal } = computeGrandTotal(subtotal, discount, discountType, effectiveGstRate);
+
+  // Delhi GST Formulas with dynamic rate:
+  // Local (Intra-state): CGST @ (Rate/2)% + SGST @ (Rate/2)%
+  // Central (Inter-state): IGST @ Rate%
+  const cgstAmount = applyGst && gstTaxType === 'local' ? +(gstAmount / 2).toFixed(2) : 0;
+  const sgstAmount = applyGst && gstTaxType === 'local' ? +(gstAmount / 2).toFixed(2) : 0;
+  const igstAmount = applyGst && gstTaxType === 'central' ? +gstAmount.toFixed(2) : 0;
 
   const searchResults = useMemo(() => {
     const q = productSearch.toLowerCase().trim();
-    if (!q) return products.slice(0, 5);
+    if (!q) return [];
     return products
-      .filter((p) => p.name.toLowerCase().includes(q))
-      .slice(0, 6);
-  }, [productSearch, products]);
+      .filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.category.toLowerCase().includes(q) ||
+          p.rackNumber.toLowerCase().includes(q)
+      )
+      .slice(0, 8);
+  }, [products, productSearch]);
+
+  const [customerGstin, setCustomerGstin] = useState('');
+
+  const handleCustomerSelect = (custObjId: string) => {
+    setSelectedCustomerId(custObjId);
+    if (custObjId === '' || custObjId === 'new') {
+      setCustomer('');
+      setPhone('');
+      setAddress('');
+      setCustomerGstin('');
+      return;
+    }
+    const found = customers.find((c) => c.id === custObjId);
+    if (found) {
+      setCustomer(found.name);
+      setPhone(found.phone);
+      setAddress(found.address || '');
+      setCustomerGstin(found.gstin || '');
+    }
+  };
 
   const resetForm = () => {
+    setSelectedCustomerId('');
     setCustomer('');
     setPhone('');
+    setAddress('');
+    setCustomerGstin('');
+    setCustomInvoiceNumber('');
+    setPoNumber('');
+    setPoDate('');
+    setTransportMode('');
+    setVehicleNumber('');
+    setEwayBill('');
+    setVendorCode('');
+    setBankName('HDFC BANK');
+    setBankAccount('50200088182531');
+    setBankIfsc('HDFC0002034');
+    setPreviewCopyTag('Original For Recipient');
     setDate(todayISO());
     setLines([]);
     setDiscount(0);
@@ -107,10 +180,14 @@ export default function Sales() {
     setSaleStatus('paid');
     setAmountPaid(0);
     setProductSearch('');
+    setApplyGst(true);
+    setGstRate(18);
+    setGstTaxType('local');
   };
 
   const openNewSale = () => {
     resetForm();
+    setCustomInvoiceNumber(nextInvoice(sales));
     setModalOpen(true);
   };
 
@@ -132,20 +209,20 @@ export default function Sales() {
 
   const updateQty = (productId: string, delta: number) => {
     setLines((prev) =>
-      prev.map((l) => (l.productId === productId ? { ...l, qty: Math.max(0, l.qty + delta) } : l)),
+      prev.map((l) => (l.productId === productId ? { ...l, qty: Math.max(0, l.qty + delta) } : l))
     );
   };
 
   const setQty = (productId: string, raw: string) => {
     const qty = parseInt(raw, 10);
     setLines((prev) =>
-      prev.map((l) => (l.productId === productId ? { ...l, qty: isNaN(qty) ? 0 : Math.max(0, qty) } : l)),
+      prev.map((l) => (l.productId === productId ? { ...l, qty: isNaN(qty) ? 0 : Math.max(0, qty) } : l))
     );
   };
 
   const setPrice = (productId: string, price: number) => {
     setLines((prev) =>
-      prev.map((l) => (l.productId === productId ? { ...l, price: Math.max(0, price) } : l)),
+      prev.map((l) => (l.productId === productId ? { ...l, price: Math.max(0, price) } : l))
     );
   };
 
@@ -153,7 +230,7 @@ export default function Sales() {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
   };
 
-  const canSubmit = customer.trim() !== '' && lines.length > 0 && lines.every((l) => l.qty > 0);
+  const canSubmit = customer.trim() !== '' && invoiceNumber.trim() !== '' && lines.length > 0 && lines.every((l) => l.qty > 0);
 
   const stockCheck = useMemo(() => {
     for (const l of lines) {
@@ -168,565 +245,895 @@ export default function Sales() {
 
   useEffect(() => {
     if (!stockCheck.ok) {
-      setStockError(`Insufficient estimated stock available. ${stockCheck.name}: ${stockCheck.available} estimated, ${stockCheck.requested} requested.`);
+      setStockError(`Insufficient stock available. ${stockCheck.name}: ${stockCheck.available} in stock, ${stockCheck.requested} requested.`);
     } else {
       setStockError('');
     }
   }, [stockCheck]);
 
-  const handleExport = () => {
-    const rows = filtered.map((s) => ({
-      Invoice: s.invoice, Customer: s.customer, Phone: s.phone, Date: s.date,
-      Items: s.itemCount, Subtotal: s.subtotal.toFixed(2),
-      Discount: s.discount.toFixed(2), DiscountType: s.discountType,
-      GST: s.gstAmount.toFixed(2), GrandTotal: s.grandTotal.toFixed(2),
-      AmountPaid: s.amountPaid.toFixed(2), Payment: s.paymentMethod,
-      Status: s.status,
-    }));
-    downloadCSV('sales.csv', toCSV(rows));
-  };
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    if (!stockCheck.ok) {
+      alert(`Cannot create sale. ${stockError}`);
+      return;
+    }
 
-  const handleCreate = () => {
-    if (!canSubmit || !stockCheck.ok) return;
-    const sale: SaleRecord = {
+    const effectivePaid =
+      saleStatus === 'paid'
+        ? grandTotal
+        : saleStatus === 'draft' || saleStatus === 'cancelled'
+        ? 0
+        : amountPaid;
+
+    const newSale: SaleRecord = {
       id: `s${Date.now()}`,
       invoice: invoiceNumber,
       customer: customer.trim(),
-      customerId: '',
-      phone: phone.trim() || '—',
-      customerGstin: '',
-      customerState: '',
-      customerStateCode: '',
+      customerId: selectedCustomerId !== 'new' ? selectedCustomerId : '',
+      phone: phone.trim(),
+      customerAddress: address.trim(),
+      customerGstin: customerGstin.trim().toUpperCase(),
+      customerState: gstTaxType === 'local' ? 'Delhi' : 'Other State',
+      customerStateCode: gstTaxType === 'local' ? '07' : '99',
       date,
-      items: lines.map((l) => ({ ...l })),
+      items: lines,
       itemCount: lines.reduce((s, l) => s + l.qty, 0),
-      subtotal: +subtotal.toFixed(2),
-      discount: +discount.toFixed(2),
+      subtotal,
+      discount,
       discountType,
-      gstRate: GST_RATE,
-      gstType: 'auto',
-      cgstAmount: 0,
-      sgstAmount: 0,
-      igstAmount: 0,
-      gstAmount,
+      gstRate: applyGst ? gstRate : 0,
+      gstType: !applyGst ? 'exempt' : (gstTaxType === 'local' ? 'cgst-sgst' : 'igst'),
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      gstAmount: applyGst ? gstAmount : 0,
       grandTotal,
-      amountPaid: saleStatus === 'paid' ? grandTotal : saleStatus === 'cancelled' || saleStatus === 'draft' ? 0 : Math.min(amountPaid, grandTotal),
+      amountPaid: Math.min(grandTotal, Math.max(0, effectivePaid)),
       paymentMethod,
       status: saleStatus,
       channel: 'in-store',
+      poNumber: poNumber.trim(),
+      poDate: poDate.trim(),
+      transportMode: transportMode.trim(),
+      vehicleNumber: vehicleNumber.trim().toUpperCase(),
+      ewayBill: ewayBill.trim(),
+      vendorCode: vendorCode.trim(),
+      bankName: bankName.trim(),
+      bankAccount: bankAccount.trim(),
+      bankIfsc: bankIfsc.trim().toUpperCase(),
     };
-    addSale(sale);
+
+    // Auto-save new customer profile if name is not in existing database
+    const existingCust = customers.find((c) => c.name.toLowerCase() === customer.trim().toLowerCase());
+    if (!existingCust && customer.trim()) {
+      try {
+        await addCustomer({
+          id: `c${Date.now()}`,
+          name: customer.trim(),
+          phone: phone.trim(),
+          businessName: '',
+          gstin: '',
+          email: '',
+          address: '',
+          state: '',
+          stateCode: '',
+          notes: 'Auto-added from Invoice creation',
+        });
+      } catch (err) {
+        console.error('Failed to auto-add customer profile', err);
+      }
+    }
+
+    await addSale(newSale);
     setModalOpen(false);
-    resetForm();
+    setViewing(newSale);
   };
 
-  const handlePrint = (sale: SaleRecord) => {
-    printInvoice(sale);
+  const getWhatsAppInvoiceLink = (s: SaleRecord) => {
+    const cleanPhone = s.phone.replace(/[^0-9]/g, '');
+    const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+    const msg = `Hello ${s.customer}, thank you for your business! Your Invoice #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)} is confirmed. Nain Tools & Bolt Co.`;
+    return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
   };
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in space-y-6 pb-12">
       <PageHeader
-        title="Sales"
-        subtitle="Track invoices, customer orders, and payment status."
+        title="Sales & Invoicing"
+        subtitle="Create GST compliant tax invoices, track sales history, and process customer billing."
         actions={
-          <>
-            <button className="btn-secondary" onClick={handleExport}>
-              <Download className="h-4 w-4" />
-              <span className="hidden sm:inline">Export</span>
-            </button>
-            <button className="btn-primary" onClick={openNewSale}>
-              <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">New Sale</span>
-            </button>
-          </>
+          <button className="btn-primary" onClick={openNewSale} title="Press F2 anywhere for quick invoice creation">
+            <Plus className="h-4 w-4" />
+            <span>New Tax Invoice (F2)</span>
+          </button>
         }
       />
 
+      {/* Metric Cards */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        {statCards.map((s) => {
-          const Icon = s.icon;
-          return (
-            <div key={s.label} className="card p-5">
-              <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${s.tone}`}>
-                <Icon className="h-5 w-5" />
-              </div>
-              <p className="mt-4 text-2xl font-bold text-slate-900">{s.value}</p>
-              <p className="mt-1 text-sm text-slate-500">{s.label}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="sticky top-[8.5rem] z-10 mt-4 -mx-4 px-4 py-3 bg-slate-50/90 backdrop-blur-md rounded-lg lg:-mx-8 lg:px-8">
-        <div className="card p-3">
-          <div className="relative max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by invoice, customer, or phone…"
-              className="input pl-10"
-            />
+        <div className="card p-5">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+            <ShoppingCart className="h-5 w-5" />
           </div>
+          <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.total)}</p>
+          <p className="mt-1 text-xs text-slate-500 font-medium">Total Sales Revenue</p>
+        </div>
+
+        <div className="card p-5">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+            <CheckCircle2 className="h-5 w-5" />
+          </div>
+          <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.paid)}</p>
+          <p className="mt-1 text-xs text-slate-500 font-medium">Total Payments Collected</p>
+        </div>
+
+        <div className="card p-5 border-l-4 border-l-amber-500">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+            <Clock className="h-5 w-5" />
+          </div>
+          <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.outstanding)}</p>
+          <p className="mt-1 text-xs text-amber-600 font-semibold">Overdue Sales Receivables</p>
+        </div>
+
+        <div className="card p-5">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+            <TrendingUp className="h-5 w-5" />
+          </div>
+          <p className="mt-4 text-2xl font-black text-slate-900">{summary.count}</p>
+          <p className="mt-1 text-xs text-slate-500 font-medium">Total Invoices Issued</p>
         </div>
       </div>
 
-      <div className="mt-4 card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px]">
-            <thead className="bg-slate-50/80">
+      {/* Sales List Table */}
+      <div className="card p-6 space-y-4">
+        <div className="relative max-w-md">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search invoices by invoice number, customer, phone..."
+            className="input pl-9"
+          />
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50">
               <tr>
-                <th className="table-th">Invoice</th>
-                <th className="table-th">Customer</th>
-                <th className="table-th">Date</th>
-                <th className="table-th text-right">Total</th>
-                <th className="table-th text-right">Outstanding</th>
-                <th className="table-th">Status</th>
-                <th className="table-th text-right">Actions</th>
+                <th className="px-4 py-3 font-bold text-slate-600">Invoice #</th>
+                <th className="px-4 py-3 font-bold text-slate-600">Customer</th>
+                <th className="px-4 py-3 font-bold text-slate-600">Date</th>
+                <th className="px-4 py-3 font-bold text-slate-600">Items</th>
+                <th className="px-4 py-3 font-bold text-slate-600">Total</th>
+                <th className="px-4 py-3 font-bold text-slate-600">Status</th>
+                <th className="px-4 py-3 font-bold text-slate-600 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((s) => (
-                <tr key={s.id} className="transition hover:bg-slate-50/50">
-                  <td className="table-td font-semibold text-brand-600">{s.invoice}</td>
-                  <td className="table-td font-medium text-slate-800">{s.customer}</td>
-                  <td className="table-td text-slate-600">{s.date}</td>
-                  <td className="table-td text-right font-semibold tabular-nums text-slate-900">
-                    ₹{s.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="table-td text-right tabular-nums">
-                    {s.status === 'paid' || s.status === 'cancelled' || s.status === 'draft' ? (
-                      <span className="text-slate-400">—</span>
-                    ) : (
-                      <span className="font-semibold text-warn-600">₹{(s.grandTotal - s.amountPaid).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    )}
-                  </td>
-                  <td className="table-td"><StatusBadge status={s.status} /></td>
-                  <td className="table-td">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => setViewing(s)}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                        title="View"
-                      >
-                        <Eye className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => handlePrint(s)}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                        title="Print Invoice"
-                      >
-                        <Printer className="h-4 w-4" />
-                      </button>
-                    </div>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
+                    No sales invoices found.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filtered.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50/80">
+                    <td className="px-4 py-3 font-bold text-brand-600">{s.invoice}</td>
+                    <td className="px-4 py-3">
+                      <p className="font-bold text-slate-900">{s.customer}</p>
+                      {s.phone && <p className="text-[11px] text-slate-500 font-mono">{s.phone}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 font-mono">{s.date}</td>
+                    <td className="px-4 py-3 text-slate-700 font-semibold">{s.itemCount} items</td>
+                    <td className="px-4 py-3 font-black text-slate-900">{money(s.grandTotal)}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={s.status} />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {s.phone && (
+                          <a
+                            href={getWhatsAppInvoiceLink(s)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                            title="Share Invoice via WhatsApp"
+                          >
+                            <MessageCircle className="h-4 w-4" />
+                          </a>
+                        )}
+                        <button
+                          onClick={() => setViewing(s)}
+                          className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                          title="View Invoice"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => printInvoice(s)}
+                          className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
+                          title="Print Tax Invoice"
+                        >
+                          <Printer className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
-        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
-          <p className="text-sm text-slate-500">
-            Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{' '}
-            <span className="font-semibold text-slate-700">{sales.length}</span> orders
-          </p>
-        </div>
       </div>
 
-      <Modal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title="Create New Sale"
-        subtitle={`Invoice ${invoiceNumber} · ${date}`}
-        size="lg"
-        footer={
-          <>
-            <button className="btn-secondary" onClick={() => setModalOpen(false)}>Cancel</button>
-            <button
-              className="btn-primary"
-              disabled={!canSubmit || !stockCheck.ok}
-              onClick={handleCreate}
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Complete Sale
-            </button>
-          </>
-        }
-      >
-        <div className="space-y-5">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Customer Name</label>
-              <input
-                type="text"
-                value={customer}
-                onChange={(e) => setCustomer(e.target.value)}
-                placeholder="Customer or company name"
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Customer Phone</label>
-              <input
-                type="tel"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+91 98250 00000"
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Invoice Date</label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="input"
-              />
-            </div>
-          </div>
+      {/* New Invoice Modal */}
+      {modalOpen && (
+        <Modal title={`Create Tax Invoice (${invoiceNumber})`} size="xl" onClose={() => setModalOpen(false)}>
+          <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
+            {/* Customer Selector / Input */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Select Customer</label>
+                <select
+                  value={selectedCustomerId}
+                  onChange={(e) => handleCustomerSelect(e.target.value)}
+                  className="input"
+                >
+                  <option value="">-- Select Saved Customer --</option>
+                  <option value="new">+ Enter New Customer</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.phone ? `(${c.phone})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">Add Products</label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Customer Name *</label>
+                <input
+                  type="text"
+                  value={customer}
+                  onChange={(e) => setCustomer(e.target.value)}
+                  placeholder="Customer / Firm Name"
+                  className="input"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number</label>
+                <input
+                  type="text"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="Mobile number for WhatsApp"
+                  className="input"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Customer Address</label>
+                <input
+                  type="text"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="Billing / Delivery Address"
+                  className="input"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Invoice Number *</label>
+                <input
+                  type="text"
+                  value={customInvoiceNumber}
+                  onChange={(e) => setCustomInvoiceNumber(e.target.value)}
+                  placeholder="e.g. INV-2046 or 00744"
+                  className="input font-mono font-bold text-brand-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Invoice Date</label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="input"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">GST Number (GSTIN)</label>
+                <input
+                  type="text"
+                  value={customerGstin}
+                  onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
+                  placeholder="e.g. 07AAAAA0000A1Z5"
+                  className="input font-mono uppercase"
+                />
+              </div>
+            </div>
+
+            {/* Optional Tax & Transport Metadata section */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+              <label className="block text-xs font-bold text-slate-700">Transport & Tax Details (P.O., Transport, E-Way Bill)</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">P.O. Number</label>
+                  <input
+                    type="text"
+                    value={poNumber}
+                    onChange={(e) => setPoNumber(e.target.value)}
+                    placeholder="e.g. PO-1029"
+                    className="input py-1 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">P.O. Date</label>
+                  <input
+                    type="date"
+                    value={poDate}
+                    onChange={(e) => setPoDate(e.target.value)}
+                    className="input py-1 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">E-Way Bill No.</label>
+                  <input
+                    type="text"
+                    value={ewayBill}
+                    onChange={(e) => setEwayBill(e.target.value)}
+                    placeholder="12-digit E-Way Bill"
+                    className="input py-1 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Mode of Transport</label>
+                  <input
+                    type="text"
+                    value={transportMode}
+                    onChange={(e) => setTransportMode(e.target.value)}
+                    placeholder="e.g. Road / Tempo / Hand"
+                    className="input py-1 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Vehicle Number</label>
+                  <input
+                    type="text"
+                    value={vehicleNumber}
+                    onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+                    placeholder="e.g. HR-51-AB-1234"
+                    className="input py-1 text-xs font-mono uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Vendor Code</label>
+                  <input
+                    type="text"
+                    value={vendorCode}
+                    onChange={(e) => setVendorCode(e.target.value)}
+                    placeholder="Vendor / Account Code"
+                    className="input py-1 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bank Name</label>
+                  <input
+                    type="text"
+                    value={bankName}
+                    onChange={(e) => setBankName(e.target.value)}
+                    placeholder="Bank Name"
+                    className="input py-1 text-xs font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bank Account No.</label>
+                  <input
+                    type="text"
+                    value={bankAccount}
+                    onChange={(e) => setBankAccount(e.target.value)}
+                    placeholder="Account Number"
+                    className="input py-1 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bank IFSC Code</label>
+                  <input
+                    type="text"
+                    value={bankIfsc}
+                    onChange={(e) => setBankIfsc(e.target.value.toUpperCase())}
+                    placeholder="IFSC Code"
+                    className="input py-1 text-xs font-mono uppercase"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Item Search & Selection */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-3">
+              <label className="block text-xs font-bold text-slate-700">Add Products to Invoice</label>
               <input
                 type="text"
                 value={productSearch}
                 onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Search by product name…"
-                className="input pl-10"
+                placeholder="Search products by name or rack..."
+                className="input bg-white"
               />
-              {productSearch && searchResults.length > 0 && (
-                <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card">
-                  {searchResults.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => addLine(p.id)}
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-brand-50"
-                    >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100">
-                        {p.image ? (
-                          <img src={p.image} alt={p.name} className="h-full w-full object-cover" />
-                        ) : (
-                          <Package className="h-4 w-4 text-slate-300" />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-slate-800">{p.name}</p>
-                        <p className="text-xs text-slate-400">Est. Stock: {p.stock} · {p.category}</p>
-                      </div>
-                      <span className="text-sm font-semibold text-slate-700">₹{p.price.toFixed(2)}</span>
-                      <Plus className="h-4 w-4 text-brand-500" />
-                    </button>
-                  ))}
-                </div>
-              )}
-              {productSearch && searchResults.length === 0 && (
-                <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 shadow-card">
-                  No products found.
-                </div>
-              )}
-            </div>
-          </div>
 
-          {stockError && (
-            <div className="flex items-center gap-2.5 rounded-xl border border-err-200 bg-err-50 px-4 py-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-err-600" />
-              <p className="text-sm font-medium text-err-700">{stockError}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+                {searchResults.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => addLine(p.id)}
+                    className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-white hover:border-brand-500 hover:bg-brand-50/30 text-left transition"
+                  >
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">{p.name}</p>
+                      <p className="text-[11px] text-slate-500">Rack {p.rackNumber} · Stock: {p.stock}</p>
+                    </div>
+                    <span className="text-xs font-bold text-brand-600">{money(p.price)}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
 
-          {lines.length > 0 ? (
-            <div className="overflow-hidden rounded-xl border border-slate-200">
-              <table className="w-full">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="table-th">Product</th>
-                    <th className="table-th text-center">Qty</th>
-                    <th className="table-th text-right">Price</th>
-                    <th className="table-th text-right">Total</th>
-                    <th className="table-th"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {lines.map((l) => (
-                    <tr key={l.productId}>
-                      <td className="table-td">
-                        <p className="font-medium text-slate-800">{l.name}</p>
-                      </td>
-                      <td className="table-td">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => updateQty(l.productId, -1)}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
-                          >
-                            <Minus className="h-3.5 w-3.5" />
-                          </button>
-                          <input
-                            type="number"
-                            min="0"
-                            value={l.qty === 0 ? '' : l.qty}
-                            onChange={(e) => setQty(l.productId, e.target.value)}
-                            className="w-14 rounded-lg border border-slate-200 py-1 text-center text-sm tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                          />
-                          <button
-                            onClick={() => updateQty(l.productId, 1)}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="table-td text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <span className="text-slate-400">₹</span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={l.price || ''}
-                            onChange={(e) => setPrice(l.productId, parseFloat(e.target.value) || 0)}
-                            className="w-20 rounded-lg border border-slate-200 py-1 text-right text-sm tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                          />
-                        </div>
-                      </td>
-                      <td className="table-td text-right font-semibold tabular-nums text-slate-900">
-                        ₹{(l.price * l.qty).toFixed(2)}
-                      </td>
-                      <td className="table-td text-right">
-                        <button
-                          onClick={() => removeLine(l.productId)}
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
+            {/* Line Items Table */}
+            {lines.length > 0 && (
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="px-3 py-2 font-bold text-slate-600">Product</th>
+                      <th className="px-3 py-2 font-bold text-slate-600 w-24">Qty</th>
+                      <th className="px-3 py-2 font-bold text-slate-600 w-28">Price (₹)</th>
+                      <th className="px-3 py-2 font-bold text-slate-600 w-28">Total (₹)</th>
+                      <th className="px-3 py-2 text-right"></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 py-10 text-center">
-              <Package className="mx-auto h-8 w-8 text-slate-300" />
-              <p className="mt-2 text-sm text-slate-500">No products added yet. Search above to add items.</p>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Discount</label>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={discount || ''}
-                  onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
-                  placeholder="0.00"
-                  className="input flex-1"
-                />
-                <select
-                  value={discountType}
-                  onChange={(e) => setDiscountType(e.target.value as DiscountType)}
-                  className="input w-auto"
-                >
-                  <option value="amount">₹ Amount</option>
-                  <option value="percent">% Percentage</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Payment Method</label>
-              <div className="flex gap-2">
-                {(['Cash', 'UPI', 'Card'] as PaymentMethod[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setPaymentMethod(m)}
-                    className={`flex-1 rounded-xl border py-2.5 text-sm font-semibold transition ${
-                      paymentMethod === m
-                        ? 'border-brand-500 bg-brand-50 text-brand-700'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Invoice Status</label>
-              <div className="flex flex-wrap gap-2">
-                {saleStatusOptions.map((s) => (
-                  <button
-                    key={s.value}
-                    onClick={() => setSaleStatus(s.value)}
-                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
-                      saleStatus === s.value
-                        ? s.value === 'paid'
-                          ? 'border-accent-500 bg-accent-50 text-accent-700'
-                          : s.value === 'cancelled'
-                            ? 'border-err-500 bg-err-50 text-err-700'
-                            : s.value === 'pending'
-                              ? 'border-warn-500 bg-warn-50 text-warn-700'
-                              : 'border-brand-500 bg-brand-50 text-brand-700'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {saleStatus === 'partially-paid' && (
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">Amount Paid (₹)</label>
-                <input
-                  type="number"
-                  min="0"
-                  max={grandTotal}
-                  step="0.01"
-                  value={amountPaid || ''}
-                  onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
-                  placeholder="0.00"
-                  className="input"
-                />
-                <p className="mt-1 text-xs text-slate-400">
-                  Outstanding: ₹{(grandTotal - Math.min(amountPaid, grandTotal)).toFixed(2)}
-                </p>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {lines.map((l) => (
+                      <tr key={l.productId}>
+                        <td className="px-3 py-2 font-bold text-slate-800">{l.name}</td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number"
+                            value={l.qty}
+                            onChange={(e) => setQty(l.productId, e.target.value)}
+                            className="w-full rounded border border-slate-200 px-2 py-1 text-xs font-bold"
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number"
+                            value={l.price}
+                            onChange={(e) => setPrice(l.productId, parseFloat(e.target.value) || 0)}
+                            className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
+                          />
+                        </td>
+                        <td className="px-3 py-2 font-bold text-slate-900">
+                          {money(l.price * l.qty)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            onClick={() => removeLine(l.productId)}
+                            className="text-slate-400 hover:text-rose-600 p-1"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
-          </div>
 
-          <div className="rounded-xl bg-slate-50 p-4">
-            <div className="ml-auto max-w-xs space-y-2">
-              <div className="flex justify-between text-sm text-slate-600">
+            {/* Calculations & GST */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3 text-xs">
+              {/* Checkbox, Editable GST Rate & Tax Type Selection */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-slate-200/80">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 font-bold text-slate-800 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={applyGst}
+                      onChange={(e) => setApplyGst(e.target.checked)}
+                      className="rounded border-slate-300 text-brand-600 focus:ring-brand-500 h-4 w-4"
+                    />
+                    <span>Apply GST</span>
+                  </label>
+
+                  {applyGst && (
+                    <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-xs">
+                      <span className="text-[11px] font-semibold text-slate-500">Rate:</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.5"
+                        value={gstRate}
+                        onChange={(e) => setGstRate(Math.max(0, parseFloat(e.target.value) || 0))}
+                        className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-center text-xs font-bold text-brand-600 focus:border-brand-500 focus:outline-none"
+                      />
+                      <span className="text-xs font-bold text-slate-600">%</span>
+                    </div>
+                  )}
+                </div>
+
+                {applyGst && (
+                  <div className="flex items-center gap-3 font-semibold text-slate-700 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-xs">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="gstTaxType"
+                        value="local"
+                        checked={gstTaxType === 'local'}
+                        onChange={() => setGstTaxType('local')}
+                        className="text-brand-600 focus:ring-brand-500"
+                      />
+                      <span>Local (CGST {splitRate}% + SGST {splitRate}%)</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="gstTaxType"
+                        value="central"
+                        checked={gstTaxType === 'central'}
+                        onChange={() => setGstTaxType('central')}
+                        className="text-brand-600 focus:ring-brand-500"
+                      />
+                      <span>Central (IGST {gstRate}%)</span>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between font-semibold text-slate-700">
                 <span>Subtotal</span>
-                <span className="tabular-nums font-medium">₹{subtotal.toFixed(2)}</span>
+                <span>{money(subtotal)}</span>
               </div>
-              <div className="flex justify-between text-sm text-slate-600">
-                <span>Discount {discountType === 'percent' ? `(${discount}%)` : ''}</span>
-                <span className="tabular-nums font-medium text-err-600">−₹{discountAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-sm text-slate-600">
-                <span>GST ({GST_RATE}%)</span>
-                <span className="tabular-nums font-medium">₹{gstAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between border-t border-slate-200 pt-2 text-lg font-bold text-slate-900">
+
+              {applyGst ? (
+                gstTaxType === 'local' ? (
+                  <>
+                    <div className="flex justify-between font-medium text-slate-600 pl-2">
+                      <span>Central GST (CGST @ {splitRate}%)</span>
+                      <span>{money(cgstAmount)}</span>
+                    </div>
+                    <div className="flex justify-between font-medium text-slate-600 pl-2">
+                      <span>State GST (SGST @ {splitRate}%)</span>
+                      <span>{money(sgstAmount)}</span>
+                    </div>
+                    <div className="flex justify-between font-semibold text-slate-800 border-t border-slate-200/60 pt-1">
+                      <span>Total GST ({gstRate}%)</span>
+                      <span>{money(gstAmount)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between font-medium text-slate-600 pl-2">
+                      <span>Central Integrated GST (IGST @ {gstRate}%)</span>
+                      <span>{money(igstAmount)}</span>
+                    </div>
+                    <div className="flex justify-between font-semibold text-slate-800 border-t border-slate-200/60 pt-1">
+                      <span>Total GST ({gstRate}%)</span>
+                      <span>{money(gstAmount)}</span>
+                    </div>
+                  </>
+                )
+              ) : (
+                <div className="flex justify-between font-medium text-slate-400">
+                  <span>GST (Exempt / Not Applied)</span>
+                  <span>{money(0)}</span>
+                </div>
+              )}
+
+              <div className="flex justify-between font-black text-sm text-slate-900 border-t border-slate-200 pt-2">
                 <span>Grand Total</span>
-                <span className="tabular-nums">₹{grandTotal.toFixed(2)}</span>
+                <span className="text-brand-600">{money(grandTotal)}</span>
               </div>
             </div>
-          </div>
-        </div>
-      </Modal>
 
-      <ViewInvoiceModal sale={viewing} onClose={() => setViewing(null)} onPrint={handlePrint} />
+            {/* Actions */}
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn-secondary" onClick={() => setModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="btn-primary" onClick={handleSubmit} disabled={!canSubmit}>
+                Confirm & Issue Invoice
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Invoice View Modal */}
+      {viewing && (
+        <Modal title={`Invoice Details — ${viewing.invoice}`} size="xl" onClose={() => setViewing(null)}>
+          <div className="space-y-3.5 text-xs font-sans">
+            {/* Copy Selector Tabs */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-slate-100 p-1.5 rounded-lg border border-slate-200 gap-2">
+              <span className="text-[11px] font-bold text-slate-700 pl-1">Preview Copy:</span>
+              <div className="flex flex-wrap gap-1">
+                {[
+                  'Original For Recipient',
+                  'Duplicate For Transporter',
+                  'Triplicate For Supplier',
+                  'Extra Copy'
+                ].map((copyTag) => (
+                  <button
+                    key={copyTag}
+                    onClick={() => setPreviewCopyTag(copyTag)}
+                    className={`px-2.5 py-1 rounded text-[10.5px] font-bold transition-all ${
+                      previewCopyTag === copyTag
+                        ? 'bg-brand-600 text-white shadow-xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-200'
+                    }`}
+                  >
+                    {copyTag}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="text-right text-[10px] font-bold text-slate-900 tracking-wide">{previewCopyTag}</div>
+
+            {/* Main Tax Invoice Border Frame Box */}
+            <div className="border-2 border-black text-black bg-white shadow-sm overflow-hidden">
+              <div className="text-center font-bold text-xs border-b border-black py-1 tracking-wider uppercase bg-slate-50">
+                TAX INVOICE
+              </div>
+
+              {/* Company Header */}
+              <div className="text-center p-3 border-b border-black">
+                <h2 className="text-xl font-black uppercase tracking-tight font-sans">NAIN TOOLS & SS BOLT CO.</h2>
+                <p className="text-[11px] font-bold mt-0.5">17/1, INDUSTRIAL AREA WHIRLPOOL CHOWK, NIT FARIDABAD</p>
+                <p className="text-[10px] text-slate-700 mt-0.5">EMAIL : narendernain2011@gmail.com &nbsp;|&nbsp; 9213469582 7053795074 129 4870974</p>
+                <p className="text-xs font-black mt-1">GSTIN No. 06CCCPK0841B1ZA</p>
+              </div>
+
+              {/* PAN & Reverse Charge */}
+              <div className="flex justify-between px-3 py-1.5 border-b border-black text-[11px] font-bold bg-slate-50/60">
+                <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <span className="font-mono">CCCPK0841B</span></div>
+                <div>Tax is Payable on Reverse Charge : <span>No</span></div>
+              </div>
+
+              {/* Two Column Grid: Invoice Meta & Transport */}
+              <div className="grid grid-cols-2 border-b border-black divide-x divide-black text-[10px]">
+                <div className="p-2 space-y-1">
+                  <div className="flex justify-between">
+                    <span>Invoice No. : &nbsp;&nbsp; <strong>{viewing.invoice}</strong></span>
+                    <span>Date : &nbsp;&nbsp; <strong>{viewing.date}</strong></span>
+                  </div>
+                  <div className="flex justify-between"><span>P.O. No. :</span> <strong>{viewing.poNumber || '—'}</strong></div>
+                  <div className="flex justify-between"><span>P.O. Date :</span> <strong>{viewing.poDate || '—'}</strong></div>
+                </div>
+                <div className="p-2 space-y-1">
+                  <div className="flex justify-between"><span>Mode of Transport :</span> <strong>{viewing.transportMode || '—'}</strong></div>
+                  <div className="flex justify-between"><span>Vehicle No. :</span> <strong>{viewing.vehicleNumber || '—'}</strong></div>
+                  <div className="flex justify-between"><span>Date & Time of Supply :</span> <span>{viewing.date} 01:29 PM</span></div>
+                  <div className="flex justify-between"><span>Place of Supply :</span> <strong>{(viewing.customerState || 'HARYANA').toUpperCase()}</strong></div>
+                </div>
+              </div>
+
+              {/* Two Column Grid: Party Details */}
+              <div className="grid grid-cols-2 border-b border-black divide-x divide-black text-[10px]">
+                <div className="p-2.5">
+                  <div className="flex justify-between font-bold underline mb-1">
+                    <span>Receiver Details (Billed to)</span>
+                    <span>Vendor Code : <strong>{viewing.vendorCode || '—'}</strong></span>
+                  </div>
+                  <div className="font-bold text-xs uppercase text-slate-900">{viewing.customer}</div>
+                  <div className="text-slate-700 mt-0.5">{viewing.customerAddress || 'FARIDABAD, HARYANA'}</div>
+                  <div className="mt-3 space-y-0.5 text-slate-900 font-semibold">
+                    <div>GSTIN No. : &nbsp;&nbsp;&nbsp;&nbsp; <strong className="font-mono">{viewing.customerGstin || '06AAECA0878K1ZJ'}</strong></div>
+                    <div>State : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>{viewing.customerState || 'Haryana'}</strong> &nbsp;&nbsp; Code : <strong>{viewing.customerStateCode || '06'}</strong></div>
+                  </div>
+                </div>
+                <div className="p-2.5">
+                  <div className="font-bold underline mb-1">Consignee Details (Shipped to)</div>
+                  <div className="font-bold text-xs uppercase text-slate-900">{viewing.customer}</div>
+                  <div className="text-slate-700 mt-0.5">{viewing.customerAddress || 'FARIDABAD, HARYANA'}</div>
+                  <div className="mt-3 space-y-0.5 text-slate-900 font-semibold">
+                    <div>GSTIN No. : &nbsp;&nbsp;&nbsp;&nbsp; <strong className="font-mono">{viewing.customerGstin || '06AAECA0878K1ZJ'}</strong></div>
+                    <div>State : &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>{viewing.customerState || 'Haryana'}</strong> &nbsp;&nbsp; Code : <strong>{viewing.customerStateCode || '06'}</strong></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Table Grid */}
+              <div className="border-b border-black overflow-x-auto min-h-[160px]">
+                <table className="w-full text-left border-collapse text-[10.5px]">
+                  <thead>
+                    <tr className="border-b border-black text-center font-bold bg-slate-50">
+                      <th className="border-r border-black p-1.5 w-10">Sr No</th>
+                      <th className="border-r border-black p-1.5 text-left pl-3">Description of Goods</th>
+                      <th className="border-r border-black p-1.5 w-20">HSN Code</th>
+                      <th className="border-r border-black p-1.5 w-20">Qty</th>
+                      <th className="border-r border-black p-1.5 w-20">Rate (Rs.)</th>
+                      <th className="border-r border-black p-1.5 w-16">Disc %</th>
+                      <th className="p-1.5 w-24 text-right pr-3">Amount (Rs.)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-black/40">
+                    {viewing.items.map((it, idx) => (
+                      <tr key={idx} className="align-top">
+                        <td className="border-r border-black p-1.5 text-center">{idx + 1}</td>
+                        <td className="border-r border-black p-1.5 font-bold pl-3">{it.name}</td>
+                        <td className="border-r border-black p-1.5 text-center font-mono">7318150</td>
+                        <td className="border-r border-black p-1.5 text-right font-mono">{it.qty.toFixed(2)} PCS</td>
+                        <td className="border-r border-black p-1.5 text-right font-mono">{it.price.toFixed(2)}</td>
+                        <td className="border-r border-black p-1.5 text-right font-mono">0.00</td>
+                        <td className="p-1.5 text-right font-mono pr-3 font-semibold">{(it.price * it.qty).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Bottom Summary Grid */}
+              <div className="grid grid-cols-12 divide-x divide-black text-[10px]">
+                <div className="col-span-7 p-2.5 flex flex-col justify-between">
+                  <div>
+                    <div className="font-bold mb-1.5">E-Way Bill No : <strong>{viewing.ewayBill || '—'}</strong></div>
+                    <div className="font-bold underline mb-0.5">Bank Details :</div>
+                    <div className="font-bold space-y-0.5 text-slate-800">
+                      <div>{viewing.bankName || 'HDFC BANK'}</div>
+                      <div>{viewing.bankAccount || '50200088182531'}</div>
+                      <div>IFSC CODE :{viewing.bankIfsc || 'HDFC0002034'}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 pt-2 border-t border-black/20">
+                    <div className="text-[9px] text-slate-700 font-semibold italic">
+                      Certified that the Particulars given above are true and correct
+                    </div>
+                    <div className="font-bold underline mt-1 mb-0.5">Terms & Conditions :</div>
+                    <ol className="text-[8.5px] text-slate-700 space-y-0.5">
+                      <li>1. Interest @ 24% p.a. will be charged for delayed payments</li>
+                      <li>2. Our risk & responsibility ceases as soon as Goods leave our factory</li>
+                      <li>3. All disputes are subject to Faridabad Jurisdiction only.</li>
+                      <li>4. E&OE</li>
+                    </ol>
+
+                    <div className="flex justify-between items-end mt-4 pt-2 font-bold text-[10px]">
+                      <div>Receiver's Signature</div>
+                      <div className="text-right">
+                        <div>For <strong>NAIN TOOLS & SS BOLT CO.</strong></div>
+                        <div className="mt-5">Authorised Signatory</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-span-5 flex flex-col justify-between font-bold divide-y divide-black">
+                  <div className="p-2 flex justify-between">
+                    <span>Total Amount</span>
+                    <span className="font-mono">{viewing.subtotal.toFixed(2)}</span>
+                  </div>
+                  <div className="p-2 flex justify-between">
+                    <span>Taxable Amount</span>
+                    <span className="font-mono">{(viewing.subtotal - computeDiscountAmount(viewing.subtotal, viewing.discount, viewing.discountType)).toFixed(2)}</span>
+                  </div>
+                  {viewing.gstType === 'igst' ? (
+                    <div className="p-2 flex justify-between">
+                      <span>IGST @ &nbsp;&nbsp;&nbsp;&nbsp; {(viewing.gstRate || 18).toFixed(2)} %</span>
+                      <span className="font-mono">{viewing.gstAmount.toFixed(2)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="p-2 flex justify-between">
+                        <span>CGST @ &nbsp;&nbsp;&nbsp;&nbsp; {(((viewing.gstRate || 18) / 2)).toFixed(2)} %</span>
+                        <span className="font-mono">{(viewing.cgstAmount || viewing.gstAmount / 2).toFixed(2)}</span>
+                      </div>
+                      <div className="p-2 flex justify-between">
+                        <span>SGST @ &nbsp;&nbsp;&nbsp;&nbsp; {(((viewing.gstRate || 18) / 2)).toFixed(2)} %</span>
+                        <span className="font-mono">{(viewing.sgstAmount || viewing.gstAmount / 2).toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
+                  <div className="p-2 flex justify-between text-xs bg-slate-50 font-black">
+                    <span>Invoice Amount (Rs.)</span>
+                    <span className="font-mono text-black">{viewing.grandTotal.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Copy Selector & Export Options */}
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-slate-800">Select Copies to Export / Print:</span>
+                <div className="flex flex-wrap gap-1.5 text-[10px]">
+                  <button
+                    onClick={() =>
+                      setExportCopies({
+                        'Original For Recipient': true,
+                        'Duplicate For Transporter': true,
+                        'Triplicate For Supplier': true,
+                        'Extra Copy': true,
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-white hover:bg-slate-200 border border-slate-300 font-semibold text-slate-700"
+                  >
+                    All 4 Copies
+                  </button>
+                  <button
+                    onClick={() =>
+                      setExportCopies({
+                        'Original For Recipient': true,
+                        'Duplicate For Transporter': false,
+                        'Triplicate For Supplier': false,
+                        'Extra Copy': false,
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-white hover:bg-slate-200 border border-slate-300 font-semibold text-slate-700"
+                  >
+                    Original Only (1 Copy)
+                  </button>
+                  <button
+                    onClick={() =>
+                      setExportCopies({
+                        'Original For Recipient': true,
+                        'Duplicate For Transporter': true,
+                        'Triplicate For Supplier': false,
+                        'Extra Copy': false,
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-white hover:bg-slate-200 border border-slate-300 font-semibold text-slate-700"
+                  >
+                    Original + Duplicate (2 Copies)
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 border-t border-slate-200/80">
+                {[
+                  'Original For Recipient',
+                  'Duplicate For Transporter',
+                  'Triplicate For Supplier',
+                  'Extra Copy'
+                ].map((copyTag) => (
+                  <label key={copyTag} className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={!!exportCopies[copyTag]}
+                      onChange={(e) =>
+                        setExportCopies((prev) => ({
+                          ...prev,
+                          [copyTag]: e.target.checked,
+                        }))
+                      }
+                      className="rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                    />
+                    <span className={exportCopies[copyTag] ? 'text-brand-700 font-bold' : 'text-slate-500'}>{copyTag}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="btn-secondary" onClick={() => setViewing(null)}>
+                Close
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  const selectedList = Object.keys(exportCopies).filter((k) => exportCopies[k]);
+                  printInvoice(viewing, selectedList.length > 0 ? selectedList : undefined);
+                }}
+              >
+                <Printer className="h-4 w-4" /> Print / Export Selected ({Object.values(exportCopies).filter(Boolean).length} {Object.values(exportCopies).filter(Boolean).length === 1 ? 'Copy' : 'Copies'})
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
-  );
-}
-
-function ViewInvoiceModal({
-  sale,
-  onClose,
-  onPrint,
-}: {
-  sale: SaleRecord | null;
-  onClose: () => void;
-  onPrint: (s: SaleRecord) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    setOpen(!!sale);
-  }, [sale]);
-
-  if (!sale) return null;
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={`Invoice ${sale.invoice}`}
-      subtitle={`${sale.customer} · ${sale.date}`}
-      size="lg"
-      footer={
-        <>
-          <button className="btn-secondary" onClick={onClose}>Close</button>
-          <button className="btn-primary" onClick={() => onPrint(sale)}>
-            <Printer className="h-4 w-4" />
-            Print Invoice
-          </button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="rounded-xl bg-slate-50 p-3">
-            <p className="text-xs text-slate-400">Customer</p>
-            <p className="mt-0.5 font-semibold text-slate-800">{sale.customer}</p>
-            <p className="text-sm text-slate-500">{sale.phone}</p>
-          </div>
-          <div className="rounded-xl bg-slate-50 p-3">
-            <p className="text-xs text-slate-400">Payment</p>
-            <p className="mt-0.5 font-semibold text-slate-800">{sale.paymentMethod}</p>
-            <p className="text-sm text-slate-500 capitalize">{sale.status}</p>
-          </div>
-        </div>
-
-        <div className="overflow-hidden rounded-xl border border-slate-200">
-          <table className="w-full">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className="table-th">Product</th>
-                <th className="table-th text-center">Qty</th>
-                <th className="table-th text-right">Price</th>
-                <th className="table-th text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {sale.items.map((it) => (
-                <tr key={it.productId}>
-                  <td className="table-td">
-                    <p className="font-medium text-slate-800">{it.name}</p>
-                  </td>
-                  <td className="table-td text-center tabular-nums">{it.qty}</td>
-                  <td className="table-td text-right tabular-nums">₹{it.price.toFixed(2)}</td>
-                  <td className="table-td text-right font-semibold tabular-nums">
-                    ₹{(it.price * it.qty).toFixed(2)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="rounded-xl bg-slate-50 p-4">
-          <div className="ml-auto max-w-xs space-y-2">
-            <div className="flex justify-between text-sm text-slate-600">
-              <span>Subtotal</span>
-              <span className="tabular-nums">₹{sale.subtotal.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-slate-600">
-              <span>Discount {sale.discountType === 'percent' ? `(${sale.discount}%)` : ''}</span>
-              <span className="tabular-nums text-err-600">−₹{sale.discountType === 'percent' ? (sale.subtotal * sale.discount / 100).toFixed(2) : sale.discount.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between text-sm text-slate-600">
-              <span>GST ({sale.gstRate}%)</span>
-              <span className="tabular-nums">₹{sale.gstAmount.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between border-t border-slate-200 pt-2 text-lg font-bold text-slate-900">
-              <span>Grand Total</span>
-              <span className="tabular-nums">₹{sale.grandTotal.toFixed(2)}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Modal>
   );
 }

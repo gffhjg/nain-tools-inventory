@@ -45,6 +45,10 @@ export default function Products() {
     return map;
   }, [verifications]);
 
+  const allCategories = useMemo(() => {
+    return Array.from(new Set([...productCategories, ...items.map((p) => p.category).filter(Boolean)]));
+  }, [items]);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     const filteredList = items.filter((p) => {
@@ -148,9 +152,9 @@ export default function Products() {
         subtitle="Manage your catalog, stock levels, and supplier information."
         actions={
           <>
-            <button className="btn-secondary" onClick={() => setImportOpen(true)}>
-              <Upload className="h-4 w-4" />
-              <span className="hidden sm:inline">Import</span>
+            <button className="btn-secondary" onClick={() => navigate('/import-products')}>
+              <Upload className="h-4 w-4 text-emerald-600" />
+              <span className="hidden sm:inline">Import Excel/CSV</span>
             </button>
             <button className="btn-secondary" onClick={handleExport}>
               <Download className="h-4 w-4" />
@@ -205,7 +209,7 @@ export default function Products() {
                 className="input w-auto py-2"
               >
                 <option value="All">All Categories</option>
-                {productCategories.map((c) => (
+                {allCategories.map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
@@ -227,8 +231,8 @@ export default function Products() {
             </div>
           </div>
         </div>
-        </div>
       </div>
+    </div>
 
       {/* Table */}
       <div className="mt-4 card overflow-hidden">
@@ -271,8 +275,22 @@ export default function Products() {
                   <td className="table-td text-slate-600">{p.supplier}</td>
                   <td className="table-td text-slate-600">{p.rackNumber}</td>
                   <td className="table-td text-right">
-                    <span className="font-semibold tabular-nums text-slate-800">{p.stock.toLocaleString('en-IN')}</span>
-                    <span className="text-xs text-slate-400"> / {p.reorderLevel.toLocaleString('en-IN')}</span>
+                    <div>
+                      <span className="font-bold tabular-nums text-slate-900">{p.stock.toLocaleString('en-IN')}</span>
+                      <span className="text-[11px] text-slate-400"> / min {p.reorderLevel.toLocaleString('en-IN')}</span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1 max-w-[100px] ml-auto">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          p.stock === 0
+                            ? 'bg-rose-500'
+                            : p.stock <= p.reorderLevel
+                            ? 'bg-amber-500'
+                            : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(8, (p.stock / (p.boxCapacity || 1000)) * 100))}%` }}
+                      />
+                    </div>
                   </td>
                   <td className="table-td"><StatusBadge status={p.boxStatus} variant="box" /></td>
                   <td className="table-td text-right font-semibold tabular-nums text-slate-800">₹{p.price.toFixed(2)}</td>

@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Download, Calendar, Printer, TrendingUp, TrendingDown, DollarSign, Package, Percent, ShoppingCart, Truck, FileText, ChartBar as BarChart3, TriangleAlert as AlertTriangle, Trophy, Wallet, Users, IndianRupee, CircleCheck as CheckCircle2, Clock } from 'lucide-react';
+import { Download, Calendar, Printer, TrendingUp, TrendingDown, DollarSign, Package, Percent, ShoppingCart, Truck, FileText, BarChart3, AlertTriangle, Trophy, Wallet, Users, IndianRupee, CheckCircle2, Clock } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import { useStore } from '@/store/AppStore';

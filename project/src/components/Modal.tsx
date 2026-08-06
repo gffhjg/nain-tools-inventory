@@ -1,17 +1,18 @@
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 type ModalProps = {
-  open: boolean;
+  open?: boolean;
   onClose: () => void;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  size?: 'md' | 'lg';
+  size?: 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl';
 };
 
-export default function Modal({ open, onClose, title, subtitle, children, footer, size = 'md' }: ModalProps) {
+export default function Modal({ open = true, onClose, title, subtitle, children, footer, size = 'md' }: ModalProps) {
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -27,19 +28,27 @@ export default function Modal({ open, onClose, title, subtitle, children, footer
 
   if (!open) return null;
 
-  const maxW = size === 'lg' ? 'max-w-2xl' : 'max-w-md';
+  const maxWMap: Record<string, string> = {
+    md: 'max-w-md',
+    lg: 'max-w-2xl',
+    xl: 'max-w-4xl',
+    '2xl': 'max-w-5xl',
+    '3xl': 'max-w-6xl',
+    '4xl': 'max-w-7xl',
+  };
+  const maxW = maxWMap[size] || 'max-w-md';
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
       <div
-        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm animate-fade-in"
+        className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
       />
       <div
-        className={`relative z-10 w-full ${maxW} animate-scale-in rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl`}
+        className={`relative z-10 w-full ${maxW} max-h-[90vh] flex flex-col animate-scale-in rounded-2xl bg-white shadow-2xl overflow-hidden my-auto`}
       >
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-4">
+        <div className="flex items-start justify-between border-b border-slate-100 px-6 py-4 shrink-0 bg-white">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
             {subtitle && <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>}
@@ -53,15 +62,16 @@ export default function Modal({ open, onClose, title, subtitle, children, footer
         </div>
 
         {/* Body */}
-        <div className="max-h-[60vh] overflow-y-auto px-6 py-5">{children}</div>
+        <div className="overflow-y-auto px-6 py-5 flex-1">{children}</div>
 
         {/* Footer */}
         {footer && (
-          <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 px-6 py-4">
+          <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 px-6 py-4 shrink-0 bg-white">
             {footer}
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

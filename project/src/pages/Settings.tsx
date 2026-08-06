@@ -495,6 +495,36 @@ export default function Settings() {
   );
 }
 
+function ControlledField({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  disabled = false,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-slate-700">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        placeholder={placeholder}
+        className="input disabled:bg-slate-100 disabled:text-slate-500"
+      />
+    </div>
+  );
+}
+
 function Field({
   label,
   defaultValue,
