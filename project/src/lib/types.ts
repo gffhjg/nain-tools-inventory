@@ -19,6 +19,7 @@ export type Product = {
   manualBoxStatus: BoxStatus;
   notes: string;
   image: string;
+  hsnCode?: string;
   status: 'in-stock' | 'low-stock' | 'out-of-stock';
   lastPhysicalObservation: { observedStock: number; boxStatus: BoxStatus; date: string; user: string } | null;
 };
@@ -28,6 +29,7 @@ export type InvoiceLineItem = {
   name: string;
   price: number;
   qty: number;
+  hsnCode?: string;
 };
 
 export type PaymentMethod = 'Cash' | 'UPI' | 'Card';
@@ -74,6 +76,9 @@ export type SaleRecord = {
   bankName?: string;
   bankAccount?: string;
   bankIfsc?: string;
+  sellerGstin?: string;
+  sellerPan?: string;
+  documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'PURCHASE BILL';
 };
 
 export type PurchaseLineItem = {

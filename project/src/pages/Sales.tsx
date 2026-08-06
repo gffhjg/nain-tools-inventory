@@ -24,6 +24,15 @@ function nextInvoice(existing: SaleRecord[]): string {
   return `INV-${max + 1}`;
 }
 
+function nextDebitNote(existing: SaleRecord[]): string {
+  const nums = existing
+    .filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'))
+    .map((s) => parseInt(s.invoice.replace('DN-', ''), 10))
+    .filter((n) => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 1000;
+  return `DN-${max + 1}`;
+}
+
 type DraftLine = InvoiceLineItem;
 
 export default function Sales() {
@@ -61,6 +70,10 @@ export default function Sales() {
   const [bankName, setBankName] = useState('HDFC BANK');
   const [bankAccount, setBankAccount] = useState('50200088182531');
   const [bankIfsc, setBankIfsc] = useState('HDFC0002034');
+
+  const [sellerGstin, setSellerGstin] = useState('06CCCPK0841B1ZA');
+  const [sellerPan, setSellerPan] = useState('CCCPK0841B');
+  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE'>('TAX INVOICE');
 
   const [previewCopyTag, setPreviewCopyTag] = useState('Original For Recipient');
   const [exportCopies, setExportCopies] = useState<Record<string, boolean>>({
@@ -171,6 +184,9 @@ export default function Sales() {
     setBankName('HDFC BANK');
     setBankAccount('50200088182531');
     setBankIfsc('HDFC0002034');
+    setSellerGstin('06CCCPK0841B1ZA');
+    setSellerPan('CCCPK0841B');
+    setDocumentType('TAX INVOICE');
     setPreviewCopyTag('Original For Recipient');
     setDate(todayISO());
     setLines([]);
@@ -187,7 +203,15 @@ export default function Sales() {
 
   const openNewSale = () => {
     resetForm();
+    setDocumentType('TAX INVOICE');
     setCustomInvoiceNumber(nextInvoice(sales));
+    setModalOpen(true);
+  };
+
+  const openNewDebitNote = () => {
+    resetForm();
+    setDocumentType('DEBIT NOTE');
+    setCustomInvoiceNumber(nextDebitNote(sales));
     setModalOpen(true);
   };
 
@@ -201,7 +225,7 @@ export default function Sales() {
       }
       return [
         ...prev,
-        { productId: product.id, name: product.name, price: product.price, qty: 1 },
+        { productId: product.id, name: product.name, price: product.price, qty: 1, hsnCode: product.hsnCode || '7318150' },
       ];
     });
     setProductSearch('');
@@ -301,6 +325,9 @@ export default function Sales() {
       bankName: bankName.trim(),
       bankAccount: bankAccount.trim(),
       bankIfsc: bankIfsc.trim().toUpperCase(),
+      sellerGstin: sellerGstin.trim().toUpperCase(),
+      sellerPan: sellerPan.trim().toUpperCase(),
+      documentType,
     };
 
     // Auto-save new customer profile if name is not in existing database
@@ -342,10 +369,19 @@ export default function Sales() {
         title="Sales & Invoicing"
         subtitle="Create GST compliant tax invoices, track sales history, and process customer billing."
         actions={
-          <button className="btn-primary" onClick={openNewSale} title="Press F2 anywhere for quick invoice creation">
-            <Plus className="h-4 w-4" />
-            <span>New Tax Invoice (F2)</span>
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn-secondary bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold"
+              onClick={openNewDebitNote}
+            >
+              <Plus className="h-4 w-4 text-indigo-600" />
+              <span>New Debit Note</span>
+            </button>
+            <button className="btn-primary" onClick={openNewSale} title="Press F2 anywhere for quick invoice creation">
+              <Plus className="h-4 w-4" />
+              <span>New Tax Invoice (F2)</span>
+            </button>
+          </div>
         }
       />
 
@@ -468,9 +504,13 @@ export default function Sales() {
         </div>
       </div>
 
-      {/* New Invoice Modal */}
+      {/* New Invoice / Debit Note Modal */}
       {modalOpen && (
-        <Modal title={`Create Tax Invoice (${invoiceNumber})`} size="xl" onClose={() => setModalOpen(false)}>
+        <Modal
+          title={`${documentType === 'DEBIT NOTE' ? 'Create Debit Note' : 'Create Tax Invoice'} (${invoiceNumber})`}
+          size="xl"
+          onClose={() => setModalOpen(false)}
+        >
           <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
             {/* Customer Selector / Input */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -525,12 +565,14 @@ export default function Sales() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Invoice Number *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {documentType === 'DEBIT NOTE' ? 'Debit Note Number *' : 'Invoice Number *'}
+                </label>
                 <input
                   type="text"
                   value={customInvoiceNumber}
                   onChange={(e) => setCustomInvoiceNumber(e.target.value)}
-                  placeholder="e.g. INV-2046 or 00744"
+                  placeholder={documentType === 'DEBIT NOTE' ? 'e.g. DN-1001' : 'e.g. INV-2046 or 00744'}
                   className="input font-mono font-bold text-brand-600"
                 />
               </div>
@@ -647,6 +689,26 @@ export default function Sales() {
                     value={bankIfsc}
                     onChange={(e) => setBankIfsc(e.target.value.toUpperCase())}
                     placeholder="IFSC Code"
+                    className="input py-1 text-xs font-mono uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Your GST Number</label>
+                  <input
+                    type="text"
+                    value={sellerGstin}
+                    onChange={(e) => setSellerGstin(e.target.value.toUpperCase())}
+                    placeholder="Seller GSTIN"
+                    className="input py-1 text-xs font-mono uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Your PAN Number</label>
+                  <input
+                    type="text"
+                    value={sellerPan}
+                    onChange={(e) => setSellerPan(e.target.value.toUpperCase())}
+                    placeholder="Seller PAN No."
                     className="input py-1 text-xs font-mono uppercase"
                   />
                 </div>
@@ -797,6 +859,39 @@ export default function Sales() {
                 <span>{money(subtotal)}</span>
               </div>
 
+              {/* Discount Controls */}
+              <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-slate-800">Discount</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={discount}
+                      onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="w-24 rounded border border-slate-200 px-2 py-1 text-right text-xs font-bold text-slate-900 focus:border-brand-500 focus:outline-none"
+                      placeholder="0"
+                    />
+                    <select
+                      value={discountType}
+                      onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                      className="rounded border border-slate-200 px-2 py-1 text-xs font-bold text-slate-700 bg-white focus:border-brand-500 focus:outline-none"
+                    >
+                      <option value="amount">Amount (₹)</option>
+                      <option value="percent">Percent (%)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {discountAmount > 0 && (
+                  <div className="flex justify-between font-semibold text-amber-600 pl-2">
+                    <span>Discount Deduction</span>
+                    <span>-{money(discountAmount)}</span>
+                  </div>
+                )}
+              </div>
+
               {applyGst ? (
                 gstTaxType === 'local' ? (
                   <>
@@ -844,16 +939,20 @@ export default function Sales() {
                 Cancel
               </button>
               <button className="btn-primary" onClick={handleSubmit} disabled={!canSubmit}>
-                Confirm & Issue Invoice
+                {documentType === 'DEBIT NOTE' ? 'Confirm & Issue Debit Note' : 'Confirm & Issue Invoice'}
               </button>
             </div>
           </div>
         </Modal>
       )}
 
-      {/* Invoice View Modal */}
+      {/* Invoice / Debit Note View Modal */}
       {viewing && (
-        <Modal title={`Invoice Details — ${viewing.invoice}`} size="xl" onClose={() => setViewing(null)}>
+        <Modal
+          title={`${viewing.documentType === 'DEBIT NOTE' ? 'Debit Note Details' : 'Invoice Details'} — ${viewing.invoice}`}
+          size="xl"
+          onClose={() => setViewing(null)}
+        >
           <div className="space-y-3.5 text-xs font-sans">
             {/* Copy Selector Tabs */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-slate-100 p-1.5 rounded-lg border border-slate-200 gap-2">
@@ -882,10 +981,10 @@ export default function Sales() {
 
             <div className="text-right text-[10px] font-bold text-slate-900 tracking-wide">{previewCopyTag}</div>
 
-            {/* Main Tax Invoice Border Frame Box */}
+            {/* Main Border Frame Box */}
             <div className="border-2 border-black text-black bg-white shadow-sm overflow-hidden">
               <div className="text-center font-bold text-xs border-b border-black py-1 tracking-wider uppercase bg-slate-50">
-                TAX INVOICE
+                {viewing.documentType || 'TAX INVOICE'}
               </div>
 
               {/* Company Header */}
@@ -893,12 +992,12 @@ export default function Sales() {
                 <h2 className="text-xl font-black uppercase tracking-tight font-sans">NAIN TOOLS & SS BOLT CO.</h2>
                 <p className="text-[11px] font-bold mt-0.5">17/1, INDUSTRIAL AREA WHIRLPOOL CHOWK, NIT FARIDABAD</p>
                 <p className="text-[10px] text-slate-700 mt-0.5">EMAIL : narendernain2011@gmail.com &nbsp;|&nbsp; 9213469582 7053795074 129 4870974</p>
-                <p className="text-xs font-black mt-1">GSTIN No. 06CCCPK0841B1ZA</p>
+                <p className="text-xs font-black mt-1">GSTIN No. {viewing.sellerGstin || '06CCCPK0841B1ZA'}</p>
               </div>
 
               {/* PAN & Reverse Charge */}
               <div className="flex justify-between px-3 py-1.5 border-b border-black text-[11px] font-bold bg-slate-50/60">
-                <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <span className="font-mono">CCCPK0841B</span></div>
+                <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <span className="font-mono">{viewing.sellerPan || 'CCCPK0841B'}</span></div>
                 <div>Tax is Payable on Reverse Charge : <span>No</span></div>
               </div>
 
@@ -906,7 +1005,7 @@ export default function Sales() {
               <div className="grid grid-cols-2 border-b border-black divide-x divide-black text-[10px]">
                 <div className="p-2 space-y-1">
                   <div className="flex justify-between">
-                    <span>Invoice No. : &nbsp;&nbsp; <strong>{viewing.invoice}</strong></span>
+                    <span>{viewing.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : 'Invoice No. :'} &nbsp;&nbsp; <strong>{viewing.invoice}</strong></span>
                     <span>Date : &nbsp;&nbsp; <strong>{viewing.date}</strong></span>
                   </div>
                   <div className="flex justify-between"><span>P.O. No. :</span> <strong>{viewing.poNumber || '—'}</strong></div>
@@ -948,30 +1047,45 @@ export default function Sales() {
               {/* Table Grid */}
               <div className="border-b border-black overflow-x-auto min-h-[160px]">
                 <table className="w-full text-left border-collapse text-[10.5px]">
-                  <thead>
-                    <tr className="border-b border-black text-center font-bold bg-slate-50">
-                      <th className="border-r border-black p-1.5 w-10">Sr No</th>
-                      <th className="border-r border-black p-1.5 text-left pl-3">Description of Goods</th>
-                      <th className="border-r border-black p-1.5 w-20">HSN Code</th>
-                      <th className="border-r border-black p-1.5 w-20">Qty</th>
-                      <th className="border-r border-black p-1.5 w-20">Rate (Rs.)</th>
-                      <th className="border-r border-black p-1.5 w-16">Disc %</th>
-                      <th className="p-1.5 w-24 text-right pr-3">Amount (Rs.)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-black/40">
-                    {viewing.items.map((it, idx) => (
-                      <tr key={idx} className="align-top">
-                        <td className="border-r border-black p-1.5 text-center">{idx + 1}</td>
-                        <td className="border-r border-black p-1.5 font-bold pl-3">{it.name}</td>
-                        <td className="border-r border-black p-1.5 text-center font-mono">7318150</td>
-                        <td className="border-r border-black p-1.5 text-right font-mono">{it.qty.toFixed(2)} PCS</td>
-                        <td className="border-r border-black p-1.5 text-right font-mono">{it.price.toFixed(2)}</td>
-                        <td className="border-r border-black p-1.5 text-right font-mono">0.00</td>
-                        <td className="p-1.5 text-right font-mono pr-3 font-semibold">{(it.price * it.qty).toFixed(2)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
+                  {(() => {
+                    const isAmountDisc = viewing.discountType === 'amount' && viewing.discount && viewing.discount > 0;
+                    const isPercentDisc = viewing.discountType === 'percent' && viewing.discount && viewing.discount > 0;
+                    const discHeaderLabel = isAmountDisc ? 'Disc (Rs.)' : 'Disc %';
+                    return (
+                      <>
+                        <thead>
+                          <tr className="border-b border-black text-center font-bold bg-slate-50">
+                            <th className="border-r border-black p-1.5 w-10">Sr No</th>
+                            <th className="border-r border-black p-1.5 text-left pl-3">Description of Goods</th>
+                            <th className="border-r border-black p-1.5 w-20">HSN Code</th>
+                            <th className="border-r border-black p-1.5 w-20">Qty</th>
+                            <th className="border-r border-black p-1.5 w-20">Rate (Rs.)</th>
+                            <th className="border-r border-black p-1.5 w-20">{discHeaderLabel}</th>
+                            <th className="p-1.5 w-24 text-right pr-3">Amount (Rs.)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-black/40">
+                          {viewing.items.map((it, idx) => {
+                            const lineTotal = it.price * it.qty;
+                            const itemDiscVal = isAmountDisc
+                              ? (viewing.subtotal > 0 ? (viewing.discount * (lineTotal / viewing.subtotal)) : 0)
+                              : (isPercentDisc ? viewing.discount : 0);
+                            return (
+                              <tr key={idx} className="align-top">
+                                <td className="border-r border-black p-1.5 text-center">{idx + 1}</td>
+                                <td className="border-r border-black p-1.5 font-bold pl-3">{it.name}</td>
+                                <td className="border-r border-black p-1.5 text-center font-mono">{it.hsnCode || '7318150'}</td>
+                                <td className="border-r border-black p-1.5 text-right font-mono">{it.qty.toFixed(2)} PCS</td>
+                                <td className="border-r border-black p-1.5 text-right font-mono">{it.price.toFixed(2)}</td>
+                                <td className="border-r border-black p-1.5 text-right font-mono">{itemDiscVal.toFixed(2)}</td>
+                                <td className="p-1.5 text-right font-mono pr-3 font-semibold">{lineTotal.toFixed(2)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </>
+                    );
+                  })()}
                 </table>
               </div>
 
@@ -1015,6 +1129,12 @@ export default function Sales() {
                     <span>Total Amount</span>
                     <span className="font-mono">{viewing.subtotal.toFixed(2)}</span>
                   </div>
+                  {viewing.discount && viewing.discountType !== 'percent' ? (
+                    <div className="p-2 flex justify-between text-amber-700 bg-amber-50/50">
+                      <span>Discount (Less)</span>
+                      <span className="font-mono">-{computeDiscountAmount(viewing.subtotal, viewing.discount, viewing.discountType).toFixed(2)}</span>
+                    </div>
+                  ) : null}
                   <div className="p-2 flex justify-between">
                     <span>Taxable Amount</span>
                     <span className="font-mono">{(viewing.subtotal - computeDiscountAmount(viewing.subtotal, viewing.discount, viewing.discountType)).toFixed(2)}</span>

@@ -71,17 +71,25 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
   const sgst = sale.sgstAmount || +(sale.gstAmount / 2).toFixed(2);
   const igst = sale.igstAmount || sale.gstAmount;
 
+  const isAmountDisc = sale.discountType === 'amount' && sale.discount && sale.discount > 0;
+  const isPercentDisc = sale.discountType === 'percent' && sale.discount && sale.discount > 0;
+  const discHeaderLabel = isAmountDisc ? 'Disc (Rs.)' : 'Disc %';
+
   const itemRows = sale.items
     .map((it, i) => {
       const lineTotal = it.price * it.qty;
+      const itemDiscVal = isAmountDisc
+        ? (sale.subtotal > 0 ? (sale.discount * (lineTotal / sale.subtotal)) : 0)
+        : (isPercentDisc ? sale.discount : 0);
+
       return `
       <tr>
         <td style="text-align: center; border-right: 1px solid #000; padding: 6px 4px;">${i + 1}</td>
         <td style="text-align: left; border-right: 1px solid #000; padding: 6px; font-weight: bold;">${esc(it.name)}</td>
-        <td style="text-align: center; border-right: 1px solid #000; padding: 6px 4px;">7318150</td>
+        <td style="text-align: center; border-right: 1px solid #000; padding: 6px 4px;">${esc(it.hsnCode || '7318150')}</td>
         <td style="text-align: right; border-right: 1px solid #000; padding: 6px 5px;">${it.qty.toFixed(2)} PCS</td>
         <td style="text-align: right; border-right: 1px solid #000; padding: 6px 5px;">${it.price.toFixed(2)}</td>
-        <td style="text-align: right; border-right: 1px solid #000; padding: 6px 5px;">0.00</td>
+        <td style="text-align: right; border-right: 1px solid #000; padding: 6px 5px;">${itemDiscVal.toFixed(2)}</td>
         <td style="text-align: right; padding: 6px 5px;">${lineTotal.toFixed(2)}</td>
       </tr>`;
     })
@@ -108,24 +116,29 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
   const bankAccount = sale.bankAccount || BUSINESS.bank.account;
   const bankIfsc = sale.bankIfsc || BUSINESS.bank.ifsc;
 
+  const sellerGstin = sale.sellerGstin || BUSINESS.gstin;
+  const sellerPan = sale.sellerPan || BUSINESS.pan;
+
+  const docType = sale.documentType || 'TAX INVOICE';
+
   return `
   <div class="invoice-container">
     <div class="top-right-label">${esc(copyTag)}</div>
     
     <div class="main-box">
-      <div class="title-bar">TAX INVOICE</div>
+      <div class="title-bar">${esc(docType)}</div>
       
       <!-- Company Header -->
       <div class="company-section">
         <div class="company-title">${esc(BUSINESS.name)}</div>
         <div class="company-sub">${esc(BUSINESS.address)}</div>
         <div class="company-contact">EMAIL : ${esc(BUSINESS.email)} &nbsp;|&nbsp; ${esc(BUSINESS.phone)}</div>
-        <div class="company-gst">GSTIN No. ${esc(BUSINESS.gstin)}</div>
+        <div class="company-gst">GSTIN No. ${esc(sellerGstin)}</div>
       </div>
       
       <!-- PAN & Reverse Charge -->
       <div class="pan-bar">
-        <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <strong>${esc(BUSINESS.pan)}</strong></div>
+        <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <strong>${esc(sellerPan)}</strong></div>
         <div>Tax is Payable on Reverse Charge : <strong>No</strong></div>
       </div>
       
@@ -133,7 +146,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
       <div class="two-col-row">
         <div class="col-left">
           <div class="meta-line">
-            <span>Invoice No. : &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
+            <span>${sale.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : 'Invoice No. :'} &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
             <span>Date : &nbsp;&nbsp; <strong>${esc(sale.date)}</strong></span>
           </div>
           <div class="meta-line"><span>P.O. No. :</span> <strong>${esc(sale.poNumber || '—')}</strong></div>
@@ -179,7 +192,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
               <th style="width: 75px;">HSN Code</th>
               <th style="width: 80px;">Qty</th>
               <th style="width: 80px;">Rate (Rs.)</th>
-              <th style="width: 60px;">Disc %</th>
+              <th style="width: 70px;">${discHeaderLabel}</th>
               <th style="width: 95px;">Amount (Rs.)</th>
             </tr>
           </thead>
@@ -234,6 +247,12 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
             <span>Total Amount</span>
             <span>${sale.subtotal.toFixed(2)}</span>
           </div>
+          ${discountAmt > 0 && sale.discountType !== 'percent' ? `
+          <div class="sum-line" style="color: #b45309;">
+            <span>Discount (Less)</span>
+            <span>-${discountAmt.toFixed(2)}</span>
+          </div>
+          ` : ''}
           <div class="sum-line">
             <span>Taxable Amount</span>
             <span>${taxableValue.toFixed(2)}</span>
@@ -272,13 +291,14 @@ function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[]): string {
   ];
   const copyLabels = (selectedCopies && selectedCopies.length > 0) ? selectedCopies : defaultCopies;
 
+  const docType = sale.documentType || 'TAX INVOICE';
   const copiesHTML = copyLabels.map((tag) => renderInvoiceCopyHTML(sale, tag)).join('\n');
 
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>TAX INVOICE — ${esc(sale.invoice)}</title>
+<title>${esc(docType)} — ${esc(sale.invoice)}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; padding: 15px; font-size: 11px; line-height: 1.3; }

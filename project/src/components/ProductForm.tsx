@@ -24,6 +24,7 @@ const empty: ProductFormData = {
   reorderLevel: 0,
   notes: '',
   image: '',
+  hsnCode: '7318150',
 };
 
 export default function ProductForm({ initial, onSubmit, onCancel }: ProductFormProps) {
@@ -208,8 +209,8 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
         </div>
       </div>
 
-      {/* Supplier + Rack */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {/* Supplier + Rack + HSN Code */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">Supplier</label>
           <input
@@ -229,6 +230,16 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
             onChange={(e) => update('rackNumber', e.target.value)}
             placeholder="e.g. A-01"
             className="input"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">HSN Code</label>
+          <input
+            type="text"
+            value={form.hsnCode || ''}
+            onChange={(e) => update('hsnCode', e.target.value)}
+            placeholder="e.g. 7318150"
+            className="input font-mono"
           />
         </div>
       </div>
