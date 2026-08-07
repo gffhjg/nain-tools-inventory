@@ -125,10 +125,27 @@ export function computeDiscountAmount(subtotal: number, discount: number, discou
   return Math.min(discount, subtotal);
 }
 
-export function computeGrandTotal(subtotal: number, discount: number, discountType: DiscountType, gstRate: number): { discountAmount: number; gstAmount: number; grandTotal: number } {
+export function computeGrandTotal(
+  subtotal: number,
+  discount: number,
+  discountType: DiscountType,
+  gstRate: number,
+  freightCharges: number = 0
+): {
+  discountAmount: number;
+  taxableAmount: number;
+  gstAmount: number;
+  rawTotal: number;
+  roundOff: number;
+  grandTotal: number;
+  hasRoundOff: boolean;
+} {
   const discountAmount = computeDiscountAmount(subtotal, discount, discountType);
-  const taxable = subtotal - discountAmount;
-  const gstAmount = +(taxable * (gstRate / 100)).toFixed(2);
-  const grandTotal = +(taxable + gstAmount).toFixed(2);
-  return { discountAmount, gstAmount, grandTotal };
+  const taxableAmount = Math.max(0, subtotal - discountAmount + (freightCharges || 0));
+  const gstAmount = +(taxableAmount * (gstRate / 100)).toFixed(2);
+  const rawTotal = +(taxableAmount + gstAmount).toFixed(2);
+  const grandTotal = Math.round(rawTotal);
+  const roundOff = +(grandTotal - rawTotal).toFixed(2);
+  const hasRoundOff = Math.abs(roundOff) >= 0.01;
+  return { discountAmount, taxableAmount, gstAmount, rawTotal, roundOff, grandTotal, hasRoundOff };
 }

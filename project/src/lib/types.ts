@@ -30,6 +30,8 @@ export type InvoiceLineItem = {
   price: number;
   qty: number;
   hsnCode?: string;
+  discount?: number;
+  discountType?: DiscountType;
 };
 
 export type PaymentMethod = 'Cash' | 'UPI' | 'Card';
@@ -78,7 +80,8 @@ export type SaleRecord = {
   bankIfsc?: string;
   sellerGstin?: string;
   sellerPan?: string;
-  documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE';
+  documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE';
+  freightCharges?: number;
 };
 
 export type PurchaseLineItem = {

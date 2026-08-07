@@ -19,8 +19,8 @@ const reportTypes: { id: ReportType; label: string; icon: React.ComponentType<{ 
   { id: 'inventory', label: 'Inventory Report', icon: Package },
   { id: 'profit', label: 'Profit / Loss', icon: Wallet },
   { id: 'gst', label: 'GST Report', icon: Percent },
-  { id: 'cust-outstanding', label: 'Customer Outstanding', icon: Users },
-  { id: 'sup-outstanding', label: 'Supplier Outstanding', icon: Truck },
+  { id: 'cust-outstanding', label: 'Customer Ledger', icon: Users },
+  { id: 'sup-outstanding', label: 'Supplier Ledger', icon: Truck },
   { id: 'lowstock', label: 'Low Stock', icon: AlertTriangle },
   { id: 'topselling', label: 'Top Selling', icon: Trophy },
 ];
@@ -912,121 +912,487 @@ function EmptyReport() {
 }
 
 function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; customers: { id: string; name: string; phone: string; gstin: string; address: string; notes: string }[] }) {
-  const outstandingSales = sales.filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft');
-  const byCustomer = useMemo(() => {
-    const map = new Map<string, { name: string; phone: string; total: number; paid: number; outstanding: number; count: number; lastDate: string }>();
-    for (const s of outstandingSales) {
-      const cust = customers.find((c) => c.name === s.customer);
-      const existing = map.get(s.customer) ?? { name: s.customer, phone: cust?.phone ?? '—', total: 0, paid: 0, outstanding: 0, count: 0, lastDate: s.date };
-      existing.total += s.grandTotal;
-      existing.paid += s.amountPaid;
-      existing.outstanding += s.grandTotal - s.amountPaid;
-      existing.count++;
-      if (s.date > existing.lastDate) existing.lastDate = s.date;
-      map.set(s.customer, existing);
-    }
-    return Array.from(map.values()).sort((a, b) => b.outstanding - a.outstanding);
-  }, [outstandingSales, customers]);
-  const totalOutstanding = byCustomer.reduce((s, c) => s + c.outstanding, 0);
-  if (byCustomer.length === 0) return <EmptyReport />;
+  const [selectedCust, setSelectedCust] = useState<string>('all');
+  const [search, setSearch] = useState<string>('');
+
+  const customerList = useMemo(() => {
+    const names = new Set<string>();
+    for (const c of customers) if (c.name) names.add(c.name);
+    for (const s of sales) if (s.customer) names.add(s.customer);
+    return Array.from(names).sort();
+  }, [customers, sales]);
+
+  const customerSummaries = useMemo(() => {
+    return customerList.map((name) => {
+      const custInfo = customers.find((c) => c.name === name);
+      const custSales = sales.filter((s) => s.customer === name && s.status !== 'draft' && s.status !== 'cancelled');
+      const totalBilled = custSales.reduce((sum, s) => sum + s.grandTotal, 0);
+      const totalPaid = custSales.reduce((sum, s) => sum + s.amountPaid, 0);
+      const balance = totalBilled - totalPaid;
+      const invoiceCount = custSales.length;
+      const lastDate = custSales.length > 0 ? custSales.sort((a, b) => b.date.localeCompare(a.date))[0].date : '—';
+      return {
+        name,
+        phone: custInfo?.phone || '—',
+        gstin: custInfo?.gstin || '—',
+        totalBilled,
+        totalPaid,
+        balance,
+        invoiceCount,
+        lastDate,
+      };
+    }).filter((c) => {
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
+      return c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.gstin.toLowerCase().includes(q);
+    });
+  }, [customerList, customers, sales, search]);
+
+  const singleCustomerDetails = useMemo(() => {
+    if (selectedCust === 'all') return null;
+    const custInfo = customers.find((c) => c.name === selectedCust);
+    const custSales = sales
+      .filter((s) => s.customer === selectedCust && s.status !== 'draft' && s.status !== 'cancelled')
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    let runningBalance = 0;
+    const ledgerRows = custSales.map((s) => {
+      const isCreditNote = s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-');
+      const debit = isCreditNote ? 0 : s.grandTotal;
+      const credit = isCreditNote ? s.grandTotal : s.amountPaid;
+      runningBalance += (debit - credit);
+      return {
+        id: s.id,
+        date: s.date,
+        voucherNo: s.invoice,
+        type: s.documentType || 'Tax Invoice',
+        debit,
+        credit,
+        balance: runningBalance,
+        status: s.status,
+      };
+    });
+
+    const totalBilled = custSales.reduce((sum, s) => sum + (s.documentType === 'CREDIT NOTE' ? 0 : s.grandTotal), 0);
+    const totalPaid = custSales.reduce((sum, s) => sum + (s.documentType === 'CREDIT NOTE' ? s.grandTotal : s.amountPaid), 0);
+
+    return {
+      custInfo,
+      totalBilled,
+      totalPaid,
+      closingBalance: runningBalance,
+      ledgerRows,
+    };
+  }, [selectedCust, customers, sales]);
+
+  const totalOutstandingAll = customerSummaries.reduce((sum, c) => sum + c.balance, 0);
+
   return (
-    <div className="card overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[700px]">
-          <thead className="bg-slate-50/80">
-            <tr>
-              <th className="table-th">Customer</th>
-              <th className="table-th">Phone</th>
-              <th className="table-th text-right">Invoices</th>
-              <th className="table-th text-right">Total Value</th>
-              <th className="table-th text-right">Paid</th>
-              <th className="table-th text-right">Outstanding</th>
-              <th className="table-th">Last Invoice</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {byCustomer.map((c) => (
-              <tr key={c.name} className="transition hover:bg-slate-50/50">
-                <td className="table-td font-semibold text-slate-800">{c.name}</td>
-                <td className="table-td text-slate-600">{c.phone}</td>
-                <td className="table-td text-right tabular-nums">{c.count}</td>
-                <td className="table-td text-right tabular-nums">{money(c.total)}</td>
-                <td className="table-td text-right tabular-nums text-accent-600">{money(c.paid)}</td>
-                <td className="table-td text-right font-semibold tabular-nums text-warn-600">{money(c.outstanding)}</td>
-                <td className="table-td text-slate-500">{c.lastDate}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="border-t-2 border-slate-200 bg-slate-50">
-              <td colSpan={5} className="table-td text-right font-semibold text-slate-700">Total Outstanding:</td>
-              <td className="table-td text-right text-lg font-bold text-warn-600">{money(totalOutstanding)}</td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
+    <div className="space-y-4">
+      {/* Customer Selection Bar */}
+      <div className="card p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-1">
+          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">Select Customer Ledger:</label>
+          <select
+            value={selectedCust}
+            onChange={(e) => setSelectedCust(e.target.value)}
+            className="input text-xs py-1.5 font-semibold"
+          >
+            <option value="all">-- All Customer Summary --</option>
+            {customers.map((c) => {
+              const extra = [c.phone, c.gstin ? `GST: ${c.gstin}` : '', c.address].filter(Boolean).join(' · ');
+              return (
+                <option key={c.id} value={c.name}>
+                  {c.name} {extra ? `(${extra})` : ''}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+
+        {selectedCust === 'all' && (
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search customer name or phone..."
+            className="input text-xs max-w-xs"
+          />
+        )}
+
+        {selectedCust !== 'all' && (
+          <button
+            onClick={() => setSelectedCust('all')}
+            className="btn-secondary text-xs px-3 py-1.5"
+          >
+            ← Back to All Customers
+          </button>
+        )}
       </div>
+
+      {selectedCust === 'all' ? (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[700px]">
+              <thead className="bg-slate-50/80">
+                <tr>
+                  <th className="table-th">Customer Name</th>
+                  <th className="table-th">Phone</th>
+                  <th className="table-th text-right">Invoices</th>
+                  <th className="table-th text-right">Total Billed (₹)</th>
+                  <th className="table-th text-right">Total Paid (₹)</th>
+                  <th className="table-th text-right">Outstanding (₹)</th>
+                  <th className="table-th text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {customerSummaries.map((c) => (
+                  <tr key={c.name} className="transition hover:bg-slate-50/50">
+                    <td className="table-td font-bold text-slate-900">{c.name}</td>
+                    <td className="table-td text-slate-600">{c.phone}</td>
+                    <td className="table-td text-right tabular-nums">{c.invoiceCount}</td>
+                    <td className="table-td text-right tabular-nums font-medium">{money(c.totalBilled)}</td>
+                    <td className="table-td text-right tabular-nums text-emerald-600 font-medium">{money(c.totalPaid)}</td>
+                    <td className={`table-td text-right font-bold tabular-nums ${c.balance > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
+                      {money(c.balance)}
+                    </td>
+                    <td className="table-td text-right">
+                      <button
+                        onClick={() => setSelectedCust(c.name)}
+                        className="px-2.5 py-1 text-xs font-bold bg-brand-50 text-brand-600 rounded-lg hover:bg-brand-100 transition"
+                      >
+                        View Ledger
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-slate-50">
+                  <td colSpan={5} className="table-td text-right font-bold text-slate-800">Total Customer Receivables:</td>
+                  <td className="table-td text-right text-base font-black text-amber-600">{money(totalOutstandingAll)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      ) : singleCustomerDetails ? (
+        <div className="space-y-4">
+          {/* Customer Details Summary Banner */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="card p-4">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Total Billed</span>
+              <p className="text-xl font-bold text-slate-900 mt-1">{money(singleCustomerDetails.totalBilled)}</p>
+            </div>
+            <div className="card p-4">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Total Paid</span>
+              <p className="text-xl font-bold text-emerald-600 mt-1">{money(singleCustomerDetails.totalPaid)}</p>
+            </div>
+            <div className="card p-4">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Closing Balance</span>
+              <p className={`text-xl font-bold mt-1 ${singleCustomerDetails.closingBalance > 0 ? 'text-amber-600' : 'text-slate-900'}`}>
+                {money(singleCustomerDetails.closingBalance)}
+              </p>
+            </div>
+          </div>
+
+          {/* Ledger Statement Table */}
+          <div className="card overflow-hidden">
+            <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+              <span className="font-bold text-sm text-slate-800">Statement of Account — {selectedCust}</span>
+              <button
+                onClick={() => {
+                  const rows = singleCustomerDetails.ledgerRows.map((r) => ({
+                    Date: r.date, VoucherNo: r.voucherNo, Type: r.type,
+                    Debit: r.debit.toFixed(2), Credit: r.credit.toFixed(2), Balance: r.balance.toFixed(2),
+                  }));
+                  downloadCSV(`${selectedCust}-ledger.csv`, toCSV(rows));
+                }}
+                className="btn-secondary text-xs px-2.5 py-1"
+              >
+                Export Ledger CSV
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[700px] text-xs">
+                <thead className="bg-slate-100 font-bold text-slate-700">
+                  <tr>
+                    <th className="p-2.5 text-left">Date</th>
+                    <th className="p-2.5 text-left">Particulars / Voucher #</th>
+                    <th className="p-2.5 text-left">Voucher Type</th>
+                    <th className="p-2.5 text-right">Debit (Billed ₹)</th>
+                    <th className="p-2.5 text-right">Credit (Paid ₹)</th>
+                    <th className="p-2.5 text-right">Running Balance (₹)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-sans">
+                  {singleCustomerDetails.ledgerRows.map((r, i) => (
+                    <tr key={i} className="hover:bg-slate-50/60">
+                      <td className="p-2.5 text-slate-600">{r.date}</td>
+                      <td className="p-2.5 font-bold text-slate-900">{r.voucherNo}</td>
+                      <td className="p-2.5">
+                        <span className={`badge text-[10.5px] ${r.type === 'CREDIT NOTE' ? 'bg-rose-100 text-rose-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                          {r.type}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-medium text-slate-800">
+                        {r.debit > 0 ? money(r.debit) : '—'}
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-medium text-emerald-600">
+                        {r.credit > 0 ? money(r.credit) : '—'}
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-bold text-slate-900">
+                        {money(r.balance)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function SupplierOutstandingReport({ purchases, suppliers }: { purchases: PurchaseRecord[]; suppliers: { id: string; name: string; phone: string; gstin: string; address: string; notes: string }[] }) {
-  const pending = purchases.filter((p) => p.paymentStatus === 'Pending');
-  const bySupplier = useMemo(() => {
-    const map = new Map<string, { name: string; phone: string; total: number; count: number; lastDate: string }>();
-    for (const p of pending) {
-      const sup = suppliers.find((s) => s.name === p.supplier);
-      const existing = map.get(p.supplier) ?? { name: p.supplier, phone: sup?.phone ?? '—', total: 0, count: 0, lastDate: p.date };
-      existing.total += p.grandTotal;
-      existing.count++;
-      if (p.date > existing.lastDate) existing.lastDate = p.date;
-      map.set(p.supplier, existing);
-    }
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
-  }, [pending, suppliers]);
-  const totalPayable = bySupplier.reduce((s, c) => s + c.total, 0);
-  if (bySupplier.length === 0) {
-    return (
-      <div className="card p-12 text-center">
-        <CheckCircle2 className="mx-auto h-10 w-10 text-accent-500" />
-        <p className="mt-3 text-base font-semibold text-slate-800">All supplier payments cleared</p>
-        <p className="text-sm text-slate-500">No outstanding payments to suppliers.</p>
-      </div>
-    );
-  }
+  const [selectedSup, setSelectedSup] = useState<string>('all');
+  const [search, setSearch] = useState<string>('');
+
+  const supplierList = useMemo(() => {
+    const names = new Set<string>();
+    for (const s of suppliers) if (s.name) names.add(s.name);
+    for (const p of purchases) if (p.supplier) names.add(p.supplier);
+    return Array.from(names).sort();
+  }, [suppliers, purchases]);
+
+  const supplierSummaries = useMemo(() => {
+    return supplierList.map((name) => {
+      const supInfo = suppliers.find((s) => s.name === name);
+      const supPurchases = purchases.filter((p) => p.supplier === name && p.status !== 'cancelled');
+      const totalPurchased = supPurchases.reduce((sum, p) => sum + p.grandTotal, 0);
+      const totalPaid = supPurchases.filter((p) => p.paymentStatus === 'Paid').reduce((sum, p) => sum + p.grandTotal, 0);
+      const payable = totalPurchased - totalPaid;
+      const poCount = supPurchases.length;
+      const lastDate = supPurchases.length > 0 ? supPurchases.sort((a, b) => b.date.localeCompare(a.date))[0].date : '—';
+      return {
+        name,
+        phone: supInfo?.phone || '—',
+        gstin: supInfo?.gstin || '—',
+        totalPurchased,
+        totalPaid,
+        payable,
+        poCount,
+        lastDate,
+      };
+    }).filter((s) => {
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
+      return s.name.toLowerCase().includes(q) || s.phone.toLowerCase().includes(q) || s.gstin.toLowerCase().includes(q);
+    });
+  }, [supplierList, suppliers, purchases, search]);
+
+  const singleSupplierDetails = useMemo(() => {
+    if (selectedSup === 'all') return null;
+    const supInfo = suppliers.find((s) => s.name === selectedSup);
+    const supPurchases = purchases
+      .filter((p) => p.supplier === selectedSup && p.status !== 'cancelled')
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    let runningBalance = 0;
+    const ledgerRows = supPurchases.map((p) => {
+      const credit = p.grandTotal;
+      const debit = p.paymentStatus === 'Paid' ? p.grandTotal : 0;
+      runningBalance += (credit - debit);
+      return {
+        id: p.id,
+        date: p.date,
+        voucherNo: p.poNumber,
+        type: 'Purchase Order',
+        credit,
+        debit,
+        balance: runningBalance,
+        status: p.paymentStatus,
+      };
+    });
+
+    const totalPurchased = supPurchases.reduce((sum, p) => sum + p.grandTotal, 0);
+    const totalPaid = supPurchases.filter((p) => p.paymentStatus === 'Paid').reduce((sum, p) => sum + p.grandTotal, 0);
+
+    return {
+      supInfo,
+      totalPurchased,
+      totalPaid,
+      closingBalance: runningBalance,
+      ledgerRows,
+    };
+  }, [selectedSup, suppliers, purchases]);
+
+  const totalPayableAll = supplierSummaries.reduce((sum, s) => sum + s.payable, 0);
+
   return (
-    <div className="card overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[600px]">
-          <thead className="bg-slate-50/80">
-            <tr>
-              <th className="table-th">Supplier</th>
-              <th className="table-th">Phone</th>
-              <th className="table-th text-right">Pending POs</th>
-              <th className="table-th text-right">Payable Amount</th>
-              <th className="table-th">Last PO</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {bySupplier.map((s) => (
-              <tr key={s.name} className="transition hover:bg-slate-50/50">
-                <td className="table-td font-semibold text-slate-800">{s.name}</td>
-                <td className="table-td text-slate-600">{s.phone}</td>
-                <td className="table-td text-right tabular-nums">{s.count}</td>
-                <td className="table-td text-right font-semibold tabular-nums text-warn-600">{money(s.total)}</td>
-                <td className="table-td text-slate-500">{s.lastDate}</td>
-              </tr>
+    <div className="space-y-4">
+      {/* Supplier Selection Bar */}
+      <div className="card p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-1">
+          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">Select Supplier Ledger:</label>
+          <select
+            value={selectedSup}
+            onChange={(e) => setSelectedSup(e.target.value)}
+            className="input text-xs py-1.5 font-semibold"
+          >
+            <option value="all">-- All Supplier Summary --</option>
+            {supplierList.map((name) => (
+              <option key={name} value={name}>{name}</option>
             ))}
-          </tbody>
-          <tfoot>
-            <tr className="border-t-2 border-slate-200 bg-slate-50">
-              <td colSpan={3} className="table-td text-right font-semibold text-slate-700">Total Payable:</td>
-              <td className="table-td text-right text-lg font-bold text-warn-600">{money(totalPayable)}</td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
+          </select>
+        </div>
+
+        {selectedSup === 'all' && (
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search supplier name or phone..."
+            className="input text-xs max-w-xs"
+          />
+        )}
+
+        {selectedSup !== 'all' && (
+          <button
+            onClick={() => setSelectedSup('all')}
+            className="btn-secondary text-xs px-3 py-1.5"
+          >
+            ← Back to All Suppliers
+          </button>
+        )}
       </div>
+
+      {selectedSup === 'all' ? (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[700px]">
+              <thead className="bg-slate-50/80">
+                <tr>
+                  <th className="table-th">Supplier Name</th>
+                  <th className="table-th">Phone</th>
+                  <th className="table-th text-right">Orders</th>
+                  <th className="table-th text-right">Total Purchased (₹)</th>
+                  <th className="table-th text-right">Total Paid (₹)</th>
+                  <th className="table-th text-right">Payable Balance (₹)</th>
+                  <th className="table-th text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {supplierSummaries.map((s) => (
+                  <tr key={s.name} className="transition hover:bg-slate-50/50">
+                    <td className="table-td font-bold text-slate-900">{s.name}</td>
+                    <td className="table-td text-slate-600">{s.phone}</td>
+                    <td className="table-td text-right tabular-nums">{s.poCount}</td>
+                    <td className="table-td text-right tabular-nums font-medium">{money(s.totalPurchased)}</td>
+                    <td className="table-td text-right tabular-nums text-emerald-600 font-medium">{money(s.totalPaid)}</td>
+                    <td className={`table-td text-right font-bold tabular-nums ${s.payable > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
+                      {money(s.payable)}
+                    </td>
+                    <td className="table-td text-right">
+                      <button
+                        onClick={() => setSelectedSup(s.name)}
+                        className="px-2.5 py-1 text-xs font-bold bg-brand-50 text-brand-600 rounded-lg hover:bg-brand-100 transition"
+                      >
+                        View Ledger
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-slate-50">
+                  <td colSpan={5} className="table-td text-right font-bold text-slate-800">Total Supplier Payables:</td>
+                  <td className="table-td text-right text-base font-black text-amber-600">{money(totalPayableAll)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      ) : singleSupplierDetails ? (
+        <div className="space-y-4">
+          {/* Supplier Details Summary Banner */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="card p-4">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Total Purchased</span>
+              <p className="text-xl font-bold text-slate-900 mt-1">{money(singleSupplierDetails.totalPurchased)}</p>
+            </div>
+            <div className="card p-4">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Total Paid</span>
+              <p className="text-xl font-bold text-emerald-600 mt-1">{money(singleSupplierDetails.totalPaid)}</p>
+            </div>
+            <div className="card p-4">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Payable Balance</span>
+              <p className={`text-xl font-bold mt-1 ${singleSupplierDetails.closingBalance > 0 ? 'text-amber-600' : 'text-slate-900'}`}>
+                {money(singleSupplierDetails.closingBalance)}
+              </p>
+            </div>
+          </div>
+
+          {/* Ledger Statement Table */}
+          <div className="card overflow-hidden">
+            <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+              <span className="font-bold text-sm text-slate-800">Supplier Ledger Statement — {selectedSup}</span>
+              <button
+                onClick={() => {
+                  const rows = singleSupplierDetails.ledgerRows.map((r) => ({
+                    Date: r.date, VoucherNo: r.voucherNo, Type: r.type,
+                    Credit: r.credit.toFixed(2), Debit: r.debit.toFixed(2), Balance: r.balance.toFixed(2),
+                  }));
+                  downloadCSV(`${selectedSup}-supplier-ledger.csv`, toCSV(rows));
+                }}
+                className="btn-secondary text-xs px-2.5 py-1"
+              >
+                Export Ledger CSV
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[700px] text-xs">
+                <thead className="bg-slate-100 font-bold text-slate-700">
+                  <tr>
+                    <th className="p-2.5 text-left">Date</th>
+                    <th className="p-2.5 text-left">Particulars / PO #</th>
+                    <th className="p-2.5 text-left">Document Type</th>
+                    <th className="p-2.5 text-right">Credit (Purchased ₹)</th>
+                    <th className="p-2.5 text-right">Debit (Paid ₹)</th>
+                    <th className="p-2.5 text-right">Payable Balance (₹)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-sans">
+                  {singleSupplierDetails.ledgerRows.map((r, i) => (
+                    <tr key={i} className="hover:bg-slate-50/60">
+                      <td className="p-2.5 text-slate-600">{r.date}</td>
+                      <td className="p-2.5 font-bold text-slate-900">{r.voucherNo}</td>
+                      <td className="p-2.5">
+                        <span className="badge text-[10.5px] bg-blue-100 text-blue-700">
+                          {r.type}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-medium text-slate-800">
+                        {r.credit > 0 ? money(r.credit) : '—'}
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-medium text-emerald-600">
+                        {r.debit > 0 ? money(r.debit) : '—'}
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-bold text-slate-900">
+                        {money(r.balance)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

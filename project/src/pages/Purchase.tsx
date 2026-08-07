@@ -2,14 +2,14 @@ import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
-  Trash2, Minus, Printer, CheckCircle2, Package,
+  Trash2, Minus, Printer, CheckCircle2, Package, X
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
-import { GST_RATE, computeDiscountAmount } from '@/lib/constants';
+import { GST_RATE, computeDiscountAmount, computeGrandTotal } from '@/lib/constants';
 import { downloadCSV, toCSV, money } from '@/utils/analytics';
 import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType } from '@/lib/types';
 
@@ -40,12 +40,31 @@ function nextPurchaseBill(existingSales: SaleRecord[]): string {
   return `PI-${max + 1}`;
 }
 
+function nextCreditNote(existingSales: SaleRecord[]): string {
+  const nums = existingSales
+    .filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'))
+    .map((s) => parseInt(s.invoice.replace(/^CN-/, ''), 10))
+    .filter((n) => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 1000;
+  return `CN-${max + 1}`;
+}
+
+function nextDebitNote(existingSales: SaleRecord[]): string {
+  const nums = existingSales
+    .filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'))
+    .map((s) => parseInt(s.invoice.replace(/^DN-/, ''), 10))
+    .filter((n) => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 1000;
+  return `DN-${max + 1}`;
+}
+
 type DraftLine = PurchaseLineItem;
 
 export default function Purchase() {
-  const { purchases, products, suppliers, sales, addPurchase, addSale, companySettings } = useStore();
+  const { purchases, products, suppliers, sales, addPurchase, addSale, deleteSale, companySettings } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState<'all' | 'orders' | 'bills' | 'credit-notes'>('all');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [supplier, setSupplier] = useState('');
@@ -95,9 +114,11 @@ export default function Purchase() {
   }, [companySettings]);
   const [pbDiscount, setPbDiscount] = useState(0);
   const [pbDiscountType, setPbDiscountType] = useState<DiscountType>('percent');
+  const [pbFreightCharges, setPbFreightCharges] = useState<string>('');
   const [pbLines, setPbLines] = useState<InvoiceLineItem[]>([]);
   const [pbProductSearch, setPbProductSearch] = useState('');
   const [pbViewing, setPbViewing] = useState<SaleRecord | null>(null);
+  const [pbDocumentType, setPbDocumentType] = useState<'PURCHASE BILL' | 'CREDIT NOTE' | 'DEBIT NOTE'>('PURCHASE BILL');
   const [pbPreviewCopyTag, setPbPreviewCopyTag] = useState('Original For Recipient');
   const [pbExportCopies, setPbExportCopies] = useState<Record<string, boolean>>({
     'Original For Recipient': true,
@@ -106,37 +127,110 @@ export default function Purchase() {
     'Extra Copy': true,
   });
 
-  const autoPbNumber = useMemo(() => nextPurchaseBill(sales), [sales]);
+  const autoPbNumber = useMemo(() => {
+    if (pbDocumentType === 'CREDIT NOTE') return nextCreditNote(sales);
+    if (pbDocumentType === 'DEBIT NOTE') return nextDebitNote(sales);
+    return nextPurchaseBill(sales);
+  }, [sales, pbDocumentType]);
   const pbNumber = pbCustomBillNumber.trim() || autoPbNumber;
 
   const poNumber = useMemo(() => nextPONumber(purchases), [purchases]);
 
+  const combinedRecords = useMemo(() => {
+    type CombinedRecord =
+      | { kind: 'po'; id: string; docNumber: string; typeLabel: 'PO'; supplier: string; date: string; items: PurchaseLineItem[]; grandTotal: number; status: string; paymentMethod: string; paymentStatus: string; raw: PurchaseRecord }
+      | { kind: 'bill'; id: string; docNumber: string; typeLabel: 'PURCHASE BILL' | 'CREDIT NOTE' | 'DEBIT NOTE'; supplier: string; date: string; items: InvoiceLineItem[]; grandTotal: number; status: string; paymentMethod: string; paymentStatus: string; raw: SaleRecord };
+
+    const list: CombinedRecord[] = [];
+
+    for (const p of purchases) {
+      list.push({
+        kind: 'po',
+        id: p.id,
+        docNumber: p.poNumber,
+        typeLabel: 'PO',
+        supplier: p.supplier,
+        date: p.date,
+        items: p.items,
+        grandTotal: p.grandTotal,
+        status: p.status,
+        paymentMethod: p.paymentMethod,
+        paymentStatus: p.paymentStatus,
+        raw: p,
+      });
+    }
+
+    for (const s of sales) {
+      if (
+        s.documentType === 'PURCHASE BILL' ||
+        s.documentType === 'CREDIT NOTE' ||
+        s.documentType === 'DEBIT NOTE' ||
+        s.invoice.startsWith('PI-') ||
+        s.invoice.startsWith('PB-') ||
+        s.invoice.startsWith('CN-') ||
+        s.invoice.startsWith('DN-')
+      ) {
+        const typeLabel = (s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'))
+          ? 'CREDIT NOTE'
+          : (s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'))
+          ? 'DEBIT NOTE'
+          : 'PURCHASE BILL';
+
+        list.push({
+          kind: 'bill',
+          id: s.id,
+          docNumber: s.invoice,
+          typeLabel,
+          supplier: s.customer,
+          date: s.date,
+          items: s.items,
+          grandTotal: s.grandTotal,
+          status: s.status,
+          paymentMethod: s.paymentMethod,
+          paymentStatus: 'Paid',
+          raw: s,
+        });
+      }
+    }
+
+    return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }, [purchases, sales]);
+
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return purchases.filter(
-      (p) =>
-        p.poNumber.toLowerCase().includes(q) ||
-        p.supplier.toLowerCase().includes(q) ||
-        p.supplierInvoice.toLowerCase().includes(q) ||
-        p.phone.toLowerCase().includes(q),
-    );
-  }, [purchases, search]);
+    const q = search.toLowerCase().trim();
+    return combinedRecords.filter((rec) => {
+      if (activeTab === 'orders' && rec.kind !== 'po') return false;
+      if (activeTab === 'bills' && rec.typeLabel !== 'PURCHASE BILL') return false;
+      if (activeTab === 'credit-notes' && rec.typeLabel !== 'CREDIT NOTE') return false;
+
+      if (!q) return true;
+      return (
+        rec.docNumber.toLowerCase().includes(q) ||
+        rec.supplier.toLowerCase().includes(q) ||
+        rec.items.some((i) => i.name.toLowerCase().includes(q))
+      );
+    });
+  }, [combinedRecords, search, activeTab]);
 
   const summary = useMemo(() => {
-    const total = purchases.reduce((s, p) => s + p.grandTotal, 0);
-    const received = purchases.filter((p) => p.status === 'received').length;
-    const pending = purchases.filter((p) => p.status === 'ordered' || p.status === 'partially-received').length;
+    const totalPO = purchases.reduce((s, p) => s + p.grandTotal, 0);
+    const totalCN = sales
+      .filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'))
+      .reduce((s, r) => s + r.grandTotal, 0);
+    const countCN = sales.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-')).length;
+    const countPO = purchases.length;
+    const countPB = sales.filter((s) => s.documentType === 'PURCHASE BILL' || s.invoice.startsWith('PI-') || s.invoice.startsWith('PB-')).length;
     const pendingPayment = purchases
       .filter((p) => p.paymentStatus === 'Pending')
       .reduce((s, p) => s + p.grandTotal, 0);
-    return { total, received, pending, pendingPayment };
-  }, [purchases]);
+    return { totalPO, totalCN, countCN, countPO, countPB, pendingPayment };
+  }, [purchases, sales]);
 
   const statCards = [
-    { label: 'Total Purchase Value', value: `₹${summary.total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Truck, tone: 'bg-brand-50 text-brand-600' },
-    { label: 'Received Orders', value: String(summary.received), icon: PackageCheck, tone: 'bg-accent-50 text-accent-600' },
-    { label: 'Pending Orders', value: String(summary.pending), icon: Clock, tone: 'bg-warn-50 text-warn-600' },
-    { label: 'Pending Payments', value: `₹${summary.pendingPayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: FileText, tone: 'bg-slate-100 text-slate-600' },
+    { label: 'Total Purchase Value', value: `₹${summary.totalPO.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Truck, tone: 'bg-brand-50 text-brand-600' },
+    { label: 'Credit Notes Issued', value: `${summary.countCN} (₹${summary.totalCN.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, icon: FileText, tone: 'bg-rose-50 text-rose-600' },
+    { label: 'Purchase Orders', value: String(summary.countPO), icon: PackageCheck, tone: 'bg-accent-50 text-accent-600' },
+    { label: 'Pending Payments', value: `₹${summary.pendingPayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Clock, tone: 'bg-amber-50 text-amber-600' },
   ];
 
   const subtotal = useMemo(
@@ -232,19 +326,21 @@ export default function Purchase() {
     () => pbLines.reduce((sum, line) => sum + line.price * line.qty, 0),
     [pbLines],
   );
+  const pbFreightVal = parseFloat(pbFreightCharges) || 0;
   const pbEffectiveGstRate = pbApplyGst ? pbGstRate : 0;
-  const pbDiscountAmount = useMemo(
-    () => computeDiscountAmount(pbSubtotal, pbDiscount, pbDiscountType),
-    [pbSubtotal, pbDiscount, pbDiscountType],
-  );
-  const pbTaxableAmount = Math.max(0, pbSubtotal - pbDiscountAmount);
-  const pbGstAmount = +(pbTaxableAmount * (pbEffectiveGstRate / 100)).toFixed(2);
-  const pbHalfGst = +(pbGstAmount / 2).toFixed(2);
-  const pbGrandTotal = +(pbTaxableAmount + pbGstAmount).toFixed(2);
+  const {
+    discountAmount: pbDiscountAmount,
+    taxableAmount: pbTaxableAmount,
+    gstAmount: pbGstAmount,
+    rawTotal: pbRawTotal,
+    roundOff: pbRoundOff,
+    grandTotal: pbGrandTotal,
+    hasRoundOff: pbHasRoundOff,
+  } = computeGrandTotal(pbSubtotal, pbDiscount, pbDiscountType, pbEffectiveGstRate, pbFreightVal);
 
-  const pbCgstAmount = pbGstTaxType === 'local' ? pbHalfGst : 0;
-  const pbSgstAmount = pbGstTaxType === 'local' ? pbHalfGst : 0;
-  const pbIgstAmount = pbGstTaxType === 'central' ? pbGstAmount : 0;
+  const pbCgstAmount = pbApplyGst && pbGstTaxType === 'local' ? +(pbGstAmount / 2).toFixed(2) : 0;
+  const pbSgstAmount = pbApplyGst && pbGstTaxType === 'local' ? +(pbGstAmount / 2).toFixed(2) : 0;
+  const pbIgstAmount = pbApplyGst && pbGstTaxType === 'central' ? +pbGstAmount.toFixed(2) : 0;
 
   const pbSearchResults = useMemo(() => {
     const q = pbProductSearch.toLowerCase().trim();
@@ -276,13 +372,23 @@ export default function Purchase() {
     setPbGstTaxType('local');
     setPbDiscount(0);
     setPbDiscountType('percent');
+    setPbFreightCharges('');
     setPbLines([]);
     setPbProductSearch('');
+    setPbDocumentType('PURCHASE BILL');
   };
 
   const openNewPurchaseBill = () => {
     resetPbForm();
+    setPbDocumentType('PURCHASE BILL');
     setPbCustomBillNumber(nextPurchaseBill(sales));
+    setPbModalOpen(true);
+  };
+
+  const openNewCreditNote = () => {
+    resetPbForm();
+    setPbDocumentType('CREDIT NOTE');
+    setPbCustomBillNumber(nextCreditNote(sales));
     setPbModalOpen(true);
   };
 
@@ -405,7 +511,8 @@ export default function Purchase() {
       bankIfsc: pbBankIfsc.trim().toUpperCase(),
       sellerGstin: pbSellerGstin.trim().toUpperCase(),
       sellerPan: pbSellerPan.trim().toUpperCase(),
-      documentType: 'PURCHASE BILL',
+      documentType: pbDocumentType,
+      freightCharges: pbFreightVal,
     };
 
     addSale(newBill);
@@ -442,12 +549,13 @@ export default function Purchase() {
   };
 
   const handleExport = () => {
-    const rows = filtered.map((p) => ({
-      PO: p.poNumber, Supplier: p.supplier, SupplierInvoice: p.supplierInvoice,
-      Phone: p.phone, Date: p.date, Items: p.itemCount,
-      Subtotal: p.subtotal.toFixed(2), GST: p.gstAmount.toFixed(2),
-      GrandTotal: p.grandTotal.toFixed(2), Payment: p.paymentMethod,
-      PaymentStatus: p.paymentStatus, Status: p.status,
+    const rows = filtered.map((rec) => ({
+      DocNumber: rec.docNumber,
+      Type: rec.typeLabel,
+      Supplier: rec.supplier,
+      Date: rec.date,
+      ItemsCount: rec.items.length,
+      GrandTotal: rec.grandTotal.toFixed(2),
     }));
     downloadCSV('purchases.csv', toCSV(rows));
   };
@@ -459,13 +567,20 @@ export default function Purchase() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Purchase Bills"
-        subtitle="Manage supplier purchase bills, purchase orders, and track deliveries."
+        title="Purchase & Supplier Credit Notes"
+        subtitle="Manage purchase bills, supplier credit notes, debit notes, and purchase orders."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button className="btn-secondary" onClick={handleExport}>
               <Download className="h-4 w-4" />
               <span className="hidden sm:inline">Export</span>
+            </button>
+            <button
+              className="btn-secondary bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 font-bold flex items-center gap-1.5"
+              onClick={openNewCreditNote}
+            >
+              <Plus className="h-4 w-4 text-rose-600" />
+              <span>+ Credit Note</span>
             </button>
             <button
               className="btn-secondary bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold flex items-center gap-1.5"
@@ -498,16 +613,36 @@ export default function Purchase() {
       </div>
 
       <div className="sticky top-[8.5rem] z-10 mt-4 -mx-4 px-4 py-3 bg-slate-50/90 backdrop-blur-md rounded-lg lg:-mx-8 lg:px-8">
-        <div className="card p-3">
-          <div className="relative max-w-sm">
+        <div className="card p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="relative max-w-sm flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by PO number, supplier, invoice, or phone…"
+              placeholder="Search by PO/Invoice #, supplier, or product…"
               className="input pl-10"
             />
+          </div>
+          <div className="flex items-center gap-1 overflow-x-auto bg-slate-100 p-1 rounded-xl border border-slate-200">
+            {[
+              { id: 'all', label: `All (${combinedRecords.length})` },
+              { id: 'credit-notes', label: `Credit Notes (${summary.countCN})` },
+              { id: 'bills', label: `Purchase Bills (${summary.countPB})` },
+              { id: 'orders', label: `Purchase Orders (${summary.countPO})` },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  activeTab === tab.id
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-200/60'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -517,68 +652,104 @@ export default function Purchase() {
           <table className="w-full min-w-[760px]">
             <thead className="bg-slate-50/80">
               <tr>
-                <th className="table-th">PO Number</th>
+                <th className="table-th">Doc Number</th>
+                <th className="table-th">Type</th>
                 <th className="table-th">Supplier</th>
                 <th className="table-th">Products</th>
                 <th className="table-th">Date</th>
-                <th className="table-th">Payment</th>
                 <th className="table-th text-right">Grand Total</th>
-                <th className="table-th">Status</th>
                 <th className="table-th text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((p) => (
-                <tr key={p.id} className="cursor-pointer transition hover:bg-slate-50/50" onClick={() => navigate(`/purchase/${p.id}`)}>
-                  <td className="table-td font-semibold text-brand-600">{p.poNumber}</td>
-                  <td className="table-td font-medium text-slate-800">{p.supplier}</td>
-                  <td className="table-td">
-                    <div className="space-y-0.5">
-                      {p.items.slice(0, 2).map((it) => (
-                        <div key={it.productId} className="text-xs text-slate-600">
-                          <span className="font-medium text-slate-800">{it.name}</span>
-                          {' '}
-                          <span className="text-slate-400">({it.qty.toLocaleString('en-IN')} pcs)</span>
-                        </div>
-                      ))}
-                      {p.items.length > 2 && (
-                        <div className="text-xs text-brand-600">+{p.items.length - 2} more…</div>
-                      )}
-                    </div>
-                  </td>
-                  <td className="table-td text-slate-600">{p.date}</td>
-                  <td className="table-td">
-                    <div className="flex items-center gap-2">
-                      <span className={`badge ${paymentTone[p.paymentMethod]}`}>{p.paymentMethod}</span>
-                      <span className={`badge ${p.paymentStatus === 'Paid' ? 'bg-accent-100 text-accent-700' : 'bg-warn-100 text-warn-600'}`}>
-                        {p.paymentStatus}
+              {filtered.map((rec) => {
+                const isPO = rec.kind === 'po';
+                const isCN = rec.typeLabel === 'CREDIT NOTE';
+                const isDN = rec.typeLabel === 'DEBIT NOTE';
+                return (
+                  <tr
+                    key={rec.id}
+                    className="cursor-pointer transition hover:bg-slate-50/50"
+                    onClick={() => {
+                      if (isPO) navigate(`/purchase/${rec.id}`);
+                      else setPbViewing(rec.raw);
+                    }}
+                  >
+                    <td className="table-td font-semibold text-brand-600">{rec.docNumber}</td>
+                    <td className="table-td">
+                      <span
+                        className={`badge font-bold ${
+                          isCN
+                            ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                            : isDN
+                            ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                            : isPO
+                            ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                            : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                        }`}
+                      >
+                        {rec.typeLabel}
                       </span>
-                    </div>
-                  </td>
-                  <td className="table-td text-right font-semibold tabular-nums text-slate-900">
-                    ₹{p.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="table-td"><StatusBadge status={p.status} /></td>
-                  <td className="table-td" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => navigate(`/purchase/${p.id}`)}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                        title="View Details"
-                      >
-                        <Eye className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => handlePrint(p)}
-                        className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                        title="Print Purchase Order"
-                      >
-                        <Printer className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="table-td font-medium text-slate-800">{rec.supplier}</td>
+                    <td className="table-td">
+                      <div className="space-y-0.5">
+                        {rec.items.slice(0, 2).map((it, idx) => (
+                          <div key={idx} className="text-xs text-slate-600">
+                            <span className="font-medium text-slate-800">{it.name}</span>
+                            {' '}
+                            <span className="text-slate-400">({it.qty.toLocaleString('en-IN')} pcs)</span>
+                          </div>
+                        ))}
+                        {rec.items.length > 2 && (
+                          <div className="text-xs text-brand-600">+{rec.items.length - 2} more…</div>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-td text-slate-600">{rec.date}</td>
+                    <td className="table-td text-right font-semibold tabular-nums text-slate-900">
+                      ₹{rec.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="table-td" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => {
+                            if (isPO) navigate(`/purchase/${rec.id}`);
+                            else setPbViewing(rec.raw);
+                          }}
+                          className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+                          title="View Details"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (isPO) handlePrint(rec.raw);
+                            else printInvoice(rec.raw, undefined, companySettings);
+                          }}
+                          className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+                          title="Print Document"
+                        >
+                          <Printer className="h-4 w-4" />
+                        </button>
+                        {!isPO && (
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to delete ${rec.docNumber}?`)) {
+                                deleteSale(rec.id);
+                              }
+                            }}
+                            className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
+                            title="Delete Document"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -915,14 +1086,43 @@ export default function Purchase() {
         </div>
       </Modal>
 
-      {/* Create Purchase Bill Modal (rich Tax Invoice layout for Purchase Bill) */}
+      {/* Create Purchase Bill / Credit Note Modal */}
       {pbModalOpen && (
         <Modal
-          title={`Create Purchase Bill (${pbNumber})`}
+          title={`Create ${pbDocumentType === 'CREDIT NOTE' ? 'Credit Note' : pbDocumentType === 'DEBIT NOTE' ? 'Debit Note' : 'Purchase Bill'} (${pbNumber})`}
           size="xl"
           onClose={() => setPbModalOpen(false)}
         >
           <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1 text-xs">
+            {/* Document Type Selector */}
+            <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">Document Type</label>
+              <div className="flex gap-2">
+                {[
+                  { value: 'PURCHASE BILL', label: 'Purchase Bill', tone: 'border-indigo-600 bg-indigo-50 text-indigo-700 shadow-xs' },
+                  { value: 'CREDIT NOTE', label: 'Credit Note', tone: 'border-rose-600 bg-rose-50 text-rose-700 shadow-xs' },
+                  { value: 'DEBIT NOTE', label: 'Debit Note', tone: 'border-amber-600 bg-amber-50 text-amber-700 shadow-xs' },
+                ].map((dt) => (
+                  <button
+                    key={dt.value}
+                    type="button"
+                    onClick={() => {
+                      setPbDocumentType(dt.value as any);
+                      if (dt.value === 'CREDIT NOTE') setPbCustomBillNumber(nextCreditNote(sales));
+                      else if (dt.value === 'DEBIT NOTE') setPbCustomBillNumber(nextDebitNote(sales));
+                      else setPbCustomBillNumber(nextPurchaseBill(sales));
+                    }}
+                    className={`flex-1 py-1.5 px-3 rounded-lg border text-xs font-bold transition ${
+                      pbDocumentType === dt.value
+                        ? dt.tone
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    {dt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             {/* Supplier Selector / Input */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -934,11 +1134,14 @@ export default function Purchase() {
                 >
                   <option value="">-- Select Saved Supplier --</option>
                   <option value="new">+ Enter New Supplier</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} {s.phone ? `(${s.phone})` : ''}
-                    </option>
-                  ))}
+                  {suppliers.map((s) => {
+                    const extra = [s.phone, s.gstin ? `GST: ${s.gstin}` : '', s.address].filter(Boolean).join(' · ');
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.name} {extra ? `(${extra})` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -1089,12 +1292,22 @@ export default function Purchase() {
                   value={pbProductSearch}
                   onChange={(e) => setPbProductSearch(e.target.value)}
                   placeholder="Search products by name or SKU..."
-                  className="input pl-9 text-xs"
+                  className="input pl-9 pr-9 text-xs"
                 />
+                {pbProductSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setPbProductSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition"
+                    title="Clear search"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
               {pbSearchResults.length > 0 && (
-                <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-md divide-y divide-slate-100">
+                <div className="mt-1 max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-md divide-y divide-slate-100 pr-1">
                   {pbSearchResults.map((p) => (
                     <div
                       key={p.id}
@@ -1256,6 +1469,23 @@ export default function Purchase() {
                     <span className="text-xs font-bold text-slate-600">%</span>
                   </div>
                 </div>
+
+                <div className="border-t border-slate-200 pt-2">
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Freight / Cartage Charges (₹)</label>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-slate-600">₹</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={pbFreightCharges}
+                      placeholder="0"
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setPbFreightCharges(e.target.value.replace(/^0+(?=\d)/, ''))}
+                      className="input p-1.5 w-full text-right font-bold"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="bg-slate-900 text-white p-3.5 rounded-lg space-y-1.5 font-mono">
@@ -1269,7 +1499,13 @@ export default function Purchase() {
                     <span>-₹{pbDiscountAmount.toFixed(2)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-xs">
+                {pbFreightVal > 0 && (
+                  <div className="flex justify-between text-xs text-indigo-300 font-bold">
+                    <span>FREIGHT:</span>
+                    <span>₹{pbFreightVal.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-xs font-bold text-white">
                   <span className="text-slate-300">Taxable Value:</span>
                   <span>₹{pbTaxableAmount.toFixed(2)}</span>
                 </div>
@@ -1291,6 +1527,12 @@ export default function Purchase() {
                     <span>₹{pbIgstAmount.toFixed(2)}</span>
                   </div>
                 )}
+                {pbHasRoundOff && (
+                  <div className="flex justify-between text-xs text-slate-400">
+                    <span>Round Off:</span>
+                    <span>{pbRoundOff > 0 ? `+₹${pbRoundOff.toFixed(2)}` : `-₹${Math.abs(pbRoundOff).toFixed(2)}`}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-base font-bold text-emerald-400 border-t border-slate-700 pt-2 mt-2 font-sans">
                   <span>Grand Total:</span>
                   <span>₹{pbGrandTotal.toFixed(2)}</span>
@@ -1303,8 +1545,18 @@ export default function Purchase() {
               <button className="btn-secondary" onClick={() => setPbModalOpen(false)}>
                 Cancel
               </button>
-              <button className="btn-primary bg-indigo-600 hover:bg-indigo-700" onClick={handleSavePurchaseBill} disabled={!pbCanSubmit}>
-                Confirm &amp; Issue Purchase Bill
+              <button
+                className={`btn-primary font-bold ${
+                  pbDocumentType === 'CREDIT NOTE'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : pbDocumentType === 'DEBIT NOTE'
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+                onClick={handleSavePurchaseBill}
+                disabled={!pbCanSubmit}
+              >
+                Confirm &amp; Issue {pbDocumentType === 'CREDIT NOTE' ? 'Credit Note' : pbDocumentType === 'DEBIT NOTE' ? 'Debit Note' : 'Purchase Bill'}
               </button>
             </div>
           </div>
@@ -1396,7 +1648,6 @@ export default function Purchase() {
                 {(() => {
                   const isAmountDisc = pbViewing.discountType === 'amount' && pbViewing.discount && pbViewing.discount > 0;
                   const isPercentDisc = pbViewing.discountType === 'percent' && pbViewing.discount && pbViewing.discount > 0;
-                  const discHeaderLabel = isAmountDisc ? 'Disc (Rs.)' : 'Disc %';
                   return (
                     <>
                       <thead className="bg-slate-100 border-b border-black font-bold">
@@ -1406,25 +1657,41 @@ export default function Purchase() {
                           <th className="p-1.5 border-r border-black w-16 text-center">HSN Code</th>
                           <th className="p-1.5 border-r border-black w-12 text-center">Qty</th>
                           <th className="p-1.5 border-r border-black w-16 text-right">Rate</th>
-                          <th className="p-1.5 border-r border-black w-20 text-right">{discHeaderLabel}</th>
+                          <th className="p-1.5 border-r border-black w-14 text-right">Disc %</th>
+                          <th className="p-1.5 border-r border-black w-16 text-right">Net Rate</th>
                           <th className="p-1.5 text-right w-20">Amount</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-black/20">
                         {pbViewing.items.map((item, idx) => {
-                          const lineTotal = item.price * item.qty;
-                          const itemDiscVal = isAmountDisc
-                            ? (pbViewing.subtotal > 0 ? (pbViewing.discount * (lineTotal / pbViewing.subtotal)) : 0)
-                            : (isPercentDisc ? pbViewing.discount : 0);
+                          const unitPrice = item.price;
+                          const grossTotal = unitPrice * item.qty;
+                          const hasPerItemDisc = typeof item.discount === 'number' && !isNaN(item.discount) && item.discount >= 0;
+                          
+                          let itemDiscPercent = 0;
+                          if (hasPerItemDisc) {
+                            itemDiscPercent = item.discountType === 'amount'
+                              ? (grossTotal > 0 ? (item.discount! / grossTotal) * 100 : 0)
+                              : (item.discount || 0);
+                          } else if (isPercentDisc) {
+                            itemDiscPercent = pbViewing.discount || 0;
+                          } else if (isAmountDisc && pbViewing.subtotal > 0) {
+                            itemDiscPercent = (pbViewing.discount / pbViewing.subtotal) * 100;
+                          }
+
+                          const netUnitPrice = unitPrice * (1 - itemDiscPercent / 100);
+                          const lineNetTotal = item.qty * netUnitPrice;
+
                           return (
                             <tr key={idx}>
                               <td className="p-1.5 border-r border-black text-center">{idx + 1}</td>
                               <td className="p-1.5 border-r border-black font-bold">{item.name}</td>
                               <td className="p-1.5 border-r border-black text-center font-mono">{item.hsnCode || '7318150'}</td>
                               <td className="p-1.5 border-r border-black text-center font-bold">{item.qty}</td>
-                              <td className="p-1.5 border-r border-black text-right font-mono">₹{item.price.toFixed(2)}</td>
-                              <td className="p-1.5 border-r border-black text-right font-mono">{itemDiscVal.toFixed(2)}</td>
-                              <td className="p-1.5 text-right font-bold font-mono">₹{lineTotal.toFixed(2)}</td>
+                              <td className="p-1.5 border-r border-black text-right font-mono">₹{unitPrice.toFixed(2)}</td>
+                              <td className="p-1.5 border-r border-black text-right font-mono">{itemDiscPercent.toFixed(2)}</td>
+                              <td className="p-1.5 border-r border-black text-right font-mono font-bold">₹{netUnitPrice.toFixed(2)}</td>
+                              <td className="p-1.5 text-right font-bold font-mono">₹{lineNetTotal.toFixed(2)}</td>
                             </tr>
                           );
                         })}
@@ -1436,24 +1703,51 @@ export default function Purchase() {
 
               {/* Totals Section */}
               <div className="p-3 bg-slate-50 font-mono text-xs space-y-1 border-t border-black">
-                <div className="flex justify-between">
-                  <span>Subtotal:</span>
-                  <span>{money(pbViewing.subtotal)}</span>
-                </div>
-                {pbViewing.discount && pbViewing.discountType !== 'percent' ? (
-                  <div className="flex justify-between text-amber-700 font-semibold">
-                    <span>Discount (Less):</span>
-                    <span>-{money(computeDiscountAmount(pbViewing.subtotal, pbViewing.discount, pbViewing.discountType))}</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between">
-                  <span>Taxable Amount:</span>
-                  <span>{money(pbViewing.subtotal - computeDiscountAmount(pbViewing.subtotal, pbViewing.discount, pbViewing.discountType))}</span>
-                </div>
-                <div className="flex justify-between font-bold text-sm border-t border-slate-300 pt-1 mt-1 font-sans">
-                  <span>Grand Total:</span>
-                  <span>{money(pbViewing.grandTotal)}</span>
-                </div>
+                {(() => {
+                  const discAmt = computeDiscountAmount(pbViewing.subtotal, pbViewing.discount, pbViewing.discountType);
+                  const freightAmt = pbViewing.freightCharges || 0;
+                  const taxableVal = Math.max(0, pbViewing.subtotal - discAmt + freightAmt);
+                  const gstVal = pbViewing.gstAmount || 0;
+                  const rawTotal = taxableVal + gstVal;
+                  const grandTotalInt = Math.round(pbViewing.grandTotal || rawTotal);
+                  const roundOff = +(grandTotalInt - rawTotal).toFixed(2);
+                  const showRoundOff = Math.abs(roundOff) >= 0.01;
+
+                  return (
+                    <>
+                      <div className="flex justify-between">
+                        <span>Total Amount:</span>
+                        <span>{money(pbViewing.subtotal)}</span>
+                      </div>
+                      {discAmt > 0 ? (
+                        <div className="flex justify-between text-amber-700 font-semibold">
+                          <span>Discount (Less):</span>
+                          <span>-{money(discAmt)}</span>
+                        </div>
+                      ) : null}
+                      {freightAmt > 0 ? (
+                        <div className="flex justify-between font-bold text-slate-800">
+                          <span>FREIGHT:</span>
+                          <span>{money(freightAmt)}</span>
+                        </div>
+                      ) : null}
+                      <div className="flex justify-between font-bold">
+                        <span>Taxable Amount:</span>
+                        <span>{money(taxableVal)}</span>
+                      </div>
+                      {showRoundOff ? (
+                        <div className="flex justify-between text-slate-600">
+                          <span>Round Off:</span>
+                          <span>{roundOff > 0 ? `+${money(roundOff)}` : money(roundOff)}</span>
+                        </div>
+                      ) : null}
+                      <div className="flex justify-between font-bold text-sm border-t border-slate-300 pt-1 mt-1 font-sans">
+                        <span>Grand Total:</span>
+                        <span>{money(grandTotalInt)}</span>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
 

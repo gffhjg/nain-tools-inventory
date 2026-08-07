@@ -82,33 +82,54 @@ function numberToWords(num: number): string {
 function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySettings | null): string {
   const biz = resolveBusinessDetails(cs);
   const discountAmt = computeDiscountAmount(sale.subtotal, sale.discount, sale.discountType);
-  const taxableValue = sale.subtotal - discountAmt;
+  const freightAmt = sale.freightCharges || 0;
+  const taxableValue = Math.max(0, sale.subtotal - discountAmt + freightAmt);
   const isCentral = sale.gstType === 'igst';
   const splitRate = ((sale.gstRate || 18) / 2).toFixed(2);
   const cgst = sale.cgstAmount || +(sale.gstAmount / 2).toFixed(2);
   const sgst = sale.sgstAmount || +(sale.gstAmount / 2).toFixed(2);
   const igst = sale.igstAmount || sale.gstAmount;
+  const totalGst = isCentral ? igst : (cgst + sgst);
+
+  const rawTotal = taxableValue + totalGst;
+  const grandTotalInt = Math.round(sale.grandTotal || rawTotal);
+  const roundOff = +(grandTotalInt - rawTotal).toFixed(2);
+  const showRoundOff = Math.abs(roundOff) >= 0.01;
 
   const isAmountDisc = sale.discountType === 'amount' && sale.discount && sale.discount > 0;
   const isPercentDisc = sale.discountType === 'percent' && sale.discount && sale.discount > 0;
-  const discHeaderLabel = isAmountDisc ? 'Disc (Rs.)' : 'Disc %';
 
   const itemRows = sale.items
     .map((it, i) => {
-      const lineTotal = it.price * it.qty;
-      const itemDiscVal = isAmountDisc
-        ? (sale.subtotal > 0 ? (sale.discount * (lineTotal / sale.subtotal)) : 0)
-        : (isPercentDisc ? sale.discount : 0);
+      const unitPrice = it.price;
+      const grossTotal = unitPrice * it.qty;
+      const hasPerItemDisc = typeof it.discount === 'number' && !isNaN(it.discount) && it.discount >= 0;
+      
+      let itemDiscPercent = 0;
+      if (hasPerItemDisc) {
+        itemDiscPercent = it.discountType === 'amount'
+          ? (grossTotal > 0 ? (it.discount! / grossTotal) * 100 : 0)
+          : (it.discount || 0);
+      } else if (isPercentDisc) {
+        itemDiscPercent = sale.discount || 0;
+      } else if (isAmountDisc && sale.subtotal > 0) {
+        itemDiscPercent = (sale.discount / sale.subtotal) * 100;
+      }
+
+      const netUnitPrice = unitPrice * (1 - itemDiscPercent / 100);
+      const lineNetTotal = it.qty * netUnitPrice;
+      const discDisplay = itemDiscPercent > 0 ? itemDiscPercent.toFixed(2) : 'NIL';
 
       return `
       <tr>
-        <td style="text-align: center; border-right: 1px solid #000; padding: 6px 4px;">${i + 1}</td>
-        <td style="text-align: left; border-right: 1px solid #000; padding: 6px; font-weight: bold;">${esc(it.name)}</td>
-        <td style="text-align: center; border-right: 1px solid #000; padding: 6px 4px;">${esc(it.hsnCode || '7318150')}</td>
-        <td style="text-align: right; border-right: 1px solid #000; padding: 6px 5px;">${it.qty.toFixed(2)} PCS</td>
-        <td style="text-align: right; border-right: 1px solid #000; padding: 6px 5px;">${it.price.toFixed(2)}</td>
-        <td style="text-align: right; border-right: 1px solid #000; padding: 6px 5px;">${itemDiscVal.toFixed(2)}</td>
-        <td style="text-align: right; padding: 6px 5px;">${lineTotal.toFixed(2)}</td>
+        <td style="text-align: center; border-right: 1px solid #000; padding: 5px 3px;">${i + 1}</td>
+        <td style="text-align: left; border-right: 1px solid #000; padding: 5px; font-weight: bold;">${esc(it.name)}</td>
+        <td style="text-align: center; border-right: 1px solid #000; padding: 5px 3px;">${esc(it.hsnCode || '7318150')}</td>
+        <td style="text-align: right; border-right: 1px solid #000; padding: 5px 4px;">${it.qty.toFixed(2)} PCS</td>
+        <td style="text-align: right; border-right: 1px solid #000; padding: 5px 4px;">${unitPrice.toFixed(2)}</td>
+        <td style="text-align: right; border-right: 1px solid #000; padding: 5px 4px;">${discDisplay}</td>
+        <td style="text-align: right; border-right: 1px solid #000; padding: 5px 4px; font-weight: bold;">${netUnitPrice.toFixed(2)}</td>
+        <td style="text-align: right; padding: 5px 4px; font-weight: bold;">${lineNetTotal.toFixed(2)}</td>
       </tr>`;
     })
     .join('');
@@ -118,7 +139,8 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
   if (sale.items.length < minRows) {
     for (let i = sale.items.length; i < minRows; i++) {
       fillerRows += `
-      <tr style="height: 32px;">
+      <tr style="height: 30px;">
+        <td style="border-right: 1px solid #000;"></td>
         <td style="border-right: 1px solid #000;"></td>
         <td style="border-right: 1px solid #000;"></td>
         <td style="border-right: 1px solid #000;"></td>
@@ -164,7 +186,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
       <div class="two-col-row">
         <div class="col-left">
           <div class="meta-line">
-            <span>${sale.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : sale.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : 'Invoice No. :'} &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
+            <span>${sale.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : sale.documentType === 'CREDIT NOTE' ? 'Credit Note No. :' : sale.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : sale.documentType === 'PURCHASE BILL' ? 'Purchase Bill No. :' : 'Invoice No. :'} &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
             <span>Date : &nbsp;&nbsp; <strong>${esc(sale.date)}</strong></span>
           </div>
           <div class="meta-line"><span>P.O. No. :</span> <strong>${esc(sale.poNumber || '—')}</strong></div>
@@ -205,13 +227,14 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
         <table class="goods-table">
           <thead>
             <tr>
-              <th style="width: 38px;">Sr No</th>
+              <th style="width: 35px;">Sr No</th>
               <th style="text-align: left; padding-left: 6px;">Description of Goods</th>
-              <th style="width: 75px;">HSN Code</th>
-              <th style="width: 80px;">Qty</th>
-              <th style="width: 80px;">Rate (Rs.)</th>
-              <th style="width: 70px;">${discHeaderLabel}</th>
-              <th style="width: 95px;">Amount (Rs.)</th>
+              <th style="width: 70px;">HSN Code</th>
+              <th style="width: 70px;">Qty</th>
+              <th style="width: 70px;">Rate (Rs.)</th>
+              <th style="width: 60px;">Disc %</th>
+              <th style="width: 75px;">Net Rate (Rs.)</th>
+              <th style="width: 85px;">Amount (Rs.)</th>
             </tr>
           </thead>
           <tbody>
@@ -265,13 +288,19 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
             <span>Total Amount</span>
             <span>${sale.subtotal.toFixed(2)}</span>
           </div>
-          ${discountAmt > 0 && sale.discountType !== 'percent' ? `
+          ${discountAmt > 0 ? `
           <div class="sum-line" style="color: #b45309;">
             <span>Discount (Less)</span>
             <span>-${discountAmt.toFixed(2)}</span>
           </div>
           ` : ''}
-          <div class="sum-line">
+          ${sale.freightCharges && sale.freightCharges > 0 ? `
+          <div class="sum-line" style="font-weight: bold; color: #1e293b;">
+            <span>FREIGHT</span>
+            <span>${sale.freightCharges.toFixed(2)}</span>
+          </div>
+          ` : ''}
+          <div class="sum-line" style="font-weight: bold;">
             <span>Taxable Amount</span>
             <span>${taxableValue.toFixed(2)}</span>
           </div>
@@ -290,9 +319,15 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
             <span>${igst.toFixed(2)}</span>
           </div>
           `}
-          <div class="sum-line grand" style="margin-top: 24px;">
+          ${showRoundOff ? `
+          <div class="sum-line">
+            <span>Round Off</span>
+            <span>${roundOff > 0 ? '+' + roundOff.toFixed(2) : roundOff.toFixed(2)}</span>
+          </div>
+          ` : ''}
+          <div class="sum-line grand" style="margin-top: 16px;">
             <span>Invoice Amount (Rs.)</span>
-            <span>${sale.grandTotal.toFixed(2)}</span>
+            <span>${grandTotalInt.toFixed(2)}</span>
           </div>
         </div>
       </div>

@@ -26,7 +26,7 @@ type StoreContextValue = {
   updateSale: (sale: SaleRecord) => Promise<void>;
   deleteSale: (id: string) => Promise<void>;
   updateSaleStatus: (id: string, status: SaleStatus, amountPaid: number) => Promise<void>;
-  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'PROFORMA INVOICE', invoice: string) => Promise<void>;
+  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string) => Promise<void>;
   addPurchase: (po: PurchaseRecord) => Promise<void>;
   markPurchaseReceived: (id: string) => Promise<void>;
   updatePurchaseStatus: (id: string, status: PurchaseStatus) => Promise<void>;
@@ -263,7 +263,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addNotification('success', 'Invoice Updated', `Invoice ${updatedSale.invoice} updated and inventory stock adjusted.`);
   }, [sales, addNotification]);
 
-  const updateSaleDocumentType = useCallback(async (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'PROFORMA INVOICE', invoice: string) => {
+  const updateSaleDocumentType = useCallback(async (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string) => {
     await api.updateSaleDocument(id, documentType, invoice);
     setSales((prev) => prev.map((s) => (s.id === id ? { ...s, documentType, invoice } : s)));
     addNotification('success', 'Document Converted', `Converted to ${documentType} (${invoice}).`);

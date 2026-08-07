@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   Plus, Search, Download, Eye, ShoppingCart, TrendingUp, Clock, CheckCircle2,
-  Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3
+  Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3, X
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -56,7 +56,7 @@ export default function Sales() {
   const [date, setDate] = useState(todayISO());
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [discount, setDiscount] = useState(0);
-  const [discountType, setDiscountType] = useState<DiscountType>('percent');
+  const [discountType, setDiscountType] = useState<DiscountType>('amount');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
   const [saleStatus, setSaleStatus] = useState<SaleStatus>('paid');
   const [amountPaid, setAmountPaid] = useState(0);
@@ -86,7 +86,7 @@ export default function Sales() {
 
   const [sellerGstin, setSellerGstin] = useState(companySettings?.gstin || '06CCCPK0841B1ZA');
   const [sellerPan, setSellerPan] = useState(companySettings?.pan || 'CCCPK0841B');
-  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE' | 'PROFORMA INVOICE' | 'PURCHASE BILL'>('TAX INVOICE');
+  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PROFORMA INVOICE' | 'PURCHASE BILL'>('TAX INVOICE');
 
   useEffect(() => {
     if (companySettings) {
@@ -142,14 +142,27 @@ export default function Sales() {
     return { total, paid, outstanding, count };
   }, [sales]);
 
+  const [freightCharges, setFreightCharges] = useState('0');
+  const freightVal = parseFloat(freightCharges) || 0;
+
   const subtotal = useMemo(
-    () => lines.reduce((s, l) => s + l.price * l.qty, 0),
+    () => lines.reduce((s, l) => {
+      const gross = l.price * l.qty;
+      const discVal = l.discount ? gross * (l.discount / 100) : 0;
+      return s + (gross - discVal);
+    }, 0),
     [lines]
   );
   
   const effectiveGstRate = applyGst ? gstRate : 0;
   const splitRate = (gstRate / 2).toFixed(1).replace(/\.0$/, '');
-  const { discountAmount, gstAmount, grandTotal } = computeGrandTotal(subtotal, discount, discountType, effectiveGstRate);
+  const { discountAmount, taxableAmount, gstAmount, rawTotal, roundOff, grandTotal, hasRoundOff } = computeGrandTotal(
+    subtotal,
+    discount,
+    discountType,
+    effectiveGstRate,
+    freightVal
+  );
 
   // Delhi GST Formulas with dynamic rate:
   // Local (Intra-state): CGST @ (Rate/2)% + SGST @ (Rate/2)%
@@ -161,14 +174,12 @@ export default function Sales() {
   const searchResults = useMemo(() => {
     const q = productSearch.toLowerCase().trim();
     if (!q) return [];
-    return products
-      .filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.category.toLowerCase().includes(q) ||
-          p.rackNumber.toLowerCase().includes(q)
-      )
-      .slice(0, 8);
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q) ||
+        p.rackNumber.toLowerCase().includes(q)
+    );
   }, [products, productSearch]);
 
   const [customerGstin, setCustomerGstin] = useState('');
@@ -214,7 +225,7 @@ export default function Sales() {
     setDate(todayISO());
     setLines([]);
     setDiscount(0);
-    setDiscountType('percent');
+    setDiscountType('amount');
     setPaymentMethod('Cash');
     setSaleStatus('paid');
     setAmountPaid(0);
@@ -222,6 +233,7 @@ export default function Sales() {
     setApplyGst(true);
     setGstRate(18);
     setGstTaxType('local');
+    setFreightCharges('0');
     setEditingSaleId(null);
   };
 
@@ -262,6 +274,7 @@ export default function Sales() {
     setApplyGst(sale.gstRate > 0);
     setGstRate(sale.gstRate || 18);
     setGstTaxType(sale.gstType === 'igst' ? 'central' : 'local');
+    setFreightCharges(sale.freightCharges ? sale.freightCharges.toString() : '0');
     setModalOpen(true);
   };
 
@@ -322,6 +335,27 @@ export default function Sales() {
     );
   };
 
+  const setLineDiscount = (productId: string, rawDisc: string) => {
+    const cleaned = rawDisc.replace(/^0+(?=\d)/, '');
+    const disc = parseFloat(cleaned);
+    setLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, discount: isNaN(disc) ? 0 : Math.max(0, disc) } : l))
+    );
+  };
+
+  const setLineNetRate = (productId: string, rawNetRate: string) => {
+    const cleaned = rawNetRate.replace(/^0+(?=\d)/, '');
+    const netRate = parseFloat(cleaned);
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.productId !== productId) return l;
+        if (isNaN(netRate) || l.price <= 0) return { ...l, discount: 0 };
+        const discPct = Math.max(0, ((l.price - netRate) / l.price) * 100);
+        return { ...l, discount: +discPct.toFixed(2) };
+      })
+    );
+  };
+
   const removeLine = (productId: string) => {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
   };
@@ -361,11 +395,68 @@ export default function Sales() {
         ? 0
         : amountPaid;
 
+    // Disambiguated Customer Profile Resolution
+    let finalCustId = selectedCustomerId;
+    if (!finalCustId || finalCustId === 'new') {
+      // Look for exact match on name AND (phone or address) if selecting without explicit ID
+      const exactMatch = customers.find((c) => {
+        const sameName = c.name.toLowerCase() === customer.trim().toLowerCase();
+        if (!sameName) return false;
+        if (phone.trim() && c.phone) return c.phone.trim() === phone.trim();
+        if (address.trim() && c.address) return c.address.trim().toLowerCase() === address.trim().toLowerCase();
+        return false;
+      });
+
+      if (exactMatch && selectedCustomerId !== 'new') {
+        finalCustId = exactMatch.id;
+      } else if (customer.trim()) {
+        const newCustId = `c${Date.now()}`;
+        let cleanGstin = customerGstin.trim().toUpperCase();
+        if (cleanGstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(cleanGstin)) {
+          cleanGstin = '';
+        }
+        try {
+          await addCustomer({
+            id: newCustId,
+            name: customer.trim(),
+            businessName: customer.trim(),
+            phone: phone.trim(),
+            gstin: cleanGstin,
+            email: '',
+            address: address.trim(),
+            state: 'Haryana',
+            stateCode: '06',
+            notes: 'Auto-added from Invoice creation',
+          });
+          finalCustId = newCustId;
+        } catch (err) {
+          console.error('Primary customer auto-save failed, attempting fallback:', err);
+          try {
+            await addCustomer({
+              id: newCustId,
+              name: customer.trim(),
+              businessName: customer.trim(),
+              phone: phone.trim(),
+              gstin: '',
+              email: '',
+              address: address.trim(),
+              state: 'Haryana',
+              stateCode: '06',
+              notes: 'Auto-added from Invoice creation',
+            });
+            finalCustId = newCustId;
+          } catch (fallbackErr) {
+            console.error('Fallback customer auto-save failed:', fallbackErr);
+          }
+        }
+      }
+    }
+
     const newSale: SaleRecord = {
       id: `s${Date.now()}`,
       invoice: invoiceNumber,
       customer: customer.trim(),
-      customerId: selectedCustomerId !== 'new' ? selectedCustomerId : '',
+      customerId: finalCustId !== 'new' ? finalCustId : '',
       phone: phone.trim(),
       customerAddress: address.trim(),
       customerGstin: customerGstin.trim().toUpperCase(),
@@ -390,6 +481,7 @@ export default function Sales() {
       channel: 'in-store',
       poNumber: poNumber.trim(),
       poDate: poDate.trim(),
+      freightCharges: freightVal,
       transportMode: transportMode.trim(),
       vehicleNumber: vehicleNumber.trim().toUpperCase(),
       ewayBill: ewayBill.trim(),
@@ -401,27 +493,6 @@ export default function Sales() {
       sellerPan: sellerPan.trim().toUpperCase(),
       documentType,
     };
-
-    // Auto-save new customer profile if name is not in existing database
-    const existingCust = customers.find((c) => c.name.toLowerCase() === customer.trim().toLowerCase());
-    if (!existingCust && customer.trim()) {
-      try {
-        await addCustomer({
-          id: `c${Date.now()}`,
-          name: customer.trim(),
-          phone: phone.trim(),
-          businessName: '',
-          gstin: customerGstin.trim().toUpperCase(),
-          email: '',
-          address: address.trim(),
-          state: '',
-          stateCode: '',
-          notes: 'Auto-added from Invoice creation',
-        });
-      } catch (err) {
-        console.error('Failed to auto-add customer profile', err);
-      }
-    }
 
     if (editingSaleId) {
       const updatedSale: SaleRecord = {
@@ -652,11 +723,14 @@ export default function Sales() {
                 >
                   <option value="">-- Select Saved Customer --</option>
                   <option value="new">+ Enter New Customer</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} {c.phone ? `(${c.phone})` : ''}
-                    </option>
-                  ))}
+                  {customers.map((c) => {
+                    const extra = [c.phone, c.gstin ? `GST: ${c.gstin}` : '', c.address].filter(Boolean).join(' · ');
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {extra ? `(${extra})` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -797,15 +871,27 @@ export default function Sales() {
             {/* Item Search & Selection */}
             <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-3">
               <label className="block text-xs font-bold text-slate-700">Add Products to Invoice</label>
-              <input
-                type="text"
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Search products by name or rack..."
-                className="input bg-white"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  placeholder="Search products by name or rack..."
+                  className="input bg-white pr-9"
+                />
+                {productSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setProductSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition"
+                    title="Clear search"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[420px] overflow-y-auto pr-1">
                 {searchResults.map((p) => (
                   <button
                     key={p.id}
@@ -825,49 +911,112 @@ export default function Sales() {
             {/* Line Items Table */}
             {lines.length > 0 && (
               <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full text-left text-xs">
+                <table className="w-full text-left text-xs min-w-[700px]">
                   <thead className="bg-slate-100">
                     <tr>
-                      <th className="px-3 py-2 font-bold text-slate-600">Product</th>
-                      <th className="px-3 py-2 font-bold text-slate-600 w-24">Qty</th>
-                      <th className="px-3 py-2 font-bold text-slate-600 w-28">Price (₹)</th>
-                      <th className="px-3 py-2 font-bold text-slate-600 w-28">Total (₹)</th>
-                      <th className="px-3 py-2 text-right"></th>
+                      <th className="px-3 py-2.5 font-bold text-slate-600">Product</th>
+                      <th className="px-3 py-2.5 font-bold text-slate-600 text-center w-24">Avail. Stock</th>
+                      <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-center">Qty</th>
+                      <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Rate (₹)</th>
+                      <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-right">Disc %</th>
+                      <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Net Rate (₹)</th>
+                      <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Total (₹)</th>
+                      <th className="px-3 py-2.5 text-right w-10"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
-                    {lines.map((l) => (
-                      <tr key={l.productId}>
-                        <td className="px-3 py-2 font-bold text-slate-800">{l.name}</td>
-                        <td className="px-3 py-2">
-                          <input
-                            type="number"
-                            value={l.qty}
-                            onChange={(e) => setQty(l.productId, e.target.value)}
-                            className="w-full rounded border border-slate-200 px-2 py-1 text-xs font-bold"
-                          />
-                        </td>
-                        <td className="px-3 py-2">
-                          <input
-                            type="number"
-                            value={l.price}
-                            onChange={(e) => setPrice(l.productId, parseFloat(e.target.value) || 0)}
-                            className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
-                          />
-                        </td>
-                        <td className="px-3 py-2 font-bold text-slate-900">
-                          {money(l.price * l.qty)}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <button
-                            onClick={() => removeLine(l.productId)}
-                            className="text-slate-400 hover:text-rose-600 p-1"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {lines.map((l) => {
+                      const prod = products.find((p) => p.id === l.productId);
+                      const availStock = prod ? prod.stock : 0;
+                      const discPct = l.discount || 0;
+                      const netRate = l.price * (1 - discPct / 100);
+                      const lineNet = l.qty * netRate;
+                      const isOverStock = l.qty > availStock;
+                      return (
+                        <tr key={l.productId}>
+                          <td className="px-3 py-2.5">
+                            <div>
+                              <p className="font-bold text-slate-800">{l.name}</p>
+                              {prod?.rackNumber && (
+                                <p className="text-[10px] text-slate-400 font-normal">Rack: {prod.rackNumber}</p>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <span
+                              className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${
+                                isOverStock
+                                  ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              }`}
+                            >
+                              {availStock}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <input
+                              type="number"
+                              value={l.qty || ''}
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => setQty(l.productId, e.target.value)}
+                              className={`w-20 rounded-lg border px-2.5 py-1.5 text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
+                                isOverStock
+                                  ? 'border-rose-400 bg-rose-50/50 text-rose-900 focus:ring-rose-500'
+                                  : 'border-slate-200 focus:border-indigo-500'
+                              }`}
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <input
+                              type="number"
+                              value={l.price || ''}
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => {
+                                const cleaned = e.target.value.replace(/^0+(?=\d)/, '');
+                                setPrice(l.productId, parseFloat(cleaned) || 0);
+                              }}
+                              className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-right font-medium focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.01"
+                              value={l.discount ? l.discount : ''}
+                              placeholder="NIL"
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => setLineDiscount(l.productId, e.target.value)}
+                              className="w-20 rounded-lg border border-slate-200 bg-amber-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-amber-700 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 placeholder:text-slate-400 placeholder:font-semibold"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={netRate && netRate !== l.price ? +netRate.toFixed(2) : ''}
+                              placeholder={l.price > 0 ? l.price.toFixed(2) : '0.00'}
+                              onFocus={(e) => e.target.select()}
+                              onChange={(e) => setLineNetRate(l.productId, e.target.value)}
+                              className="w-24 rounded-lg border border-slate-200 bg-indigo-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-indigo-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-400"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-900 font-mono">
+                            {money(lineNet)}
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <button
+                              onClick={() => removeLine(l.productId)}
+                              className="text-slate-400 hover:text-rose-600 p-1 transition"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -940,20 +1089,53 @@ export default function Sales() {
 
               {/* Discount Controls */}
               <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="font-bold text-slate-800">Discount (%)</label>
-                  <div className="flex items-center gap-1.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <label className="font-bold text-slate-800">
+                      Discount ({discountType === 'amount' ? '₹' : '%'})
+                    </label>
+                    <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-100 text-[11px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setDiscountType('amount')}
+                        className={`px-2 py-0.5 rounded-md transition ${
+                          discountType === 'amount'
+                            ? 'bg-white text-brand-600 shadow-xs font-bold'
+                            : 'text-slate-500 hover:text-slate-800 font-normal'
+                        }`}
+                      >
+                        ₹ Amount
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDiscountType('percent')}
+                        className={`px-2 py-0.5 rounded-md transition ${
+                          discountType === 'percent'
+                            ? 'bg-white text-brand-600 shadow-xs font-bold'
+                            : 'text-slate-500 hover:text-slate-800 font-normal'
+                        }`}
+                      >
+                        % Percent
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                    {discountType === 'amount' && (
+                      <span className="text-xs font-bold text-slate-600">₹</span>
+                    )}
                     <input
                       type="number"
                       min="0"
-                      max="100"
+                      max={discountType === 'percent' ? 100 : undefined}
                       step="0.01"
-                      value={discount}
-                      onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
-                      className="w-24 rounded border border-slate-200 px-2 py-1 text-right text-xs font-bold text-slate-900 focus:border-brand-500 focus:outline-none"
+                      value={discount || ''}
                       placeholder="0"
+                      onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="w-28 rounded border border-slate-200 px-2 py-1 text-right text-xs font-bold text-slate-900 focus:border-brand-500 focus:outline-none"
                     />
-                    <span className="text-xs font-bold text-slate-600">%</span>
+                    {discountType === 'percent' && (
+                      <span className="text-xs font-bold text-slate-600">%</span>
+                    )}
                   </div>
                 </div>
 
@@ -963,6 +1145,31 @@ export default function Sales() {
                     <span>-{money(discountAmount)}</span>
                   </div>
                 )}
+              </div>
+
+              {/* Freight / Cartage Charges */}
+              <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between gap-2">
+                <label className="font-bold text-slate-800">
+                  Freight / Cartage Charges (₹)
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-slate-600">₹</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={freightCharges || ''}
+                    placeholder="0"
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setFreightCharges(e.target.value.replace(/^0+(?=\d)/, ''))}
+                    className="w-28 rounded border border-slate-200 px-2 py-1 text-right text-xs font-bold text-slate-900 focus:border-brand-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1.5">
+                <span>Taxable Amount</span>
+                <span>{money(taxableAmount)}</span>
               </div>
 
               {applyGst ? (
@@ -997,6 +1204,13 @@ export default function Sales() {
                 <div className="flex justify-between font-medium text-slate-400">
                   <span>GST (Exempt / Not Applied)</span>
                   <span>{money(0)}</span>
+                </div>
+              )}
+
+              {hasRoundOff && (
+                <div className="flex justify-between font-medium text-slate-600 border-t border-slate-200/60 pt-1">
+                  <span>Round Off</span>
+                  <span>{roundOff > 0 ? `+${money(roundOff)}` : money(roundOff)}</span>
                 </div>
               )}
 
@@ -1139,35 +1353,51 @@ export default function Sales() {
                   {(() => {
                     const isAmountDisc = viewing.discountType === 'amount' && viewing.discount && viewing.discount > 0;
                     const isPercentDisc = viewing.discountType === 'percent' && viewing.discount && viewing.discount > 0;
-                    const discHeaderLabel = isAmountDisc ? 'Disc (Rs.)' : 'Disc %';
                     return (
                       <>
                         <thead>
                           <tr className="border-b border-black text-center font-bold bg-slate-50">
-                            <th className="border-r border-black p-1.5 w-10">Sr No</th>
+                            <th className="border-r border-black p-1.5 w-8">Sr No</th>
                             <th className="border-r border-black p-1.5 text-left pl-3">Description of Goods</th>
-                            <th className="border-r border-black p-1.5 w-20">HSN Code</th>
-                            <th className="border-r border-black p-1.5 w-20">Qty</th>
-                            <th className="border-r border-black p-1.5 w-20">Rate (Rs.)</th>
-                            <th className="border-r border-black p-1.5 w-20">{discHeaderLabel}</th>
-                            <th className="p-1.5 w-24 text-right pr-3">Amount (Rs.)</th>
+                            <th className="border-r border-black p-1.5 w-16">HSN Code</th>
+                            <th className="border-r border-black p-1.5 w-16">Qty</th>
+                            <th className="border-r border-black p-1.5 w-16">Rate (Rs.)</th>
+                            <th className="border-r border-black p-1.5 w-14">Disc %</th>
+                            <th className="border-r border-black p-1.5 w-16 text-right">Net Rate (Rs.)</th>
+                            <th className="p-1.5 w-20 text-right pr-3">Amount (Rs.)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-black/40">
                           {viewing.items.map((it, idx) => {
-                            const lineTotal = it.price * it.qty;
-                            const itemDiscVal = isAmountDisc
-                              ? (viewing.subtotal > 0 ? (viewing.discount * (lineTotal / viewing.subtotal)) : 0)
-                              : (isPercentDisc ? viewing.discount : 0);
+                            const unitPrice = it.price;
+                            const grossTotal = unitPrice * it.qty;
+                            const hasPerItemDisc = typeof it.discount === 'number' && !isNaN(it.discount) && it.discount >= 0;
+                            
+                            let itemDiscPercent = 0;
+                            if (hasPerItemDisc) {
+                              itemDiscPercent = it.discountType === 'amount'
+                                ? (grossTotal > 0 ? (it.discount! / grossTotal) * 100 : 0)
+                                : (it.discount || 0);
+                            } else if (isPercentDisc) {
+                              itemDiscPercent = viewing.discount || 0;
+                            } else if (isAmountDisc && viewing.subtotal > 0) {
+                              itemDiscPercent = (viewing.discount / viewing.subtotal) * 100;
+                            }
+
+                            const netUnitPrice = unitPrice * (1 - itemDiscPercent / 100);
+                            const lineNetTotal = it.qty * netUnitPrice;
+                            const discDisplay = itemDiscPercent > 0 ? itemDiscPercent.toFixed(2) : 'NIL';
+
                             return (
                               <tr key={idx} className="align-top">
                                 <td className="border-r border-black p-1.5 text-center">{idx + 1}</td>
                                 <td className="border-r border-black p-1.5 font-bold pl-3">{it.name}</td>
                                 <td className="border-r border-black p-1.5 text-center font-mono">{it.hsnCode || '7318150'}</td>
                                 <td className="border-r border-black p-1.5 text-right font-mono">{it.qty.toFixed(2)} PCS</td>
-                                <td className="border-r border-black p-1.5 text-right font-mono">{it.price.toFixed(2)}</td>
-                                <td className="border-r border-black p-1.5 text-right font-mono">{itemDiscVal.toFixed(2)}</td>
-                                <td className="p-1.5 text-right font-mono pr-3 font-semibold">{lineTotal.toFixed(2)}</td>
+                                <td className="border-r border-black p-1.5 text-right font-mono">{unitPrice.toFixed(2)}</td>
+                                <td className="border-r border-black p-1.5 text-right font-mono">{discDisplay}</td>
+                                <td className="border-r border-black p-1.5 text-right font-mono font-bold">{netUnitPrice.toFixed(2)}</td>
+                                <td className="p-1.5 text-right font-mono pr-3 font-bold">{lineNetTotal.toFixed(2)}</td>
                               </tr>
                             );
                           })}
@@ -1214,41 +1444,73 @@ export default function Sales() {
                 </div>
 
                 <div className="col-span-5 flex flex-col justify-between font-bold divide-y divide-black">
-                  <div className="p-2 flex justify-between">
-                    <span>Total Amount</span>
-                    <span className="font-mono">{viewing.subtotal.toFixed(2)}</span>
-                  </div>
-                  {viewing.discount && viewing.discountType !== 'percent' ? (
-                    <div className="p-2 flex justify-between text-amber-700 bg-amber-50/50">
-                      <span>Discount (Less)</span>
-                      <span className="font-mono">-{computeDiscountAmount(viewing.subtotal, viewing.discount, viewing.discountType).toFixed(2)}</span>
-                    </div>
-                  ) : null}
-                  <div className="p-2 flex justify-between">
-                    <span>Taxable Amount</span>
-                    <span className="font-mono">{(viewing.subtotal - computeDiscountAmount(viewing.subtotal, viewing.discount, viewing.discountType)).toFixed(2)}</span>
-                  </div>
-                  {viewing.gstType === 'igst' ? (
-                    <div className="p-2 flex justify-between">
-                      <span>IGST @ &nbsp;&nbsp;&nbsp;&nbsp; {(viewing.gstRate || 18).toFixed(2)} %</span>
-                      <span className="font-mono">{viewing.gstAmount.toFixed(2)}</span>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="p-2 flex justify-between">
-                        <span>CGST @ &nbsp;&nbsp;&nbsp;&nbsp; {(((viewing.gstRate || 18) / 2)).toFixed(2)} %</span>
-                        <span className="font-mono">{(viewing.cgstAmount || viewing.gstAmount / 2).toFixed(2)}</span>
-                      </div>
-                      <div className="p-2 flex justify-between">
-                        <span>SGST @ &nbsp;&nbsp;&nbsp;&nbsp; {(((viewing.gstRate || 18) / 2)).toFixed(2)} %</span>
-                        <span className="font-mono">{(viewing.sgstAmount || viewing.gstAmount / 2).toFixed(2)}</span>
-                      </div>
-                    </>
-                  )}
-                  <div className="p-2 flex justify-between text-xs bg-slate-50 font-black">
-                    <span>Invoice Amount (Rs.)</span>
-                    <span className="font-mono text-black">{viewing.grandTotal.toFixed(2)}</span>
-                  </div>
+                  {(() => {
+                    const discAmt = computeDiscountAmount(viewing.subtotal, viewing.discount, viewing.discountType);
+                    const freightAmt = viewing.freightCharges || 0;
+                    const taxableVal = Math.max(0, viewing.subtotal - discAmt + freightAmt);
+                    const isCentral = viewing.gstType === 'igst';
+                    const splitRate = (((viewing.gstRate || 18) / 2)).toFixed(2);
+                    const cgst = viewing.cgstAmount || +(viewing.gstAmount / 2).toFixed(2);
+                    const sgst = viewing.sgstAmount || +(viewing.gstAmount / 2).toFixed(2);
+                    const igst = viewing.igstAmount || viewing.gstAmount;
+                    const totalGst = isCentral ? igst : (cgst + sgst);
+                    const rawTotal = taxableVal + totalGst;
+                    const grandTotalInt = Math.round(viewing.grandTotal || rawTotal);
+                    const roundOff = +(grandTotalInt - rawTotal).toFixed(2);
+                    const showRoundOff = Math.abs(roundOff) >= 0.01;
+
+                    return (
+                      <>
+                        <div className="p-2 flex justify-between">
+                          <span>Total Amount</span>
+                          <span className="font-mono">{viewing.subtotal.toFixed(2)}</span>
+                        </div>
+                        {discAmt > 0 ? (
+                          <div className="p-2 flex justify-between text-amber-700 bg-amber-50/50">
+                            <span>Discount (Less)</span>
+                            <span className="font-mono">-{discAmt.toFixed(2)}</span>
+                          </div>
+                        ) : null}
+                        {freightAmt > 0 ? (
+                          <div className="p-2 flex justify-between font-bold">
+                            <span>FREIGHT</span>
+                            <span className="font-mono">{freightAmt.toFixed(2)}</span>
+                          </div>
+                        ) : null}
+                        <div className="p-2 flex justify-between font-bold">
+                          <span>Taxable Amount</span>
+                          <span className="font-mono">{taxableVal.toFixed(2)}</span>
+                        </div>
+                        {isCentral ? (
+                          <div className="p-2 flex justify-between">
+                            <span>IGST @ &nbsp;&nbsp;&nbsp;&nbsp; {(viewing.gstRate || 18).toFixed(2)} %</span>
+                            <span className="font-mono">{igst.toFixed(2)}</span>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="p-2 flex justify-between">
+                              <span>CGST @ &nbsp;&nbsp;&nbsp;&nbsp; {splitRate} %</span>
+                              <span className="font-mono">{cgst.toFixed(2)}</span>
+                            </div>
+                            <div className="p-2 flex justify-between">
+                              <span>SGST @ &nbsp;&nbsp;&nbsp;&nbsp; {splitRate} %</span>
+                              <span className="font-mono">{sgst.toFixed(2)}</span>
+                            </div>
+                          </>
+                        )}
+                        {showRoundOff ? (
+                          <div className="p-2 flex justify-between font-normal">
+                            <span>Round Off</span>
+                            <span className="font-mono">{roundOff > 0 ? `+${roundOff.toFixed(2)}` : roundOff.toFixed(2)}</span>
+                          </div>
+                        ) : null}
+                        <div className="p-2 flex justify-between text-xs bg-slate-50 font-black">
+                          <span>Invoice Amount (Rs.)</span>
+                          <span className="font-mono text-black">{grandTotalInt.toFixed(2)}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
