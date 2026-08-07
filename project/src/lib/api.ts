@@ -52,6 +52,9 @@ type SaleRow = {
   gst_rate: string; gst_type: string; cgst_amount: string; sgst_amount: string; igst_amount: string;
   gst_amount: string; grand_total: string; amount_paid: string;
   payment_method: string; status: string; channel: string;
+  document_type?: string; po_number?: string; po_date?: string; transport_mode?: string;
+  vehicle_number?: string; eway_bill?: string; vendor_code?: string; bank_name?: string;
+  bank_account?: string; bank_ifsc?: string; seller_gstin?: string; seller_pan?: string;
 };
 
 type SaleItemRow = {
@@ -89,6 +92,11 @@ function mapSale(r: SaleRow, items: InvoiceLineItem[]): SaleRecord {
     paymentMethod: r.payment_method as SaleRecord['paymentMethod'],
     status: r.status as SaleRecord['status'],
     channel: r.channel as SaleRecord['channel'],
+    documentType: (r.document_type || 'TAX INVOICE') as SaleRecord['documentType'],
+    poNumber: r.po_number || '', poDate: r.po_date || '', transportMode: r.transport_mode || '',
+    vehicleNumber: r.vehicle_number || '', ewayBill: r.eway_bill || '', vendorCode: r.vendor_code || '',
+    bankName: r.bank_name || '', bankAccount: r.bank_account || '', bankIfsc: r.bank_ifsc || '',
+    sellerGstin: r.seller_gstin || '', sellerPan: r.seller_pan || '',
   };
 }
 
@@ -450,9 +458,9 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
-      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel],
+      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel, document_type, po_number, po_date, transport_mode, vehicle_number, eway_bill, vendor_code, bank_name, bank_account, bank_ifsc, seller_gstin, seller_pan)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)`,
+      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || ''],
     );
     for (let i = 0; i < sale.items.length; i++) {
       const item = sale.items[i];
@@ -467,6 +475,40 @@ export const api = {
     validateNonNegative(amountPaid, 'Amount paid');
     const db = await getDb();
     await db.query('UPDATE sales SET status=$1, amount_paid=$2 WHERE id=$3', [status, amountPaid, id]);
+  },
+
+  async updateSaleDocument(id: string, documentType: string, invoice: string): Promise<void> {
+    validateNonEmpty(invoice, 'Invoice number');
+    const db = await getDb();
+    await db.query('UPDATE sales SET document_type = $1, invoice = $2 WHERE id = $3', [documentType, invoice, id]);
+  },
+
+  async updateSale(sale: SaleRecord): Promise<void> {
+    validateNonEmpty(sale.invoice, 'Invoice number');
+    validateNonEmpty(sale.customer, 'Customer name');
+    validateNonEmpty(sale.date, 'Date');
+    validateNonNegative(sale.subtotal, 'Subtotal');
+    validateNonNegative(sale.discount, 'Discount');
+    validateNonNegative(sale.gstAmount, 'GST amount');
+    validateNonNegative(sale.grandTotal, 'Grand total');
+    validateNonNegative(sale.amountPaid, 'Amount paid');
+    for (const item of sale.items) {
+      validateNonNegative(item.price, 'Item price');
+      if (item.qty <= 0) throw new Error('Item quantity must be greater than zero');
+    }
+    const db = await getDb();
+    await db.query(
+      `UPDATE sales SET invoice=$1, customer=$2, customer_id=$3, phone=$4, customer_gstin=$5, customer_state=$6, customer_state_code=$7, date=$8, item_count=$9, subtotal=$10, discount=$11, discount_type=$12, gst_rate=$13, gst_type=$14, cgst_amount=$15, sgst_amount=$16, igst_amount=$17, gst_amount=$18, grand_total=$19, amount_paid=$20, payment_method=$21, status=$22, channel=$23, document_type=$24, po_number=$25, po_date=$26, transport_mode=$27, vehicle_number=$28, eway_bill=$29, vendor_code=$30, bank_name=$31, bank_account=$32, bank_ifsc=$33, seller_gstin=$34, seller_pan=$35 WHERE id=$36`,
+      [sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.id],
+    );
+    await db.query('DELETE FROM sale_items WHERE sale_id = $1', [sale.id]);
+    for (let i = 0; i < sale.items.length; i++) {
+      const item = sale.items[i];
+      await db.query(
+        'INSERT INTO sale_items (sale_id, product_id, name, price, qty, sort_order) VALUES ($1, $2, $3, $4, $5, $6)',
+        [sale.id, item.productId, item.name, item.price, item.qty, i],
+      );
+    }
   },
 
   async deleteSale(id: string): Promise<void> {

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
@@ -43,7 +43,7 @@ function nextPurchaseBill(existingSales: SaleRecord[]): string {
 type DraftLine = PurchaseLineItem;
 
 export default function Purchase() {
-  const { purchases, products, suppliers, sales, addPurchase, addSale } = useStore();
+  const { purchases, products, suppliers, sales, addPurchase, addSale, companySettings } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
@@ -75,16 +75,26 @@ export default function Purchase() {
   const [pbVehicleNumber, setPbVehicleNumber] = useState('');
   const [pbEwayBill, setPbEwayBill] = useState('');
   const [pbVendorCode, setPbVendorCode] = useState('');
-  const [pbBankName, setPbBankName] = useState('HDFC BANK');
-  const [pbBankAccount, setPbBankAccount] = useState('50200088182531');
-  const [pbBankIfsc, setPbBankIfsc] = useState('HDFC0002034');
-  const [pbSellerGstin, setPbSellerGstin] = useState('06CCCPK0841B1ZA');
-  const [pbSellerPan, setPbSellerPan] = useState('CCCPK0841B');
+  const [pbBankName, setPbBankName] = useState(companySettings?.bankName || 'HDFC BANK');
+  const [pbBankAccount, setPbBankAccount] = useState(companySettings?.bankAccount || '50200088182531');
+  const [pbBankIfsc, setPbBankIfsc] = useState(companySettings?.bankIfsc || 'HDFC0002034');
+  const [pbSellerGstin, setPbSellerGstin] = useState(companySettings?.gstin || '06CCCPK0841B1ZA');
+  const [pbSellerPan, setPbSellerPan] = useState(companySettings?.pan || 'CCCPK0841B');
   const [pbApplyGst, setPbApplyGst] = useState(true);
   const [pbGstRate, setPbGstRate] = useState(18);
   const [pbGstTaxType, setPbGstTaxType] = useState<'local' | 'central'>('local');
+
+  useEffect(() => {
+    if (companySettings) {
+      setPbBankName(companySettings.bankName || 'HDFC BANK');
+      setPbBankAccount(companySettings.bankAccount || '50200088182531');
+      setPbBankIfsc(companySettings.bankIfsc || 'HDFC0002034');
+      setPbSellerGstin(companySettings.gstin || '06CCCPK0841B1ZA');
+      setPbSellerPan(companySettings.pan || 'CCCPK0841B');
+    }
+  }, [companySettings]);
   const [pbDiscount, setPbDiscount] = useState(0);
-  const [pbDiscountType, setPbDiscountType] = useState<DiscountType>('amount');
+  const [pbDiscountType, setPbDiscountType] = useState<DiscountType>('percent');
   const [pbLines, setPbLines] = useState<InvoiceLineItem[]>([]);
   const [pbProductSearch, setPbProductSearch] = useState('');
   const [pbViewing, setPbViewing] = useState<SaleRecord | null>(null);
@@ -190,7 +200,6 @@ export default function Purchase() {
         { productId: product.id, name: product.name, cost: product.cost, qty: 1, gstRate: GST_RATE },
       ];
     });
-    setProductSearch('');
   };
 
   const updateQty = (productId: string, delta: number) => {
@@ -257,16 +266,16 @@ export default function Purchase() {
     setPbVehicleNumber('');
     setPbEwayBill('');
     setPbVendorCode('');
-    setPbBankName('HDFC BANK');
-    setPbBankAccount('50200088182531');
-    setPbBankIfsc('HDFC0002034');
-    setPbSellerGstin('06CCCPK0841B1ZA');
-    setPbSellerPan('CCCPK0841B');
+    setPbBankName(companySettings?.bankName || 'HDFC BANK');
+    setPbBankAccount(companySettings?.bankAccount || '50200088182531');
+    setPbBankIfsc(companySettings?.bankIfsc || 'HDFC0002034');
+    setPbSellerGstin(companySettings?.gstin || '06CCCPK0841B1ZA');
+    setPbSellerPan(companySettings?.pan || 'CCCPK0841B');
     setPbApplyGst(true);
     setPbGstRate(18);
     setPbGstTaxType('local');
     setPbDiscount(0);
-    setPbDiscountType('amount');
+    setPbDiscountType('percent');
     setPbLines([]);
     setPbProductSearch('');
   };
@@ -318,7 +327,6 @@ export default function Purchase() {
         },
       ];
     });
-    setPbProductSearch('');
   };
 
   const updatePbLineQty = (productId: string, delta: number) => {
@@ -1069,62 +1077,6 @@ export default function Purchase() {
                   />
                 </div>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 border-t border-slate-200 pt-2 mt-2">
-                <div>
-                  <label className="block text-[10.5px] font-semibold text-slate-600 mb-0.5">Bank Name</label>
-                  <input
-                    type="text"
-                    value={pbBankName}
-                    onChange={(e) => setPbBankName(e.target.value)}
-                    placeholder="e.g. HDFC BANK"
-                    className="input text-xs font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10.5px] font-semibold text-slate-600 mb-0.5">Bank Account No.</label>
-                  <input
-                    type="text"
-                    value={pbBankAccount}
-                    onChange={(e) => setPbBankAccount(e.target.value)}
-                    placeholder="Account Number"
-                    className="input text-xs font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10.5px] font-semibold text-slate-600 mb-0.5">Bank IFSC Code</label>
-                  <input
-                    type="text"
-                    value={pbBankIfsc}
-                    onChange={(e) => setPbBankIfsc(e.target.value)}
-                    placeholder="IFSC Code"
-                    className="input text-xs font-mono uppercase"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 border-t border-slate-200 pt-2">
-                <div>
-                  <label className="block text-[10.5px] font-semibold text-slate-600 mb-0.5">Your GST Number</label>
-                  <input
-                    type="text"
-                    value={pbSellerGstin}
-                    onChange={(e) => setPbSellerGstin(e.target.value)}
-                    placeholder="06CCCPK0841B1ZA"
-                    className="input text-xs font-mono uppercase"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10.5px] font-semibold text-slate-600 mb-0.5">Your PAN Number</label>
-                  <input
-                    type="text"
-                    value={pbSellerPan}
-                    onChange={(e) => setPbSellerPan(e.target.value)}
-                    placeholder="CCCPK0841B"
-                    className="input text-xs font-mono uppercase"
-                  />
-                </div>
-              </div>
             </div>
 
             {/* Product Selector */}
@@ -1289,23 +1241,19 @@ export default function Purchase() {
                 )}
 
                 <div className="border-t border-slate-200 pt-2">
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Discount</label>
-                  <div className="flex gap-2">
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">Discount (%)</label>
+                  <div className="flex items-center gap-1.5">
                     <input
                       type="number"
                       value={pbDiscount}
                       onChange={(e) => setPbDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
-                      className="input p-1.5 w-full"
+                      className="input p-1.5 w-full text-right font-bold"
                       min={0}
+                      max={100}
+                      step={0.01}
+                      placeholder="0"
                     />
-                    <select
-                      value={pbDiscountType}
-                      onChange={(e) => setPbDiscountType(e.target.value as DiscountType)}
-                      className="input p-1.5 w-28 font-bold"
-                    >
-                      <option value="amount">Amount (₹)</option>
-                      <option value="percent">Percent (%)</option>
-                    </select>
+                    <span className="text-xs font-bold text-slate-600">%</span>
                   </div>
                 </div>
               </div>
@@ -1406,15 +1354,15 @@ export default function Purchase() {
 
               {/* Company Header */}
               <div className="text-center p-3 border-b border-black">
-                <h2 className="text-xl font-black uppercase tracking-tight font-sans">NAIN TOOLS &amp; SS BOLT CO.</h2>
-                <p className="text-[11px] font-bold mt-0.5">17/1, INDUSTRIAL AREA WHIRLPOOL CHOWK, NIT FARIDABAD</p>
-                <p className="text-[10px] text-slate-700 mt-0.5">EMAIL : narendernain2011@gmail.com &nbsp;|&nbsp; 9213469582 7053795074 129 4870974</p>
-                <p className="text-xs font-black mt-1">GSTIN No. {pbViewing.sellerGstin || '06CCCPK0841B1ZA'}</p>
+                <h2 className="text-xl font-black uppercase tracking-tight font-sans">{companySettings?.companyName || 'NAIN TOOLS & SS BOLT CO.'}</h2>
+                <p className="text-[11px] font-bold mt-0.5">{companySettings?.address || '17/1, INDUSTRIAL AREA WHIRLPOOL CHOWK, NIT FARIDABAD'}</p>
+                <p className="text-[10px] text-slate-700 mt-0.5">EMAIL : {companySettings?.email || 'narendernain2011@gmail.com'} &nbsp;|&nbsp; {companySettings?.phone || '9213469582 7053795074 129 4870974'}</p>
+                <p className="text-xs font-black mt-1">GSTIN No. {pbViewing.sellerGstin || companySettings?.gstin || '06CCCPK0841B1ZA'}</p>
               </div>
 
               {/* PAN & Reverse Charge */}
               <div className="flex justify-between px-3 py-1.5 border-b border-black text-[11px] font-bold bg-slate-50/60">
-                <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <span className="font-mono">{pbViewing.sellerPan || 'CCCPK0841B'}</span></div>
+                <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <span className="font-mono">{pbViewing.sellerPan || companySettings?.pan || 'CCCPK0841B'}</span></div>
                 <div>Tax is Payable on Reverse Charge : <span>No</span></div>
               </div>
 
@@ -1558,7 +1506,7 @@ export default function Purchase() {
                 <button
                   onClick={() => {
                     const sel = Object.keys(pbExportCopies).filter((k) => pbExportCopies[k]);
-                    printInvoice(pbViewing, sel);
+                    printInvoice(pbViewing, sel, companySettings);
                   }}
                   className="btn-primary bg-indigo-600 hover:bg-indigo-700 flex items-center gap-1.5"
                 >

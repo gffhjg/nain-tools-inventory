@@ -11,7 +11,7 @@ import { money } from '@/utils/analytics';
 export default function PurchaseDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { purchases, suppliers, markPurchaseReceived, updatePurchaseStatus } = useStore();
+  const { purchases, suppliers, markPurchaseReceived, updatePurchaseStatus, companySettings } = useStore();
 
   const po = useMemo(() => purchases.find((p) => p.id === id), [purchases, id]);
   const supplierInfo = useMemo(
@@ -46,7 +46,7 @@ export default function PurchaseDetails() {
               <ArrowLeft className="h-4 w-4" />
               <span className="hidden sm:inline">Back</span>
             </button>
-            <button className="btn-secondary" onClick={() => printPurchase(po)}>
+            <button className="btn-secondary" onClick={() => printPurchase(po, companySettings)}>
               <Printer className="h-4 w-4" />
               <span className="hidden sm:inline">Print</span>
             </button>

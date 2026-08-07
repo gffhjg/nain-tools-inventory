@@ -78,7 +78,7 @@ export type SaleRecord = {
   bankIfsc?: string;
   sellerGstin?: string;
   sellerPan?: string;
-  documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'PURCHASE BILL';
+  documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE';
 };
 
 export type PurchaseLineItem = {

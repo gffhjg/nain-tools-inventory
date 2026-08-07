@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   Plus, Search, Download, Eye, ShoppingCart, TrendingUp, Clock, CheckCircle2,
-  Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check
+  Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -33,10 +33,19 @@ function nextDebitNote(existing: SaleRecord[]): string {
   return `DN-${max + 1}`;
 }
 
+function nextProformaInvoice(existing: SaleRecord[]): string {
+  const nums = existing
+    .filter((s) => s.documentType === 'PROFORMA INVOICE' || s.invoice.startsWith('PI-'))
+    .map((s) => parseInt(s.invoice.replace('PI-', ''), 10))
+    .filter((n) => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 1000;
+  return `PI-${max + 1}`;
+}
+
 type DraftLine = InvoiceLineItem;
 
 export default function Sales() {
-  const { sales, products, customers, addSale, addCustomer } = useStore();
+  const { sales, products, customers, addSale, updateSale, deleteSale, updateSaleDocumentType, addCustomer, companySettings } = useStore();
   const [search, setSearch] = useState('');
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -47,7 +56,7 @@ export default function Sales() {
   const [date, setDate] = useState(todayISO());
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [discount, setDiscount] = useState(0);
-  const [discountType, setDiscountType] = useState<DiscountType>('amount');
+  const [discountType, setDiscountType] = useState<DiscountType>('percent');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
   const [saleStatus, setSaleStatus] = useState<SaleStatus>('paid');
   const [amountPaid, setAmountPaid] = useState(0);
@@ -55,6 +64,10 @@ export default function Sales() {
 
   const [viewing, setViewing] = useState<SaleRecord | null>(null);
   const [stockError, setStockError] = useState('');
+  const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+
+  const [convertTargetSale, setConvertTargetSale] = useState<SaleRecord | null>(null);
+  const [convertInvoiceNumber, setConvertInvoiceNumber] = useState('');
 
   const autoInvoiceNumber = useMemo(() => nextInvoice(sales), [sales]);
   const [customInvoiceNumber, setCustomInvoiceNumber] = useState('');
@@ -67,13 +80,23 @@ export default function Sales() {
   const [ewayBill, setEwayBill] = useState('');
   const [vendorCode, setVendorCode] = useState('');
 
-  const [bankName, setBankName] = useState('HDFC BANK');
-  const [bankAccount, setBankAccount] = useState('50200088182531');
-  const [bankIfsc, setBankIfsc] = useState('HDFC0002034');
+  const [bankName, setBankName] = useState(companySettings?.bankName || 'HDFC BANK');
+  const [bankAccount, setBankAccount] = useState(companySettings?.bankAccount || '50200088182531');
+  const [bankIfsc, setBankIfsc] = useState(companySettings?.bankIfsc || 'HDFC0002034');
 
-  const [sellerGstin, setSellerGstin] = useState('06CCCPK0841B1ZA');
-  const [sellerPan, setSellerPan] = useState('CCCPK0841B');
-  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE'>('TAX INVOICE');
+  const [sellerGstin, setSellerGstin] = useState(companySettings?.gstin || '06CCCPK0841B1ZA');
+  const [sellerPan, setSellerPan] = useState(companySettings?.pan || 'CCCPK0841B');
+  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE' | 'PROFORMA INVOICE' | 'PURCHASE BILL'>('TAX INVOICE');
+
+  useEffect(() => {
+    if (companySettings) {
+      setBankName(companySettings.bankName || 'HDFC BANK');
+      setBankAccount(companySettings.bankAccount || '50200088182531');
+      setBankIfsc(companySettings.bankIfsc || 'HDFC0002034');
+      setSellerGstin(companySettings.gstin || '06CCCPK0841B1ZA');
+      setSellerPan(companySettings.pan || 'CCCPK0841B');
+    }
+  }, [companySettings]);
 
   const [previewCopyTag, setPreviewCopyTag] = useState('Original For Recipient');
   const [exportCopies, setExportCopies] = useState<Record<string, boolean>>({
@@ -181,17 +204,17 @@ export default function Sales() {
     setVehicleNumber('');
     setEwayBill('');
     setVendorCode('');
-    setBankName('HDFC BANK');
-    setBankAccount('50200088182531');
-    setBankIfsc('HDFC0002034');
-    setSellerGstin('06CCCPK0841B1ZA');
-    setSellerPan('CCCPK0841B');
+    setBankName(companySettings?.bankName || 'HDFC BANK');
+    setBankAccount(companySettings?.bankAccount || '50200088182531');
+    setBankIfsc(companySettings?.bankIfsc || 'HDFC0002034');
+    setSellerGstin(companySettings?.gstin || '06CCCPK0841B1ZA');
+    setSellerPan(companySettings?.pan || 'CCCPK0841B');
     setDocumentType('TAX INVOICE');
     setPreviewCopyTag('Original For Recipient');
     setDate(todayISO());
     setLines([]);
     setDiscount(0);
-    setDiscountType('amount');
+    setDiscountType('percent');
     setPaymentMethod('Cash');
     setSaleStatus('paid');
     setAmountPaid(0);
@@ -199,6 +222,7 @@ export default function Sales() {
     setApplyGst(true);
     setGstRate(18);
     setGstTaxType('local');
+    setEditingSaleId(null);
   };
 
   const openNewSale = () => {
@@ -208,10 +232,59 @@ export default function Sales() {
     setModalOpen(true);
   };
 
+  const handleEditSale = (sale: SaleRecord) => {
+    setEditingSaleId(sale.id);
+    setCustomInvoiceNumber(sale.invoice);
+    setCustomer(sale.customer);
+    setSelectedCustomerId(sale.customerId || '');
+    setPhone(sale.phone);
+    setAddress(sale.customerAddress || '');
+    setCustomerGstin(sale.customerGstin || '');
+    setDate(sale.date);
+    setLines(sale.items.map((i) => ({ ...i })));
+    setDiscount(sale.discount);
+    setDiscountType(sale.discountType || 'percent');
+    setPaymentMethod(sale.paymentMethod || 'Cash');
+    setSaleStatus(sale.status || 'paid');
+    setAmountPaid(sale.amountPaid);
+    setPoNumber(sale.poNumber || '');
+    setPoDate(sale.poDate || '');
+    setTransportMode(sale.transportMode || '');
+    setVehicleNumber(sale.vehicleNumber || '');
+    setEwayBill(sale.ewayBill || '');
+    setVendorCode(sale.vendorCode || '');
+    setBankName(sale.bankName || companySettings?.bankName || 'HDFC BANK');
+    setBankAccount(sale.bankAccount || companySettings?.bankAccount || '50200088182531');
+    setBankIfsc(sale.bankIfsc || companySettings?.bankIfsc || 'HDFC0002034');
+    setSellerGstin(sale.sellerGstin || companySettings?.gstin || '06CCCPK0841B1ZA');
+    setSellerPan(sale.sellerPan || companySettings?.pan || 'CCCPK0841B');
+    setDocumentType(sale.documentType || 'TAX INVOICE');
+    setApplyGst(sale.gstRate > 0);
+    setGstRate(sale.gstRate || 18);
+    setGstTaxType(sale.gstType === 'igst' ? 'central' : 'local');
+    setModalOpen(true);
+  };
+
+  const handleDeleteSale = async (sale: SaleRecord) => {
+    if (window.confirm(`Are you sure you want to delete invoice ${sale.invoice}? All items will be returned to inventory stock.`)) {
+      await deleteSale(sale.id);
+      if (viewing?.id === sale.id) {
+        setViewing(null);
+      }
+    }
+  };
+
   const openNewDebitNote = () => {
     resetForm();
     setDocumentType('DEBIT NOTE');
     setCustomInvoiceNumber(nextDebitNote(sales));
+    setModalOpen(true);
+  };
+
+  const openNewProformaInvoice = () => {
+    resetForm();
+    setDocumentType('PROFORMA INVOICE');
+    setCustomInvoiceNumber(nextProformaInvoice(sales));
     setModalOpen(true);
   };
 
@@ -228,7 +301,6 @@ export default function Sales() {
         { productId: product.id, name: product.name, price: product.price, qty: 1, hsnCode: product.hsnCode || '7318150' },
       ];
     });
-    setProductSearch('');
   };
 
   const updateQty = (productId: string, delta: number) => {
@@ -339,9 +411,9 @@ export default function Sales() {
           name: customer.trim(),
           phone: phone.trim(),
           businessName: '',
-          gstin: '',
+          gstin: customerGstin.trim().toUpperCase(),
           email: '',
-          address: '',
+          address: address.trim(),
           state: '',
           stateCode: '',
           notes: 'Auto-added from Invoice creation',
@@ -351,9 +423,33 @@ export default function Sales() {
       }
     }
 
-    await addSale(newSale);
+    if (editingSaleId) {
+      const updatedSale: SaleRecord = {
+        ...newSale,
+        id: editingSaleId,
+      };
+      await updateSale(updatedSale);
+      if (viewing?.id === editingSaleId) {
+        setViewing(updatedSale);
+      }
+    } else {
+      await addSale(newSale);
+      setViewing(newSale);
+    }
     setModalOpen(false);
-    setViewing(newSale);
+  };
+
+  const openConvertModal = (sale: SaleRecord) => {
+    setConvertTargetSale(sale);
+    setConvertInvoiceNumber(nextInvoice(sales));
+  };
+
+  const handleConfirmConvert = async () => {
+    if (!convertTargetSale || !convertInvoiceNumber.trim()) return;
+    const newInvoiceNo = convertInvoiceNumber.trim();
+    await updateSaleDocumentType(convertTargetSale.id, 'TAX INVOICE', newInvoiceNo);
+    setViewing((prev) => (prev && prev.id === convertTargetSale.id ? { ...prev, documentType: 'TAX INVOICE', invoice: newInvoiceNo } : prev));
+    setConvertTargetSale(null);
   };
 
   const getWhatsAppInvoiceLink = (s: SaleRecord) => {
@@ -370,6 +466,13 @@ export default function Sales() {
         subtitle="Create GST compliant tax invoices, track sales history, and process customer billing."
         actions={
           <div className="flex flex-wrap gap-2">
+            <button
+              className="btn-secondary bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100 font-bold"
+              onClick={openNewProformaInvoice}
+            >
+              <Plus className="h-4 w-4 text-purple-600" />
+              <span>New Proforma Invoice</span>
+            </button>
             <button
               className="btn-secondary bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold"
               onClick={openNewDebitNote}
@@ -440,7 +543,7 @@ export default function Sales() {
                 <th className="px-4 py-3 font-bold text-slate-600">Invoice #</th>
                 <th className="px-4 py-3 font-bold text-slate-600">Customer</th>
                 <th className="px-4 py-3 font-bold text-slate-600">Date</th>
-                <th className="px-4 py-3 font-bold text-slate-600">Items</th>
+                <th className="px-4 py-3 font-bold text-slate-600">Products</th>
                 <th className="px-4 py-3 font-bold text-slate-600">Total</th>
                 <th className="px-4 py-3 font-bold text-slate-600">Status</th>
                 <th className="px-4 py-3 font-bold text-slate-600 text-right">Actions</th>
@@ -456,13 +559,25 @@ export default function Sales() {
               ) : (
                 filtered.map((s) => (
                   <tr key={s.id} className="hover:bg-slate-50/80">
-                    <td className="px-4 py-3 font-bold text-brand-600">{s.invoice}</td>
+                    <td className="px-4 py-3 font-bold text-brand-600">
+                      <div className="flex items-center gap-1.5">
+                        <span>{s.invoice}</span>
+                        {s.documentType === 'PROFORMA INVOICE' && (
+                          <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700">Proforma</span>
+                        )}
+                        {s.documentType === 'DEBIT NOTE' && (
+                          <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">Debit Note</span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-bold text-slate-900">{s.customer}</p>
                       {s.phone && <p className="text-[11px] text-slate-500 font-mono">{s.phone}</p>}
                     </td>
                     <td className="px-4 py-3 text-slate-600 font-mono">{s.date}</td>
-                    <td className="px-4 py-3 text-slate-700 font-semibold">{s.itemCount} items</td>
+                    <td className="px-4 py-3 text-slate-700 font-semibold font-mono">
+                      {s.items && s.items.length > 0 ? s.items.length : s.itemCount}
+                    </td>
                     <td className="px-4 py-3 font-black text-slate-900">{money(s.grandTotal)}</td>
                     <td className="px-4 py-3">
                       <StatusBadge status={s.status} />
@@ -488,11 +603,25 @@ export default function Sales() {
                           <Eye className="h-4 w-4" />
                         </button>
                         <button
+                          onClick={() => handleEditSale(s)}
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                          title="Edit Invoice"
+                        >
+                          <Edit3 className="h-4 w-4" />
+                        </button>
+                        <button
                           onClick={() => printInvoice(s)}
                           className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
                           title="Print Tax Invoice"
                         >
                           <Printer className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSale(s)}
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"
+                          title="Delete Invoice"
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     </td>
@@ -504,10 +633,10 @@ export default function Sales() {
         </div>
       </div>
 
-      {/* New Invoice / Debit Note Modal */}
+      {/* New Invoice / Edit Invoice Modal */}
       {modalOpen && (
         <Modal
-          title={`${documentType === 'DEBIT NOTE' ? 'Create Debit Note' : 'Create Tax Invoice'} (${invoiceNumber})`}
+          title={`${editingSaleId ? 'Edit Invoice' : documentType === 'DEBIT NOTE' ? 'Create Debit Note' : documentType === 'PROFORMA INVOICE' ? 'Create Proforma Invoice' : 'Create Tax Invoice'} (${invoiceNumber})`}
           size="xl"
           onClose={() => setModalOpen(false)}
         >
@@ -566,13 +695,13 @@ export default function Sales() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {documentType === 'DEBIT NOTE' ? 'Debit Note Number *' : 'Invoice Number *'}
+                  {documentType === 'DEBIT NOTE' ? 'Debit Note Number *' : documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice Number *' : 'Invoice Number *'}
                 </label>
                 <input
                   type="text"
                   value={customInvoiceNumber}
                   onChange={(e) => setCustomInvoiceNumber(e.target.value)}
-                  placeholder={documentType === 'DEBIT NOTE' ? 'e.g. DN-1001' : 'e.g. INV-2046 or 00744'}
+                  placeholder={documentType === 'DEBIT NOTE' ? 'e.g. DN-1001' : documentType === 'PROFORMA INVOICE' ? 'e.g. PI-1001' : 'e.g. INV-2046 or 00744'}
                   className="input font-mono font-bold text-brand-600"
                 />
               </div>
@@ -660,56 +789,6 @@ export default function Sales() {
                     onChange={(e) => setVendorCode(e.target.value)}
                     placeholder="Vendor / Account Code"
                     className="input py-1 text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bank Name</label>
-                  <input
-                    type="text"
-                    value={bankName}
-                    onChange={(e) => setBankName(e.target.value)}
-                    placeholder="Bank Name"
-                    className="input py-1 text-xs font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bank Account No.</label>
-                  <input
-                    type="text"
-                    value={bankAccount}
-                    onChange={(e) => setBankAccount(e.target.value)}
-                    placeholder="Account Number"
-                    className="input py-1 text-xs font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bank IFSC Code</label>
-                  <input
-                    type="text"
-                    value={bankIfsc}
-                    onChange={(e) => setBankIfsc(e.target.value.toUpperCase())}
-                    placeholder="IFSC Code"
-                    className="input py-1 text-xs font-mono uppercase"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Your GST Number</label>
-                  <input
-                    type="text"
-                    value={sellerGstin}
-                    onChange={(e) => setSellerGstin(e.target.value.toUpperCase())}
-                    placeholder="Seller GSTIN"
-                    className="input py-1 text-xs font-mono uppercase"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Your PAN Number</label>
-                  <input
-                    type="text"
-                    value={sellerPan}
-                    onChange={(e) => setSellerPan(e.target.value.toUpperCase())}
-                    placeholder="Seller PAN No."
-                    className="input py-1 text-xs font-mono uppercase"
                   />
                 </div>
               </div>
@@ -862,25 +941,19 @@ export default function Sales() {
               {/* Discount Controls */}
               <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="font-bold text-slate-800">Discount</label>
-                  <div className="flex items-center gap-2">
+                  <label className="font-bold text-slate-800">Discount (%)</label>
+                  <div className="flex items-center gap-1.5">
                     <input
                       type="number"
                       min="0"
+                      max="100"
                       step="0.01"
                       value={discount}
                       onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
                       className="w-24 rounded border border-slate-200 px-2 py-1 text-right text-xs font-bold text-slate-900 focus:border-brand-500 focus:outline-none"
                       placeholder="0"
                     />
-                    <select
-                      value={discountType}
-                      onChange={(e) => setDiscountType(e.target.value as DiscountType)}
-                      className="rounded border border-slate-200 px-2 py-1 text-xs font-bold text-slate-700 bg-white focus:border-brand-500 focus:outline-none"
-                    >
-                      <option value="amount">Amount (₹)</option>
-                      <option value="percent">Percent (%)</option>
-                    </select>
+                    <span className="text-xs font-bold text-slate-600">%</span>
                   </div>
                 </div>
 
@@ -938,8 +1011,13 @@ export default function Sales() {
               <button className="btn-secondary" onClick={() => setModalOpen(false)}>
                 Cancel
               </button>
-              <button className="btn-primary" onClick={handleSubmit} disabled={!canSubmit}>
-                {documentType === 'DEBIT NOTE' ? 'Confirm & Issue Debit Note' : 'Confirm & Issue Invoice'}
+              <button
+                type="button"
+                disabled={!canSubmit}
+                onClick={handleSubmit}
+                className="btn-primary"
+              >
+                {editingSaleId ? 'Save & Update Invoice' : documentType === 'DEBIT NOTE' ? 'Confirm & Issue Debit Note' : documentType === 'PROFORMA INVOICE' ? 'Confirm & Issue Proforma Invoice' : 'Confirm & Issue Invoice'}
               </button>
             </div>
           </div>
@@ -949,7 +1027,7 @@ export default function Sales() {
       {/* Invoice / Debit Note View Modal */}
       {viewing && (
         <Modal
-          title={`${viewing.documentType === 'DEBIT NOTE' ? 'Debit Note Details' : 'Invoice Details'} — ${viewing.invoice}`}
+          title={`${viewing.documentType === 'DEBIT NOTE' ? 'Debit Note Details' : viewing.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice Details' : 'Invoice Details'} — ${viewing.invoice}`}
           size="xl"
           onClose={() => setViewing(null)}
         >
@@ -979,6 +1057,17 @@ export default function Sales() {
               </div>
             </div>
 
+            {viewing.documentType === 'PROFORMA INVOICE' && (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => openConvertModal(viewing)}
+                  className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700 text-xs px-3 py-1.5"
+                >
+                  Convert to Tax Invoice
+                </button>
+              </div>
+            )}
+
             <div className="text-right text-[10px] font-bold text-slate-900 tracking-wide">{previewCopyTag}</div>
 
             {/* Main Border Frame Box */}
@@ -989,15 +1078,15 @@ export default function Sales() {
 
               {/* Company Header */}
               <div className="text-center p-3 border-b border-black">
-                <h2 className="text-xl font-black uppercase tracking-tight font-sans">NAIN TOOLS & SS BOLT CO.</h2>
-                <p className="text-[11px] font-bold mt-0.5">17/1, INDUSTRIAL AREA WHIRLPOOL CHOWK, NIT FARIDABAD</p>
-                <p className="text-[10px] text-slate-700 mt-0.5">EMAIL : narendernain2011@gmail.com &nbsp;|&nbsp; 9213469582 7053795074 129 4870974</p>
-                <p className="text-xs font-black mt-1">GSTIN No. {viewing.sellerGstin || '06CCCPK0841B1ZA'}</p>
+                <h2 className="text-xl font-black uppercase tracking-tight font-sans">{companySettings?.companyName || 'NAIN TOOLS & SS BOLT CO.'}</h2>
+                <p className="text-[11px] font-bold mt-0.5">{companySettings?.address || '17/1, INDUSTRIAL AREA WHIRLPOOL CHOWK, NIT FARIDABAD'}</p>
+                <p className="text-[10px] text-slate-700 mt-0.5">EMAIL : {companySettings?.email || 'narendernain2011@gmail.com'} &nbsp;|&nbsp; {companySettings?.phone || '9213469582 7053795074 129 4870974'}</p>
+                <p className="text-xs font-black mt-1">GSTIN No. {viewing.sellerGstin || companySettings?.gstin || '06CCCPK0841B1ZA'}</p>
               </div>
 
               {/* PAN & Reverse Charge */}
               <div className="flex justify-between px-3 py-1.5 border-b border-black text-[11px] font-bold bg-slate-50/60">
-                <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <span className="font-mono">{viewing.sellerPan || 'CCCPK0841B'}</span></div>
+                <div>PAN No. &nbsp;&nbsp;&nbsp;&nbsp; <span className="font-mono">{viewing.sellerPan || companySettings?.pan || 'CCCPK0841B'}</span></div>
                 <div>Tax is Payable on Reverse Charge : <span>No</span></div>
               </div>
 
@@ -1005,7 +1094,7 @@ export default function Sales() {
               <div className="grid grid-cols-2 border-b border-black divide-x divide-black text-[10px]">
                 <div className="p-2 space-y-1">
                   <div className="flex justify-between">
-                    <span>{viewing.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : 'Invoice No. :'} &nbsp;&nbsp; <strong>{viewing.invoice}</strong></span>
+                    <span>{viewing.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : viewing.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : 'Invoice No. :'} &nbsp;&nbsp; <strong>{viewing.invoice}</strong></span>
                     <span>Date : &nbsp;&nbsp; <strong>{viewing.date}</strong></span>
                   </div>
                   <div className="flex justify-between"><span>P.O. No. :</span> <strong>{viewing.poNumber || '—'}</strong></div>
@@ -1091,14 +1180,14 @@ export default function Sales() {
 
               {/* Bottom Summary Grid */}
               <div className="grid grid-cols-12 divide-x divide-black text-[10px]">
-                <div className="col-span-7 p-2.5 flex flex-col justify-between">
+<div className="col-span-7 p-2.5 flex flex-col justify-between">
                   <div>
                     <div className="font-bold mb-1.5">E-Way Bill No : <strong>{viewing.ewayBill || '—'}</strong></div>
                     <div className="font-bold underline mb-0.5">Bank Details :</div>
-                    <div className="font-bold space-y-0.5 text-slate-800">
-                      <div>{viewing.bankName || 'HDFC BANK'}</div>
-                      <div>{viewing.bankAccount || '50200088182531'}</div>
-                      <div>IFSC CODE :{viewing.bankIfsc || 'HDFC0002034'}</div>
+                    <div className="text-[10px] font-bold space-y-0.5">
+                      <div>{viewing.bankName || companySettings?.bankName || 'HDFC BANK'}</div>
+                      <div>{viewing.bankAccount || companySettings?.bankAccount || '50200088182531'}</div>
+                      <div>IFSC CODE :{viewing.bankIfsc || companySettings?.bankIfsc || 'HDFC0002034'}</div>
                     </div>
                   </div>
 
@@ -1117,7 +1206,7 @@ export default function Sales() {
                     <div className="flex justify-between items-end mt-4 pt-2 font-bold text-[10px]">
                       <div>Receiver's Signature</div>
                       <div className="text-right">
-                        <div>For <strong>NAIN TOOLS & SS BOLT CO.</strong></div>
+                        <div>For <strong>{companySettings?.companyName || 'NAIN TOOLS & SS BOLT CO.'}</strong></div>
                         <div className="mt-5">Authorised Signatory</div>
                       </div>
                     </div>
@@ -1238,6 +1327,33 @@ export default function Sales() {
 
             {/* Modal Actions */}
             <div className="flex justify-end gap-2 pt-2">
+              {viewing.documentType === 'PROFORMA INVOICE' && (
+                <button
+                  className="btn-secondary bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100 font-bold"
+                  onClick={() => openConvertModal(viewing)}
+                >
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <span>Convert to Tax Invoice</span>
+                </button>
+              )}
+              <button
+                className="btn-secondary text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 font-bold"
+                onClick={() => {
+                  const target = viewing;
+                  setViewing(null);
+                  handleEditSale(target);
+                }}
+              >
+                <Edit3 className="h-4 w-4 text-blue-600" />
+                <span>Edit Invoice</span>
+              </button>
+              <button
+                className="btn-secondary text-red-700 bg-red-50 border-red-200 hover:bg-red-100 font-bold"
+                onClick={() => handleDeleteSale(viewing)}
+              >
+                <Trash2 className="h-4 w-4 text-red-600" />
+                <span>Delete</span>
+              </button>
               <button className="btn-secondary" onClick={() => setViewing(null)}>
                 Close
               </button>
@@ -1245,10 +1361,57 @@ export default function Sales() {
                 className="btn-primary"
                 onClick={() => {
                   const selectedList = Object.keys(exportCopies).filter((k) => exportCopies[k]);
-                  printInvoice(viewing, selectedList.length > 0 ? selectedList : undefined);
+                  printInvoice(viewing, selectedList.length > 0 ? selectedList : undefined, companySettings);
                 }}
               >
                 <Printer className="h-4 w-4" /> Print / Export Selected ({Object.values(exportCopies).filter(Boolean).length} {Object.values(exportCopies).filter(Boolean).length === 1 ? 'Copy' : 'Copies'})
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Convert Proforma to Tax Invoice Modal */}
+      {convertTargetSale && (
+        <Modal
+          title="Convert Proforma Invoice to Tax Invoice"
+          size="md"
+          onClose={() => setConvertTargetSale(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <p className="text-slate-600">
+              You are converting Proforma Invoice <strong className="text-purple-700 font-mono">{convertTargetSale.invoice}</strong> for <strong>{convertTargetSale.customer}</strong> into an official Tax Invoice.
+            </p>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                New Tax Invoice Number *
+              </label>
+              <input
+                type="text"
+                value={convertInvoiceNumber}
+                onChange={(e) => setConvertInvoiceNumber(e.target.value)}
+                placeholder="e.g. INV-2042"
+                className="input font-mono font-bold text-brand-600 w-full"
+                autoFocus
+              />
+              <p className="text-[11px] text-slate-400 mt-1">You can edit the Tax Invoice number if needed.</p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                className="btn-secondary"
+                onClick={() => setConvertTargetSale(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700"
+                onClick={handleConfirmConvert}
+                disabled={!convertInvoiceNumber.trim()}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                <span>Confirm Conversion</span>
               </button>
             </div>
           </div>

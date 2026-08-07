@@ -4,7 +4,7 @@ import { withComputed } from '@/lib/constants';
 import { useNotifications } from '@/store/NotificationStore';
 import type {
   Product, SaleRecord, PurchaseRecord, VerificationRecord,
-  Customer, Supplier, SaleStatus, PurchaseStatus,
+  Customer, Supplier, SaleStatus, PurchaseStatus, CompanySettings,
 } from '@/lib/types';
 
 export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>;
@@ -16,13 +16,17 @@ type StoreContextValue = {
   verifications: VerificationRecord[];
   customers: Customer[];
   suppliers: Supplier[];
+  companySettings: CompanySettings | null;
   loading: boolean;
   error: string | null;
   addProduct: (data: ProductFormData) => Promise<void>;
   updateProduct: (id: string, data: ProductFormData) => Promise<void>;
   deleteProduct: (id: string) => Promise<void>;
   addSale: (sale: SaleRecord) => Promise<void>;
+  updateSale: (sale: SaleRecord) => Promise<void>;
+  deleteSale: (id: string) => Promise<void>;
   updateSaleStatus: (id: string, status: SaleStatus, amountPaid: number) => Promise<void>;
+  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'PROFORMA INVOICE', invoice: string) => Promise<void>;
   addPurchase: (po: PurchaseRecord) => Promise<void>;
   markPurchaseReceived: (id: string) => Promise<void>;
   updatePurchaseStatus: (id: string, status: PurchaseStatus) => Promise<void>;
@@ -34,6 +38,7 @@ type StoreContextValue = {
   addSupplier: (s: Supplier) => Promise<void>;
   updateSupplier: (id: string, s: Supplier) => Promise<void>;
   deleteSupplier: (id: string) => Promise<void>;
+  updateCompanySettings: (s: CompanySettings) => Promise<void>;
 };
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -45,6 +50,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [verifications, setVerifications] = useState<VerificationRecord[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { addNotification } = useNotifications();
@@ -54,13 +60,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const [p, s, po, v, c, sup] = await Promise.all([
+        const [p, s, po, v, c, sup, cs] = await Promise.all([
           api.getProducts(),
           api.getSales(),
           api.getPurchases(),
           api.getVerifications(),
           api.getCustomers(),
           api.getSuppliers(),
+          api.getCompanySettings().catch(() => null),
         ]);
         if (cancelled) return;
         setProducts(p);
@@ -69,6 +76,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setVerifications(v);
         setCustomers(c);
         setSuppliers(sup);
+        if (cs) setCompanySettings(cs);
         setLoading(false);
       } catch (err) {
         if (cancelled) return;
@@ -152,9 +160,114 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [addNotification]);
 
   const updateSaleStatus = useCallback(async (id: string, status: SaleStatus, amountPaid: number) => {
+    const oldSale = sales.find((s) => s.id === id);
+    if (oldSale && oldSale.status !== status) {
+      const wasActive = oldSale.status !== 'draft' && oldSale.status !== 'cancelled';
+      const isNowActive = status !== 'draft' && status !== 'cancelled';
+
+      if (wasActive && !isNowActive) {
+        const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
+        setProducts((prev) =>
+          prev.map((p) => {
+            const qty = oldSale.items.filter((i) => i.productId === p.id).reduce((sum, i) => sum + i.qty, 0);
+            if (qty === 0) return p;
+            const stock = p.stock + qty;
+            stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
+            const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
+            const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
+            return { ...p, stock, boxStatus, status: computed.status };
+          }),
+        );
+        for (const u of stockUpdates) {
+          await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
+        }
+      } else if (!wasActive && isNowActive) {
+        const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
+        setProducts((prev) =>
+          prev.map((p) => {
+            const qty = oldSale.items.filter((i) => i.productId === p.id).reduce((sum, i) => sum + i.qty, 0);
+            if (qty === 0) return p;
+            const stock = Math.max(0, p.stock - qty);
+            stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
+            const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
+            const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
+            return { ...p, stock, boxStatus, status: computed.status };
+          }),
+        );
+        for (const u of stockUpdates) {
+          await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
+        }
+      }
+    }
+
     await api.updateSaleStatus(id, status, amountPaid);
     setSales((prev) => prev.map((s) => (s.id === id ? { ...s, status, amountPaid } : s)));
-  }, []);
+  }, [sales]);
+
+  const deleteSale = useCallback(async (id: string) => {
+    const sale = sales.find((s) => s.id === id);
+    if (!sale) return;
+
+    if (sale.status !== 'draft' && sale.status !== 'cancelled') {
+      const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
+      setProducts((prev) =>
+        prev.map((p) => {
+          const soldQty = sale.items
+            .filter((item) => item.productId === p.id)
+            .reduce((sum, item) => sum + item.qty, 0);
+          if (soldQty === 0) return p;
+          const stock = p.stock + soldQty;
+          stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
+          const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
+          const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
+          return { ...p, stock, boxStatus, status: computed.status };
+        }),
+      );
+      for (const u of stockUpdates) {
+        await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
+      }
+    }
+
+    await api.deleteSale(id);
+    setSales((prev) => prev.filter((s) => s.id !== id));
+    addNotification('info', 'Invoice Deleted', `Invoice ${sale.invoice} deleted. Item quantities returned to inventory stock.`);
+  }, [sales, addNotification]);
+
+  const updateSale = useCallback(async (updatedSale: SaleRecord) => {
+    const oldSale = sales.find((s) => s.id === updatedSale.id);
+    if (!oldSale) return;
+
+    const oldActive = oldSale.status !== 'draft' && oldSale.status !== 'cancelled';
+    const newActive = updatedSale.status !== 'draft' && updatedSale.status !== 'cancelled';
+
+    const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
+    setProducts((prev) =>
+      prev.map((p) => {
+        const oldQty = oldActive ? oldSale.items.filter((i) => i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
+        const newQty = newActive ? updatedSale.items.filter((i) => i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
+        const diff = newQty - oldQty;
+        if (diff === 0) return p;
+        const stock = Math.max(0, p.stock - diff);
+        stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
+        const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
+        const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
+        return { ...p, stock, boxStatus, status: computed.status };
+      }),
+    );
+    for (const u of stockUpdates) {
+      await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
+    }
+
+    await api.updateSale(updatedSale);
+    setSales((prev) => prev.map((s) => (s.id === updatedSale.id ? updatedSale : s)));
+    addNotification('success', 'Invoice Updated', `Invoice ${updatedSale.invoice} updated and inventory stock adjusted.`);
+  }, [sales, addNotification]);
+
+  const updateSaleDocumentType = useCallback(async (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'PROFORMA INVOICE', invoice: string) => {
+    await api.updateSaleDocument(id, documentType, invoice);
+    setSales((prev) => prev.map((s) => (s.id === id ? { ...s, documentType, invoice } : s)));
+    addNotification('success', 'Document Converted', `Converted to ${documentType} (${invoice}).`);
+  }, [addNotification]);
 
   const applyReceivedStock = useCallback(async (po: PurchaseRecord) => {
     const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
@@ -278,15 +391,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSuppliers((prev) => prev.filter((x) => x.id !== id));
   }, []);
 
+  const updateCompanySettings = useCallback(async (s: CompanySettings) => {
+    await api.updateCompanySettings(s);
+    setCompanySettings(s);
+  }, []);
+
   return (
     <StoreContext.Provider
       value={{
-        products, sales, purchases, verifications, customers, suppliers,
+        products, sales, purchases, verifications, customers, suppliers, companySettings,
         loading, error,
         addProduct, updateProduct, deleteProduct,
-        addSale, updateSaleStatus, addPurchase, markPurchaseReceived, updatePurchaseStatus, addVerification, updateBoxStatusMode,
+        addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType, addPurchase, markPurchaseReceived, updatePurchaseStatus, addVerification, updateBoxStatusMode,
         addCustomer, updateCustomer, deleteCustomer,
         addSupplier, updateSupplier, deleteSupplier,
+        updateCompanySettings,
       }}
     >
       {children}

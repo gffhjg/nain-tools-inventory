@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { User, Building2, Bell, Shield, Globe, Save, Upload, CheckCircle2, Palette, Percent, DollarSign, Download, FileUp, AlertTriangle, Loader2, Info, Database, HardDrive, Calendar, Tag, FolderOpen } from 'lucide-react';
+import { User, Building2, Bell, Shield, Globe, Save, Upload, CheckCircle2, Palette, DollarSign, Download, FileUp, AlertTriangle, Loader2, Info, Database, HardDrive, Calendar, Tag, FolderOpen } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import { api, APP_VERSION } from '@/lib/api';
 import { getDbInfo, verifyIntegrity } from '@/lib/db';
+import { useStore } from '@/store/AppStore';
 import type { CompanySettings } from '@/lib/types';
 
 type Tab = 'profile' | 'business' | 'notifications' | 'security' | 'about';
@@ -32,6 +33,7 @@ const themes = [
 ] as const;
 
 export default function Settings() {
+  const { companySettings: storeCompanySettings, updateCompanySettings } = useStore();
   const [activeTab, setActiveTab] = useState<Tab>('profile');
   const [notif, setNotif] = useState({ lowStock: true, newOrders: true, paymentAlerts: true, weeklyDigest: false });
   const [currency, setCurrency] = useState('INR');
@@ -39,7 +41,7 @@ export default function Settings() {
   const [theme, setTheme] = useState<(typeof themes)[number]['id']>('light');
   const [saved, setSaved] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(storeCompanySettings);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [backupMsg, setBackupMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -48,14 +50,17 @@ export default function Settings() {
   const [integrityStatus, setIntegrityStatus] = useState<{ ok: boolean; missingTables: string[] } | null>(null);
 
   useEffect(() => {
+    if (storeCompanySettings) {
+      setCompanySettings(storeCompanySettings);
+    }
+  }, [storeCompanySettings]);
+
+  useEffect(() => {
     if (activeTab !== 'about') return;
     getDbInfo().then(setDbInfo).catch(() => {});
     verifyIntegrity().then(setIntegrityStatus).catch(() => {});
   }, [activeTab]);
 
-  useEffect(() => {
-    api.getCompanySettings().then(setCompanySettings).catch(() => {});
-  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = useCallback(async () => {
@@ -107,7 +112,7 @@ export default function Settings() {
     if (!companySettings) return;
     setSavingSettings(true);
     try {
-      await api.updateCompanySettings(companySettings);
+      await updateCompanySettings(companySettings);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch {
@@ -231,24 +236,6 @@ export default function Settings() {
                   </select>
                 </div>
                 <p className="mt-1.5 text-xs text-slate-400">Used across all sales, purchases, and reports.</p>
-              </div>
-
-              {/* Tax percentage */}
-              <div className="mt-5">
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">Tax / GST Percentage</label>
-                <div className="flex items-center gap-2">
-                  <Percent className="h-4 w-4 text-slate-400" />
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.5"
-                    value={taxRate}
-                    onChange={(e) => setTaxRate(e.target.value)}
-                    className="input w-24"
-                  />
-                  <span className="text-sm text-slate-500">% applied to all invoices</span>
-                </div>
               </div>
 
               {/* Theme preference */}

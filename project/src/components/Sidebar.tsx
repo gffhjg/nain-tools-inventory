@@ -96,17 +96,6 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             );
           })}
         </nav>
-
-        {/* Footer card */}
-        <div className="m-4 rounded-2xl bg-gradient-to-br from-brand-600/30 to-brand-800/20 p-4 ring-1 ring-white/10">
-          <p className="text-sm font-semibold text-white">Need help?</p>
-          <p className="mt-1 text-xs text-brand-200/80">
-            Check the docs or contact support for setup guidance.
-          </p>
-          <button className="mt-3 w-full rounded-lg bg-white/10 py-2 text-xs font-semibold text-white transition hover:bg-white/20">
-            View Docs
-          </button>
-        </div>
       </aside>
     </>
   );

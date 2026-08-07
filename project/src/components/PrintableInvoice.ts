@@ -1,11 +1,11 @@
-import type { SaleRecord, PurchaseRecord } from '@/lib/types';
+import type { SaleRecord, PurchaseRecord, CompanySettings } from '@/lib/types';
 import { computeDiscountAmount } from '@/lib/constants';
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-const BUSINESS = {
+export const BUSINESS = {
   name: 'NAIN TOOLS & SS BOLT CO.',
   address: '17/1, INDUSTRIAL AREA WHIRLPOOL CHOWK, NIT FARIDABAD',
   phone: '9213469582  7053795074  129 4870974',
@@ -19,6 +19,23 @@ const BUSINESS = {
     branch: 'FARIDABAD',
   },
 };
+
+export function resolveBusinessDetails(cs?: CompanySettings | null) {
+  return {
+    name: cs?.companyName?.trim() || BUSINESS.name,
+    address: cs?.address?.trim() || BUSINESS.address,
+    phone: cs?.phone?.trim() || BUSINESS.phone,
+    email: cs?.email?.trim() || BUSINESS.email,
+    gstin: cs?.gstin?.trim() || BUSINESS.gstin,
+    pan: cs?.pan?.trim() || BUSINESS.pan,
+    bank: {
+      name: cs?.bankName?.trim() || BUSINESS.bank.name,
+      account: cs?.bankAccount?.trim() || BUSINESS.bank.account,
+      ifsc: cs?.bankIfsc?.trim() || BUSINESS.bank.ifsc,
+      branch: cs?.bankBranch?.trim() || BUSINESS.bank.branch,
+    },
+  };
+}
 
 function numberToWords(num: number): string {
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
@@ -62,7 +79,8 @@ function numberToWords(num: number): string {
   return words;
 }
 
-function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
+function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySettings | null): string {
+  const biz = resolveBusinessDetails(cs);
   const discountAmt = computeDiscountAmount(sale.subtotal, sale.discount, sale.discountType);
   const taxableValue = sale.subtotal - discountAmt;
   const isCentral = sale.gstType === 'igst';
@@ -112,12 +130,12 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
     }
   }
 
-  const bankName = sale.bankName || BUSINESS.bank.name;
-  const bankAccount = sale.bankAccount || BUSINESS.bank.account;
-  const bankIfsc = sale.bankIfsc || BUSINESS.bank.ifsc;
+  const bankName = sale.bankName || biz.bank.name;
+  const bankAccount = sale.bankAccount || biz.bank.account;
+  const bankIfsc = sale.bankIfsc || biz.bank.ifsc;
 
-  const sellerGstin = sale.sellerGstin || BUSINESS.gstin;
-  const sellerPan = sale.sellerPan || BUSINESS.pan;
+  const sellerGstin = sale.sellerGstin || biz.gstin;
+  const sellerPan = sale.sellerPan || biz.pan;
 
   const docType = sale.documentType || 'TAX INVOICE';
 
@@ -130,9 +148,9 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
       
       <!-- Company Header -->
       <div class="company-section">
-        <div class="company-title">${esc(BUSINESS.name)}</div>
-        <div class="company-sub">${esc(BUSINESS.address)}</div>
-        <div class="company-contact">EMAIL : ${esc(BUSINESS.email)} &nbsp;|&nbsp; ${esc(BUSINESS.phone)}</div>
+        <div class="company-title">${esc(biz.name)}</div>
+        <div class="company-sub">${esc(biz.address)}</div>
+        <div class="company-contact">EMAIL : ${esc(biz.email)} &nbsp;|&nbsp; ${esc(biz.phone)}</div>
         <div class="company-gst">GSTIN No. ${esc(sellerGstin)}</div>
       </div>
       
@@ -146,7 +164,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
       <div class="two-col-row">
         <div class="col-left">
           <div class="meta-line">
-            <span>${sale.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : 'Invoice No. :'} &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
+            <span>${sale.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : sale.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : 'Invoice No. :'} &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
             <span>Date : &nbsp;&nbsp; <strong>${esc(sale.date)}</strong></span>
           </div>
           <div class="meta-line"><span>P.O. No. :</span> <strong>${esc(sale.poNumber || '—')}</strong></div>
@@ -234,7 +252,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
             
             <div style="display: flex; justify-content: space-between; margin-top: 16px; font-weight: bold; font-size: 10px;">
               <div>Receiver's Signature</div>
-              <div style="text-align: right;">For <strong>${esc(BUSINESS.name)}</strong></div>
+              <div style="text-align: right;">For <strong>${esc(biz.name)}</strong></div>
             </div>
             <div style="text-align: right; font-weight: bold; font-size: 10px; margin-top: 16px;">
               Authorised Signatory
@@ -282,7 +300,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string): string {
   </div>`;
 }
 
-function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[]): string {
+function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[], cs?: CompanySettings | null): string {
   const defaultCopies = [
     'Original For Recipient',
     'Duplicate For Transporter',
@@ -292,7 +310,7 @@ function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[]): string {
   const copyLabels = (selectedCopies && selectedCopies.length > 0) ? selectedCopies : defaultCopies;
 
   const docType = sale.documentType || 'TAX INVOICE';
-  const copiesHTML = copyLabels.map((tag) => renderInvoiceCopyHTML(sale, tag)).join('\n');
+  const copiesHTML = copyLabels.map((tag) => renderInvoiceCopyHTML(sale, tag, cs)).join('\n');
 
   return `<!doctype html>
 <html lang="en">
@@ -361,14 +379,15 @@ function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[]): string {
 </html>`;
 }
 
-export function printInvoice(sale: SaleRecord, selectedCopies?: string[]) {
+export function printInvoice(sale: SaleRecord, selectedCopies?: string[], cs?: CompanySettings | null) {
   const win = window.open('', '_blank', 'width=820,height=900');
   if (!win) return;
-  win.document.write(buildInvoiceHTML(sale, selectedCopies));
+  win.document.write(buildInvoiceHTML(sale, selectedCopies, cs));
   win.document.close();
 }
 
-function buildPurchaseHTML(po: PurchaseRecord): string {
+function buildPurchaseHTML(po: PurchaseRecord, cs?: CompanySettings | null): string {
+  const biz = resolveBusinessDetails(cs);
   const itemRows = po.items
     .map((it, i) => {
       const lineTotal = it.cost * it.qty;
@@ -389,7 +408,7 @@ function buildPurchaseHTML(po: PurchaseRecord): string {
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>${po.poNumber} — ${BUSINESS.name}</title>
+<title>${po.poNumber} — ${esc(biz.name)}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; background: #e2e8f0; padding: 20px; }
@@ -458,11 +477,11 @@ function buildPurchaseHTML(po: PurchaseRecord): string {
       <div class="brand">
         <div class="brand-logo">NT</div>
         <div>
-          <div class="brand-name">${BUSINESS.name}</div>
+          <div class="brand-name">${esc(biz.name)}</div>
           <div class="brand-sub">Stainless Steel Fastener Specialists</div>
-          <div class="brand-addr">${BUSINESS.address}</div>
-          <div class="brand-contact">Ph: ${BUSINESS.phone} &nbsp;|&nbsp; ${BUSINESS.email}</div>
-          <div class="brand-gst">GSTIN: ${BUSINESS.gstin} &nbsp;|&nbsp; PAN: ${BUSINESS.pan}</div>
+          <div class="brand-addr">${esc(biz.address)}</div>
+          <div class="brand-contact">Ph: ${esc(biz.phone)} &nbsp;|&nbsp; ${esc(biz.email)}</div>
+          <div class="brand-gst">GSTIN: ${esc(biz.gstin)} &nbsp;|&nbsp; PAN: ${esc(biz.pan)}</div>
         </div>
       </div>
       <div class="invoice-box">
@@ -481,8 +500,8 @@ function buildPurchaseHTML(po: PurchaseRecord): string {
       </div>
       <div class="party">
         <div class="party-label">Ship To</div>
-        <div class="party-name">${BUSINESS.name}</div>
-        <div class="party-detail">${BUSINESS.address}</div>
+        <div class="party-name">${esc(biz.name)}</div>
+        <div class="party-detail">${esc(biz.address)}</div>
       </div>
     </div>
 
@@ -534,14 +553,14 @@ function buildPurchaseHTML(po: PurchaseRecord): string {
         <div class="sign-line"></div>
       </div>
       <div class="sign-box">
-        <div class="sign-label">For ${BUSINESS.name}</div>
+        <div class="sign-label">For ${esc(biz.name)}</div>
         <div class="sign-line"></div>
         <div class="sign-name">Authorised Signatory</div>
       </div>
     </div>
 
     <div class="footer">
-      <div class="footer-text">This is a computer-generated purchase order. | ${BUSINESS.name} | ${BUSINESS.phone} | ${BUSINESS.email}</div>
+      <div class="footer-text">This is a computer-generated purchase order. | ${esc(biz.name)} | ${esc(biz.phone)} | ${esc(biz.email)}</div>
     </div>
   </div>
   <script>window.onload = () => { setTimeout(() => window.print(), 200); };</script>
@@ -549,9 +568,9 @@ function buildPurchaseHTML(po: PurchaseRecord): string {
 </html>`;
 }
 
-export function printPurchase(po: PurchaseRecord) {
+export function printPurchase(po: PurchaseRecord, cs?: CompanySettings | null) {
   const win = window.open('', '_blank', 'width=820,height=900');
   if (!win) return;
-  win.document.write(buildPurchaseHTML(po));
+  win.document.write(buildPurchaseHTML(po, cs));
   win.document.close();
 }
