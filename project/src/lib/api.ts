@@ -4,11 +4,12 @@ import type {
   Product, Customer, Supplier, SaleRecord, PurchaseRecord,
   VerificationRecord, InvoiceLineItem, PurchaseLineItem,
   BoxStatus, BoxStatusMode, DiscountType, GstType, CompanySettings,
+  ChequeRecord, ChequeStatus, ChequeType, PurchasePaymentMethod,
 } from './types';
 
-export const APP_VERSION = '1.2.0';
-export const DB_VERSION = 3;
-const BACKUP_TABLES = ['products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items', 'verifications', 'categories', 'company_settings'] as const;
+export const APP_VERSION = '1.4.0';
+export const DB_VERSION = 5;
+const BACKUP_TABLES = ['products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items', 'verifications', 'categories', 'company_settings', 'cheques'] as const;
 
 type ProductRow = {
   id: string; name: string; category: string; supplier: string; rack_number: string; size: string;
@@ -55,23 +56,36 @@ type SaleRow = {
   document_type?: string; po_number?: string; po_date?: string; transport_mode?: string;
   vehicle_number?: string; eway_bill?: string; vendor_code?: string; bank_name?: string;
   bank_account?: string; bank_ifsc?: string; seller_gstin?: string; seller_pan?: string;
+  due_date?: string; payment_terms?: string; notes?: string;
+  cheque_no?: string; cheque_bank?: string; cheque_date?: string;
+  cheque_status?: string; cheque_bounce_reason?: string; cheque_bounce_date?: string;
 };
 
 type SaleItemRow = {
   sale_id: string; product_id: string; name: string; price: string; qty: number;
+  cost?: string | null; is_custom?: boolean | null; hsn_code?: string | null; discount?: string | null;
 };
 
 async function fetchSaleItems(saleIds: string[]): Promise<Map<string, InvoiceLineItem[]>> {
   if (saleIds.length === 0) return new Map();
   const db = await getDb();
   const { rows } = await db.query<SaleItemRow>(
-    `SELECT sale_id, product_id, name, price, qty FROM sale_items WHERE sale_id = ANY($1) ORDER BY sort_order`,
+    `SELECT sale_id, product_id, name, price, qty, cost, is_custom, hsn_code, discount FROM sale_items WHERE sale_id = ANY($1) ORDER BY sort_order`,
     [saleIds],
   );
   const map = new Map<string, InvoiceLineItem[]>();
   for (const r of rows) {
     const items = map.get(r.sale_id) ?? [];
-    items.push({ productId: r.product_id, name: r.name, price: parseFloat(r.price), qty: r.qty });
+    items.push({
+      productId: r.product_id,
+      name: r.name,
+      price: parseFloat(r.price),
+      qty: r.qty,
+      cost: r.cost ? parseFloat(r.cost) : 0,
+      isCustom: Boolean(r.is_custom),
+      hsnCode: r.hsn_code || '',
+      discount: r.discount ? parseFloat(r.discount) : 0,
+    });
     map.set(r.sale_id, items);
   }
   return map;
@@ -97,31 +111,100 @@ function mapSale(r: SaleRow, items: InvoiceLineItem[]): SaleRecord {
     vehicleNumber: r.vehicle_number || '', ewayBill: r.eway_bill || '', vendorCode: r.vendor_code || '',
     bankName: r.bank_name || '', bankAccount: r.bank_account || '', bankIfsc: r.bank_ifsc || '',
     sellerGstin: r.seller_gstin || '', sellerPan: r.seller_pan || '',
+    dueDate: r.due_date || '', paymentTerms: r.payment_terms || '', notes: r.notes || '',
+    chequeNo: r.cheque_no || '',
+    chequeBank: r.cheque_bank || '',
+    chequeDate: r.cheque_date || '',
+    chequeStatus: (r.cheque_status || undefined) as SaleRecord['chequeStatus'],
+    chequeBounceReason: r.cheque_bounce_reason || '',
+    chequeBounceDate: r.cheque_bounce_date || '',
+  };
+}
+
+type ChequeRow = {
+  id: string;
+  type?: string;
+  sale_id?: string;
+  purchase_id?: string;
+  customer_id?: string;
+  customer_name?: string;
+  supplier_id?: string;
+  supplier_name?: string;
+  invoice_number?: string;
+  cheque_number: string;
+  bank_name: string;
+  cheque_date: string;
+  amount: string;
+  status: string;
+  bounce_reason?: string;
+  bounce_date?: string;
+  notes?: string;
+  created_at?: string;
+};
+
+function mapCheque(r: ChequeRow): ChequeRecord {
+  return {
+    id: r.id,
+    type: (r.type || 'received') as ChequeType,
+    saleId: r.sale_id || '',
+    purchaseId: r.purchase_id || '',
+    customerId: r.customer_id || '',
+    customerName: r.customer_name || '',
+    supplierId: r.supplier_id || '',
+    supplierName: r.supplier_name || '',
+    invoiceNumber: r.invoice_number || '',
+    chequeNumber: r.cheque_number,
+    bankName: r.bank_name,
+    chequeDate: r.cheque_date,
+    amount: parseFloat(r.amount) || 0,
+    status: (r.status || 'pending_clearance') as ChequeStatus,
+    bounceReason: r.bounce_reason || '',
+    bounceDate: r.bounce_date || '',
+    notes: r.notes || '',
+    createdAt: r.created_at || '',
   };
 }
 
 type PurchaseRow = {
   id: string; po_number: string; supplier: string; supplier_invoice: string;
-  phone: string; date: string; expected_delivery: string; received_date: string | null;
+  phone: string; date: string; due_date?: string; expected_delivery: string; received_date: string | null;
   item_count: number; subtotal: string; gst_rate: string; gst_amount: string;
-  grand_total: string; payment_status: string; payment_method: string; status: string; notes: string;
+  grand_total: string; amount_paid?: string; payment_status: string; payment_method: string; status: string; notes: string;
+  cheque_no?: string; cheque_bank?: string; cheque_date?: string; cheque_status?: string;
 };
 
 type PurchaseItemRow = {
   purchase_id: string; product_id: string; name: string; cost: string; qty: number; gst_rate: string;
+  is_new_product?: boolean | null; category?: string | null; rack_number?: string | null;
+  size?: string | null; selling_price?: string | null; box_capacity?: number | null;
+  reorder_level?: number | null; hsn_code?: string | null;
 };
 
 async function fetchPurchaseItems(poIds: string[]): Promise<Map<string, PurchaseLineItem[]>> {
   if (poIds.length === 0) return new Map();
   const db = await getDb();
   const { rows } = await db.query<PurchaseItemRow>(
-    `SELECT purchase_id, product_id, name, cost, qty, gst_rate FROM purchase_items WHERE purchase_id = ANY($1) ORDER BY sort_order`,
+    `SELECT purchase_id, product_id, name, cost, qty, gst_rate, is_new_product, category, rack_number, size, selling_price, box_capacity, reorder_level, hsn_code FROM purchase_items WHERE purchase_id = ANY($1) ORDER BY sort_order`,
     [poIds],
   );
   const map = new Map<string, PurchaseLineItem[]>();
   for (const r of rows) {
     const items = map.get(r.purchase_id) ?? [];
-    items.push({ productId: r.product_id, name: r.name, cost: parseFloat(r.cost), qty: r.qty, gstRate: parseFloat(r.gst_rate) });
+    items.push({
+      productId: r.product_id,
+      name: r.name,
+      cost: parseFloat(r.cost),
+      qty: r.qty,
+      gstRate: parseFloat(r.gst_rate),
+      isNewProduct: Boolean(r.is_new_product),
+      category: r.category || '',
+      rackNumber: r.rack_number || '',
+      size: r.size || '',
+      sellingPrice: r.selling_price ? parseFloat(r.selling_price) : 0,
+      boxCapacity: r.box_capacity ?? 1000,
+      reorderLevel: r.reorder_level ?? 100,
+      hsnCode: r.hsn_code || '',
+    });
     map.set(r.purchase_id, items);
   }
   return map;
@@ -130,12 +213,17 @@ async function fetchPurchaseItems(poIds: string[]): Promise<Map<string, Purchase
 function mapPurchase(r: PurchaseRow, items: PurchaseLineItem[]): PurchaseRecord {
   return {
     id: r.id, poNumber: r.po_number, supplier: r.supplier, supplierInvoice: r.supplier_invoice,
-    phone: r.phone, date: r.date, expectedDelivery: r.expected_delivery, receivedDate: r.received_date,
+    phone: r.phone, date: r.date, dueDate: r.due_date || '', expectedDelivery: r.expected_delivery, receivedDate: r.received_date,
     items, itemCount: r.item_count, subtotal: parseFloat(r.subtotal), gstRate: parseFloat(r.gst_rate),
     gstAmount: parseFloat(r.gst_amount), grandTotal: parseFloat(r.grand_total),
+    amountPaid: r.amount_paid ? parseFloat(r.amount_paid) : (r.payment_status === 'Paid' ? parseFloat(r.grand_total) : 0),
     paymentStatus: r.payment_status as PurchaseRecord['paymentStatus'],
     paymentMethod: r.payment_method as PurchaseRecord['paymentMethod'],
     status: r.status as PurchaseRecord['status'], notes: r.notes,
+    chequeNo: r.cheque_no || '',
+    chequeBank: r.cheque_bank || '',
+    chequeDate: r.cheque_date || '',
+    chequeStatus: r.cheque_status ? (r.cheque_status as ChequeStatus) : undefined,
   };
 }
 
@@ -458,15 +546,15 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel, document_type, po_number, po_date, transport_mode, vehicle_number, eway_bill, vendor_code, bank_name, bank_account, bank_ifsc, seller_gstin, seller_pan)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)`,
-      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || ''],
+      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel, document_type, po_number, po_date, transport_mode, vehicle_number, eway_bill, vendor_code, bank_name, bank_account, bank_ifsc, seller_gstin, seller_pan, due_date, payment_terms, notes, cheque_no, cheque_bank, cheque_date, cheque_status, cheque_bounce_reason, cheque_bounce_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45)`,
+      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || ''],
     );
     for (let i = 0; i < sale.items.length; i++) {
       const item = sale.items[i];
       await db.query(
-        'INSERT INTO sale_items (sale_id, product_id, name, price, qty, sort_order) VALUES ($1, $2, $3, $4, $5, $6)',
-        [sale.id, item.productId, item.name, item.price, item.qty, i],
+        'INSERT INTO sale_items (sale_id, product_id, name, price, qty, cost, is_custom, hsn_code, discount, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+        [sale.id, item.productId, item.name, item.price, item.qty, item.cost || 0, Boolean(item.isCustom), item.hsnCode || '', item.discount || 0, i],
       );
     }
   },
@@ -498,15 +586,15 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `UPDATE sales SET invoice=$1, customer=$2, customer_id=$3, phone=$4, customer_gstin=$5, customer_state=$6, customer_state_code=$7, date=$8, item_count=$9, subtotal=$10, discount=$11, discount_type=$12, gst_rate=$13, gst_type=$14, cgst_amount=$15, sgst_amount=$16, igst_amount=$17, gst_amount=$18, grand_total=$19, amount_paid=$20, payment_method=$21, status=$22, channel=$23, document_type=$24, po_number=$25, po_date=$26, transport_mode=$27, vehicle_number=$28, eway_bill=$29, vendor_code=$30, bank_name=$31, bank_account=$32, bank_ifsc=$33, seller_gstin=$34, seller_pan=$35 WHERE id=$36`,
-      [sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.id],
+      `UPDATE sales SET invoice=$1, customer=$2, customer_id=$3, phone=$4, customer_gstin=$5, customer_state=$6, customer_state_code=$7, date=$8, item_count=$9, subtotal=$10, discount=$11, discount_type=$12, gst_rate=$13, gst_type=$14, cgst_amount=$15, sgst_amount=$16, igst_amount=$17, gst_amount=$18, grand_total=$19, amount_paid=$20, payment_method=$21, status=$22, channel=$23, document_type=$24, po_number=$25, po_date=$26, transport_mode=$27, vehicle_number=$28, eway_bill=$29, vendor_code=$30, bank_name=$31, bank_account=$32, bank_ifsc=$33, seller_gstin=$34, seller_pan=$35, due_date=$36, payment_terms=$37, notes=$38, cheque_no=$39, cheque_bank=$40, cheque_date=$41, cheque_status=$42, cheque_bounce_reason=$43, cheque_bounce_date=$44 WHERE id=$45`,
+      [sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.id],
     );
     await db.query('DELETE FROM sale_items WHERE sale_id = $1', [sale.id]);
     for (let i = 0; i < sale.items.length; i++) {
       const item = sale.items[i];
       await db.query(
-        'INSERT INTO sale_items (sale_id, product_id, name, price, qty, sort_order) VALUES ($1, $2, $3, $4, $5, $6)',
-        [sale.id, item.productId, item.name, item.price, item.qty, i],
+        'INSERT INTO sale_items (sale_id, product_id, name, price, qty, cost, is_custom, hsn_code, discount, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+        [sale.id, item.productId, item.name, item.price, item.qty, item.cost || 0, Boolean(item.isCustom), item.hsnCode || '', item.discount || 0, i],
       );
     }
   },
@@ -514,6 +602,52 @@ export const api = {
   async deleteSale(id: string): Promise<void> {
     const db = await getDb();
     await db.query('DELETE FROM sales WHERE id = $1', [id]);
+    await db.query('DELETE FROM cheques WHERE sale_id = $1', [id]);
+  },
+
+  // ---- Cheques ----
+  async getCheques(): Promise<ChequeRecord[]> {
+    const db = await getDb();
+    const { rows } = await db.query<ChequeRow>('SELECT * FROM cheques ORDER BY cheque_date ASC, created_at DESC');
+    return rows.map(mapCheque);
+  },
+
+  async createCheque(cheque: ChequeRecord): Promise<void> {
+    validateNonEmpty(cheque.chequeNumber, 'Cheque number');
+    validateNonEmpty(cheque.bankName, 'Bank name');
+    validateNonEmpty(cheque.chequeDate, 'Cheque date');
+    validateNonNegative(cheque.amount, 'Cheque amount');
+    const db = await getDb();
+    await db.query(
+      `INSERT INTO cheques (id, type, sale_id, purchase_id, customer_id, customer_name, supplier_id, supplier_name, invoice_number, cheque_number, bank_name, cheque_date, amount, status, bounce_reason, bounce_date, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      [cheque.id, cheque.type || 'received', cheque.saleId || '', cheque.purchaseId || '', cheque.customerId || '', cheque.customerName || '', cheque.supplierId || '', cheque.supplierName || '', cheque.invoiceNumber || '', cheque.chequeNumber, cheque.bankName, cheque.chequeDate, cheque.amount, cheque.status || 'pending_clearance', cheque.bounceReason || '', cheque.bounceDate || '', cheque.notes || '']
+    );
+  },
+
+  async updateChequeStatus(id: string, status: ChequeStatus, bounceReason = '', bounceDate = ''): Promise<void> {
+    const db = await getDb();
+    await db.query(
+      'UPDATE cheques SET status = $1, bounce_reason = $2, bounce_date = $3 WHERE id = $4',
+      [status, bounceReason, bounceDate, id]
+    );
+  },
+
+  async updateCheque(cheque: ChequeRecord): Promise<void> {
+    validateNonEmpty(cheque.chequeNumber, 'Cheque number');
+    validateNonEmpty(cheque.bankName, 'Bank name');
+    validateNonEmpty(cheque.chequeDate, 'Cheque date');
+    validateNonNegative(cheque.amount, 'Cheque amount');
+    const db = await getDb();
+    await db.query(
+      `UPDATE cheques SET type = $1, sale_id = $2, purchase_id = $3, customer_id = $4, customer_name = $5, supplier_id = $6, supplier_name = $7, invoice_number = $8, cheque_number = $9, bank_name = $10, cheque_date = $11, amount = $12, status = $13, bounce_reason = $14, bounce_date = $15, notes = $16 WHERE id = $17`,
+      [cheque.type || 'received', cheque.saleId || '', cheque.purchaseId || '', cheque.customerId || '', cheque.customerName || '', cheque.supplierId || '', cheque.supplierName || '', cheque.invoiceNumber || '', cheque.chequeNumber, cheque.bankName, cheque.chequeDate, cheque.amount, cheque.status, cheque.bounceReason || '', cheque.bounceDate || '', cheque.notes || '', cheque.id]
+    );
+  },
+
+  async deleteCheque(id: string): Promise<void> {
+    const db = await getDb();
+    await db.query('DELETE FROM cheques WHERE id = $1', [id]);
   },
 
   // ---- Purchases ----
@@ -557,17 +691,51 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `INSERT INTO purchases (id, po_number, supplier, supplier_invoice, phone, date, expected_delivery, received_date, item_count, subtotal, gst_rate, gst_amount, grand_total, payment_status, payment_method, status, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-      [po.id, po.poNumber, po.supplier, po.supplierInvoice, po.phone, po.date, po.expectedDelivery, po.receivedDate, po.itemCount, po.subtotal, po.gstRate, po.gstAmount, po.grandTotal, po.paymentStatus, po.paymentMethod, po.status, po.notes],
+      `INSERT INTO purchases (id, po_number, supplier, supplier_invoice, phone, date, due_date, expected_delivery, received_date, item_count, subtotal, gst_rate, gst_amount, grand_total, amount_paid, payment_status, payment_method, status, notes, cheque_no, cheque_bank, cheque_date, cheque_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+      [po.id, po.poNumber, po.supplier, po.supplierInvoice, po.phone, po.date, po.dueDate || '', po.expectedDelivery, po.receivedDate, po.itemCount, po.subtotal, po.gstRate, po.gstAmount, po.grandTotal, po.amountPaid || (po.paymentStatus === 'Paid' ? po.grandTotal : 0), po.paymentStatus, po.paymentMethod, po.status, po.notes, po.chequeNo || '', po.chequeBank || '', po.chequeDate || '', po.chequeStatus || ''],
     );
     for (let i = 0; i < po.items.length; i++) {
       const item = po.items[i];
       await db.query(
-        'INSERT INTO purchase_items (purchase_id, product_id, name, cost, qty, gst_rate, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [po.id, item.productId, item.name, item.cost, item.qty, item.gstRate, i],
+        'INSERT INTO purchase_items (purchase_id, product_id, name, cost, qty, gst_rate, is_new_product, category, rack_number, size, selling_price, box_capacity, reorder_level, hsn_code, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+        [po.id, item.productId, item.name, item.cost, item.qty, item.gstRate, Boolean(item.isNewProduct), item.category || '', item.rackNumber || '', item.size || '', item.sellingPrice || 0, item.boxCapacity ?? 1000, item.reorderLevel ?? 100, item.hsnCode || '', i],
       );
     }
+  },
+
+  async updatePurchase(po: PurchaseRecord): Promise<void> {
+    validateNonEmpty(po.poNumber, 'PO number');
+    validateNonEmpty(po.supplier, 'Supplier name');
+    validateNonEmpty(po.date, 'Date');
+    validateNonNegative(po.subtotal, 'Subtotal');
+    validateNonNegative(po.gstAmount, 'GST amount');
+    validateNonNegative(po.grandTotal, 'Grand total');
+    for (const item of po.items) {
+      validateNonNegative(item.cost, 'Item cost');
+      if (item.qty <= 0) throw new Error('Item quantity must be greater than zero');
+    }
+    const db = await getDb();
+    await db.query(
+      `UPDATE purchases SET po_number=$1, supplier=$2, supplier_invoice=$3, phone=$4, date=$5, due_date=$6, expected_delivery=$7, received_date=$8, item_count=$9, subtotal=$10, gst_rate=$11, gst_amount=$12, grand_total=$13, amount_paid=$14, payment_status=$15, payment_method=$16, status=$17, notes=$18, cheque_no=$19, cheque_bank=$20, cheque_date=$21, cheque_status=$22 WHERE id=$23`,
+      [po.poNumber, po.supplier, po.supplierInvoice, po.phone, po.date, po.dueDate || '', po.expectedDelivery, po.receivedDate, po.itemCount, po.subtotal, po.gstRate, po.gstAmount, po.grandTotal, po.amountPaid || (po.paymentStatus === 'Paid' ? po.grandTotal : 0), po.paymentStatus, po.paymentMethod, po.status, po.notes, po.chequeNo || '', po.chequeBank || '', po.chequeDate || '', po.chequeStatus || '', po.id],
+    );
+    await db.query('DELETE FROM purchase_items WHERE purchase_id = $1', [po.id]);
+    for (let i = 0; i < po.items.length; i++) {
+      const item = po.items[i];
+      await db.query(
+        'INSERT INTO purchase_items (purchase_id, product_id, name, cost, qty, gst_rate, is_new_product, category, rack_number, size, selling_price, box_capacity, reorder_level, hsn_code, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+        [po.id, item.productId, item.name, item.cost, item.qty, item.gstRate, Boolean(item.isNewProduct), item.category || '', item.rackNumber || '', item.size || '', item.sellingPrice || 0, item.boxCapacity ?? 1000, item.reorderLevel ?? 100, item.hsnCode || '', i],
+      );
+    }
+  },
+
+  async updatePurchasePayment(id: string, paymentStatus: PurchaseRecord['paymentStatus'], amountPaid: number, paymentMethod: PurchasePaymentMethod, chequeNo = '', chequeBank = '', chequeDate = '', chequeStatus = ''): Promise<void> {
+    const db = await getDb();
+    await db.query(
+      'UPDATE purchases SET payment_status=$1, amount_paid=$2, payment_method=$3, cheque_no=$4, cheque_bank=$5, cheque_date=$6, cheque_status=$7 WHERE id=$8',
+      [paymentStatus, amountPaid, paymentMethod, chequeNo, chequeBank, chequeDate, chequeStatus, id],
+    );
   },
 
   async updatePurchaseStatus(id: string, status: PurchaseRecord['status']): Promise<void> {
@@ -588,6 +756,7 @@ export const api = {
   async deletePurchase(id: string): Promise<void> {
     const db = await getDb();
     await db.query('DELETE FROM purchases WHERE id = $1', [id]);
+    await db.query('DELETE FROM cheques WHERE purchase_id = $1', [id]);
   },
 
   // ---- Verifications ----
@@ -690,6 +859,7 @@ export const api = {
     }
     const db = await getDb();
     await db.exec(`
+      DELETE FROM cheques;
       DELETE FROM sale_items;
       DELETE FROM purchase_items;
       DELETE FROM verifications;
@@ -701,7 +871,7 @@ export const api = {
       DELETE FROM categories;
     `);
 
-    const insertOrder = ['products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items', 'verifications', 'categories'];
+    const insertOrder = ['products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items', 'verifications', 'categories', 'cheques'];
     for (const table of insertOrder) {
       const rows = data[table];
       if (!rows || rows.length === 0) continue;

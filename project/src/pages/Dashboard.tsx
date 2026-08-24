@@ -4,7 +4,7 @@ import {
   ShoppingCart, Package, TrendingUp, AlertTriangle, Download, Truck,
   IndianRupee, XCircle, FileText, ClipboardCheck, ArrowRight, Clock,
   PackageCheck, Boxes, Plus, FileSpreadsheet, Users, Building2, CheckCircle2, Wallet,
-  MessageCircle, Eye, Printer, ExternalLink
+  MessageCircle, Eye, Printer, ExternalLink, Landmark
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -15,13 +15,22 @@ import { printInvoice } from '@/components/PrintableInvoice';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { products, sales, purchases, verifications, customers, suppliers } = useStore();
+  const { products, sales, purchases, verifications, customers, suppliers, cheques } = useStore();
 
   const [activeModal, setActiveModal] = useState<
     'todaySales' | 'todayPurchases' | 'todayCollections' | 'receivables' | 'supplierPayables' | 'lowStock' | 'outOfStock' | null
   >(null);
 
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const claimableCheques = useMemo(
+    () => (cheques || []).filter((c) => c.status === 'pending_clearance' && c.chequeDate <= todayStr),
+    [cheques, todayStr]
+  );
+  const claimableTotal = useMemo(
+    () => claimableCheques.reduce((sum, c) => sum + c.amount, 0),
+    [claimableCheques]
+  );
 
   const stats = useMemo(() => {
     // Today's Sales
@@ -158,6 +167,38 @@ export default function Dashboard() {
           </Link>
         </div>
       </div>
+
+      {/* Cheque Deposit & Claimable Alert Banner */}
+      {claimableCheques.length > 0 && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black animate-pulse">
+              <Landmark className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-black text-sm text-amber-950">
+                  🔔 {claimableCheques.length} Cheque{claimableCheques.length > 1 ? 's' : ''} Claimable Today ({money(claimableTotal)})
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-200 text-amber-900 uppercase">
+                  Action Required
+                </span>
+              </div>
+              <p className="text-xs text-amber-800 font-medium mt-0.5">
+                Customer cheques have reached their realization date and are ready for bank deposit or clearance confirmation.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/sales')}
+            className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+          >
+            <span>Open Cheque Tracker</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Today's High Priority Metrics Banner (Fully Interactive Cards) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

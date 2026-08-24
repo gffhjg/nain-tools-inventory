@@ -41,6 +41,10 @@ export function computeStats(products: Product[], sales: SaleRecord[], purchases
     .filter((s) => s.status !== 'draft' && s.status !== 'cancelled')
     .reduce((sum, sale) => {
     return sum + sale.items.reduce((s, item) => {
+      // If item is custom or has specific sourcing cost recorded
+      if (item.isCustom || (item.cost !== undefined && item.cost > 0)) {
+        return s + (item.cost || 0) * item.qty;
+      }
       const product = products.find((p) => p.id === item.productId);
       return s + (product ? product.cost * item.qty : 0);
     }, 0);
@@ -70,10 +74,11 @@ export function topSellingProducts(sales: SaleRecord[], limit = 5) {
   for (const sale of sales) {
     if (sale.status === 'draft' || sale.status === 'cancelled') continue;
     for (const item of sale.items) {
-      const existing = map.get(item.productId) ?? { productId: item.productId, name: item.name, sold: 0, revenue: 0 };
+      const key = item.isCustom ? `custom_${item.name}` : item.productId;
+      const existing = map.get(key) ?? { productId: key, name: item.name, sold: 0, revenue: 0 };
       existing.sold += item.qty;
       existing.revenue += item.price * item.qty;
-      map.set(item.productId, existing);
+      map.set(key, existing);
     }
   }
   return Array.from(map.values())
@@ -100,8 +105,13 @@ export function categoryBreakdownFromSales(sales: SaleRecord[], products: Produc
   for (const sale of sales) {
     if (sale.status === 'draft' || sale.status === 'cancelled') continue;
     for (const item of sale.items) {
-      const product = products.find((p) => p.id === item.productId);
-      const category = product?.category ?? 'Other';
+      let category = 'Other';
+      if (item.isCustom) {
+        category = 'Custom & Sourced';
+      } else {
+        const product = products.find((p) => p.id === item.productId);
+        category = product?.category ?? 'Other';
+      }
       const existing = map.get(category) ?? { category, count: 0, revenue: 0 };
       existing.count += item.qty;
       existing.revenue += item.price * item.qty;

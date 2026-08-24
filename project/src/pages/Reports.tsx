@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
-import { Download, Calendar, Printer, TrendingUp, TrendingDown, DollarSign, Package, Percent, ShoppingCart, Truck, FileText, BarChart3, AlertTriangle, Trophy, Wallet, Users, IndianRupee, CheckCircle2, Clock } from 'lucide-react';
+import { Download, Calendar, Printer, TrendingUp, TrendingDown, DollarSign, Package, Percent, ShoppingCart, Truck, FileText, BarChart3, AlertTriangle, Trophy, Wallet, Users, IndianRupee, CheckCircle2, Clock, Landmark } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import { useStore } from '@/store/AppStore';
-import type { SaleRecord, PurchaseRecord, Product } from '@/lib/types';
+import type { SaleRecord, PurchaseRecord, Product, ChequeRecord } from '@/lib/types';
 import { computeDiscountAmount } from '@/lib/constants';
 import {
   computeStats, topSellingProducts, filterByDateRange,
@@ -11,11 +11,12 @@ import {
   type DateRange,
 } from '@/utils/analytics';
 
-type ReportType = 'sales' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding';
+type ReportType = 'sales' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding' | 'cheques';
 
 const reportTypes: { id: ReportType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'sales', label: 'Sales Report', icon: ShoppingCart },
   { id: 'purchase', label: 'Purchase Report', icon: Truck },
+  { id: 'cheques', label: 'Cheque Register', icon: Landmark },
   { id: 'inventory', label: 'Inventory Report', icon: Package },
   { id: 'profit', label: 'Profit / Loss', icon: Wallet },
   { id: 'gst', label: 'GST Report', icon: Percent },
@@ -33,13 +34,23 @@ const dateRanges: { id: DateRange; label: string }[] = [
 ];
 
 export default function Reports() {
-  const { products, sales, purchases, customers, suppliers } = useStore();
+  const { products, sales, purchases, customers, suppliers, cheques, confirmChequeClearance, confirmChequeBounce } = useStore();
 
   const [activeReport, setActiveReport] = useState<ReportType>('sales');
   const [dateRange, setDateRange] = useState<DateRange>('all');
 
   const filteredSales = useMemo(() => filterByDateRange(sales, dateRange), [sales, dateRange]);
   const filteredPurchases = useMemo(() => filterByDateRange(purchases, dateRange), [purchases, dateRange]);
+
+  const filteredCheques = useMemo(() => {
+    if (dateRange === 'all') return cheques;
+    const now = new Date();
+    const days = dateRange === '7d' ? 7 : dateRange === '30d' ? 30 : 90;
+    const cutoff = new Date(now);
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    return cheques.filter((c) => c.chequeDate >= cutoffStr);
+  }, [cheques, dateRange]);
 
   const stats = useMemo(() => computeStats(products, filteredSales, filteredPurchases), [products, filteredSales, filteredPurchases]);
   const topProducts = useMemo(() => topSellingProducts(filteredSales, 10), [filteredSales]);
@@ -121,8 +132,20 @@ export default function Reports() {
           { label: 'Total POs', value: String(totalPurchases), icon: FileText, tone: 'bg-slate-100 text-slate-600' },
         ];
       }
+      case 'cheques': {
+        const totalVal = filteredCheques.reduce((s, c) => s + c.amount, 0);
+        const clearedVal = filteredCheques.filter((c) => c.status === 'cleared').reduce((s, c) => s + c.amount, 0);
+        const pendingVal = filteredCheques.filter((c) => c.status === 'pending_clearance').reduce((s, c) => s + c.amount, 0);
+        const bouncedVal = filteredCheques.filter((c) => c.status === 'bounced').reduce((s, c) => s + c.amount, 0);
+        return [
+          { label: 'Total Cheques Registered', value: String(filteredCheques.length), icon: Landmark, tone: 'bg-brand-50 text-brand-600' },
+          { label: 'Total Value', value: money(totalVal), icon: DollarSign, tone: 'bg-slate-100 text-slate-800' },
+          { label: 'Cleared Value', value: money(clearedVal), icon: CheckCircle2, tone: 'bg-emerald-50 text-emerald-600' },
+          { label: 'Pending Clearance', value: money(pendingVal), icon: Clock, tone: 'bg-amber-50 text-amber-600' },
+        ];
+      }
     }
-  }, [activeReport, stats, filteredSales, filteredPurchases, products, topProducts, sales, purchases]);
+  }, [activeReport, stats, filteredSales, filteredPurchases, products, topProducts, sales, purchases, filteredCheques]);
 
   const handleExportCSV = () => {
     let rows: Record<string, string | number>[] = [];
@@ -233,6 +256,21 @@ export default function Reports() {
           Supplier: s.name, 'Pending POs': s.count, 'Payable Amount': s.total.toFixed(2),
         }));
         filename = 'supplier-outstanding.csv';
+        break;
+      }
+      case 'cheques': {
+        rows = filteredCheques.map((c) => ({
+          'Cheque Number': c.chequeNumber,
+          Type: c.type === 'issued' ? 'Outward (To Supplier)' : 'Inward (From Customer)',
+          Party: c.type === 'issued' ? (c.supplierName || '—') : (c.customerName || '—'),
+          Bank: c.bankName,
+          'Cheque Date': c.chequeDate,
+          'Reference Doc': c.invoiceNumber || '—',
+          Amount: c.amount.toFixed(2),
+          Status: c.status === 'cleared' ? 'Cleared' : c.status === 'bounced' ? 'Bounced' : 'Pending Clearance',
+          'Bounce Reason': c.bounceReason || '',
+        }));
+        filename = 'cheques-register-report.csv';
         break;
       }
     }
@@ -363,6 +401,16 @@ export default function Reports() {
         bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Payable</span><span>${money(totalPayable)}</span></div></div>`;
         break;
       }
+      case 'cheques': {
+        bodyHTML += '<table><thead><tr><th>Cheque #</th><th>Type</th><th>Party</th><th>Bank</th><th>Due Date</th><th style="text-align:right;">Amount</th><th>Status</th></tr></thead><tbody>';
+        for (const c of filteredCheques) {
+          const party = c.type === 'issued' ? (c.supplierName || c.customerName) : c.customerName;
+          bodyHTML += `<tr><td style="font-weight:600;">#${escapeHtml(c.chequeNumber)}</td><td>${c.type === 'issued' ? 'Outward (Supplier)' : 'Inward (Customer)'}</td><td>${escapeHtml(party || '—')}</td><td>${escapeHtml(c.bankName)}</td><td>${escapeHtml(c.chequeDate)}</td><td style="text-align:right;font-weight:600;">${money(c.amount)}</td><td>${escapeHtml(c.status)}</td></tr>`;
+        }
+        bodyHTML += '</tbody></table>';
+        bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Cheque Value</span><span>${money(filteredCheques.reduce((s, c) => s + c.amount, 0))}</span></div></div>`;
+        break;
+      }
     }
 
     printReport(reportLabel, subtitle, bodyHTML);
@@ -452,6 +500,13 @@ export default function Reports() {
       <div className="mt-6">
         {activeReport === 'sales' && <SalesReport sales={filteredSales} />}
         {activeReport === 'purchase' && <PurchaseReport purchases={filteredPurchases} />}
+        {activeReport === 'cheques' && (
+          <ChequesReport
+            cheques={filteredCheques}
+            onClear={confirmChequeClearance}
+            onBounce={confirmChequeBounce}
+          />
+        )}
         {activeReport === 'inventory' && <InventoryReport products={products} />}
         {activeReport === 'profit' && <ProfitReport sales={filteredSales} products={products} />}
         {activeReport === 'lowstock' && <LowStockReport products={products} />}
@@ -1393,6 +1448,303 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ChequesReport({
+  cheques,
+  onClear,
+  onBounce,
+}: {
+  cheques: ChequeRecord[];
+  onClear?: (id: string) => Promise<void>;
+  onBounce?: (id: string, reason: string) => Promise<void>;
+}) {
+  const [filterType, setFilterType] = useState<'all' | 'received' | 'issued'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending_clearance' | 'cleared' | 'bounced'>('all');
+  const [search, setSearch] = useState('');
+  const [bouncingCheque, setBouncingCheque] = useState<ChequeRecord | null>(null);
+  const [bounceReasonInput, setBounceReasonInput] = useState('Insufficient funds / Signature mismatch');
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    return cheques.filter((c) => {
+      if (filterType !== 'all' && c.type !== filterType) return false;
+      if (filterStatus !== 'all' && c.status !== filterStatus) return false;
+      if (!q) return true;
+      const party = (c.type === 'issued' ? c.supplierName : c.customerName) || '';
+      return (
+        c.chequeNumber.toLowerCase().includes(q) ||
+        c.bankName.toLowerCase().includes(q) ||
+        party.toLowerCase().includes(q) ||
+        (c.invoiceNumber && c.invoiceNumber.toLowerCase().includes(q))
+      );
+    });
+  }, [cheques, filterType, filterStatus, search]);
+
+  const summary = useMemo(() => {
+    const totalAmount = filtered.reduce((s, c) => s + c.amount, 0);
+    const inwardTotal = filtered.filter((c) => c.type === 'received').reduce((s, c) => s + c.amount, 0);
+    const outwardTotal = filtered.filter((c) => c.type === 'issued').reduce((s, c) => s + c.amount, 0);
+    const clearedTotal = filtered.filter((c) => c.status === 'cleared').reduce((s, c) => s + c.amount, 0);
+    const pendingTotal = filtered.filter((c) => c.status === 'pending_clearance').reduce((s, c) => s + c.amount, 0);
+    const bouncedTotal = filtered.filter((c) => c.status === 'bounced').reduce((s, c) => s + c.amount, 0);
+    return { totalAmount, inwardTotal, outwardTotal, clearedTotal, pendingTotal, bouncedTotal };
+  }, [filtered]);
+
+  if (cheques.length === 0) return <EmptyReport />;
+
+  return (
+    <div className="space-y-4">
+      {/* Controls & Filter Bar */}
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Inward vs Outward */}
+          <div className="flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+            {[
+              { id: 'all', label: 'All Cheques' },
+              { id: 'received', label: 'Inward (From Customers)' },
+              { id: 'issued', label: 'Outward (To Suppliers)' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setFilterType(tab.id as typeof filterType)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition ${
+                  filterType === tab.id ? 'bg-white text-brand-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Status Filter */}
+          <div className="flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+            {[
+              { id: 'all', label: 'All Status' },
+              { id: 'pending_clearance', label: 'Pending' },
+              { id: 'cleared', label: 'Cleared' },
+              { id: 'bounced', label: 'Bounced' },
+            ].map((st) => (
+              <button
+                key={st.id}
+                onClick={() => setFilterStatus(st.id as typeof filterStatus)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition ${
+                  filterStatus === st.id ? 'bg-white text-brand-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Search */}
+        <div className="relative w-full sm:w-64">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search cheque #, bank, party…"
+            className="input w-full pl-3 pr-3 text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Mini Summary Strip */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="card p-3.5 bg-gradient-to-br from-slate-50 to-white">
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Filtered Value</span>
+          <p className="text-lg font-extrabold text-slate-900 mt-0.5 tabular-nums">{money(summary.totalAmount)}</p>
+          <span className="text-[10px] text-slate-400 font-medium">{filtered.length} Cheques</span>
+        </div>
+        <div className="card p-3.5 bg-gradient-to-br from-emerald-50/50 to-white border-emerald-100">
+          <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">Cleared & Realised</span>
+          <p className="text-lg font-extrabold text-emerald-700 mt-0.5 tabular-nums">{money(summary.clearedTotal)}</p>
+          <span className="text-[10px] text-emerald-600 font-medium">{filtered.filter((c) => c.status === 'cleared').length} Cleared</span>
+        </div>
+        <div className="card p-3.5 bg-gradient-to-br from-amber-50/50 to-white border-amber-100">
+          <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider">In Hand / Pending</span>
+          <p className="text-lg font-extrabold text-amber-700 mt-0.5 tabular-nums">{money(summary.pendingTotal)}</p>
+          <span className="text-[10px] text-amber-600 font-medium">{filtered.filter((c) => c.status === 'pending_clearance').length} Awaiting Clearing</span>
+        </div>
+        <div className="card p-3.5 bg-gradient-to-br from-rose-50/50 to-white border-rose-100">
+          <span className="text-[11px] font-bold text-rose-800 uppercase tracking-wider">Bounced / Returned</span>
+          <p className="text-lg font-extrabold text-rose-700 mt-0.5 tabular-nums">{money(summary.bouncedTotal)}</p>
+          <span className="text-[10px] text-rose-600 font-medium">{filtered.filter((c) => c.status === 'bounced').length} Dishonoured</span>
+        </div>
+      </div>
+
+      {/* Cheques Table */}
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[900px]">
+            <thead className="bg-slate-50/80">
+              <tr>
+                <th className="table-th">Cheque #</th>
+                <th className="table-th">Type</th>
+                <th className="table-th">Party Name</th>
+                <th className="table-th">Bank Name</th>
+                <th className="table-th">Realisation Date</th>
+                <th className="table-th">Ref Doc #</th>
+                <th className="table-th text-right">Amount</th>
+                <th className="table-th text-center">Status</th>
+                <th className="table-th text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map((chq) => {
+                const isCleared = chq.status === 'cleared';
+                const isBounced = chq.status === 'bounced';
+                const isClaimableToday = chq.status === 'pending_clearance' && chq.chequeDate <= new Date().toISOString().slice(0, 10);
+                const party = (chq.type === 'issued' ? chq.supplierName : chq.customerName) || chq.customerName || '—';
+
+                return (
+                  <tr key={chq.id} className="transition hover:bg-slate-50/50">
+                    <td className="table-td font-mono font-bold text-slate-800">
+                      #{chq.chequeNumber}
+                    </td>
+                    <td className="table-td">
+                      <span
+                        className={`badge font-bold text-[11px] ${
+                          chq.type === 'issued'
+                            ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                            : 'bg-blue-100 text-blue-800 border border-blue-200'
+                        }`}
+                      >
+                        {chq.type === 'issued' ? 'Outward (Supplier)' : 'Inward (Customer)'}
+                      </span>
+                    </td>
+                    <td className="table-td font-semibold text-slate-800">{party}</td>
+                    <td className="table-td text-slate-700 font-medium">{chq.bankName}</td>
+                    <td className="table-td text-slate-600">
+                      <div className="flex items-center gap-1.5">
+                        <span>{chq.chequeDate}</span>
+                        {isClaimableToday && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 animate-pulse">
+                            Claimable Today
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-td font-mono text-slate-500">{chq.invoiceNumber || '—'}</td>
+                    <td className="table-td text-right font-bold tabular-nums text-slate-900">{money(chq.amount)}</td>
+                    <td className="table-td text-center">
+                      {isCleared && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" /> Cleared
+                        </span>
+                      )}
+                      {isBounced && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200" title={chq.bounceReason}>
+                          <AlertTriangle className="w-3 h-3" /> Bounced
+                        </span>
+                      )}
+                      {!isCleared && !isBounced && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                          <Clock className="w-3 h-3" /> In Hand / Pending
+                        </span>
+                      )}
+                    </td>
+                    <td className="table-td text-right">
+                      {!isCleared && !isBounced && onClear && onBounce ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => onClear(chq.id)}
+                            className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition inline-flex items-center gap-1"
+                            title="Mark Cheque Cleared & Banked"
+                          >
+                            <CheckCircle2 className="w-3 h-3" /> Clear
+                          </button>
+                          <button
+                            onClick={() => {
+                              setBouncingCheque(chq);
+                              setBounceReasonInput('Insufficient funds / Signature mismatch');
+                            }}
+                            className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition inline-flex items-center gap-1"
+                            title="Mark Cheque Bounced / Dishonoured"
+                          >
+                            <AlertTriangle className="w-3 h-3" /> Bounce
+                          </button>
+                        </div>
+                      ) : isBounced && chq.bounceReason ? (
+                        <span className="text-[11px] text-rose-600 font-medium">{chq.bounceReason}</span>
+                      ) : (
+                        <span className="text-slate-400 text-xs">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="table-td text-center text-slate-400 py-10">
+                    No cheques match the current filter or search criteria.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-slate-200 bg-slate-50">
+                <td colSpan={6} className="table-td text-right font-semibold text-slate-700">Total Cheque Value:</td>
+                <td className="table-td text-right text-lg font-bold text-slate-900">
+                  {money(summary.totalAmount)}
+                </td>
+                <td colSpan={2}></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      {/* Confirmation Modal for Cheque Bounce */}
+      {bouncingCheque && onBounce && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+          <div className="card w-full max-w-md p-5 space-y-4 animate-scale-in">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="h-10 w-10 rounded-full bg-rose-100 flex items-center justify-center">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900">Confirm Cheque Bounce</h3>
+                <p className="text-xs text-slate-500">Cheque #{bouncingCheque.chequeNumber} · {money(bouncingCheque.amount)}</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Marking this cheque as bounced will update the cheque record and reopen the outstanding balance for{' '}
+              <strong>{bouncingCheque.type === 'issued' ? (bouncingCheque.supplierName || 'supplier') : (bouncingCheque.customerName || 'customer')}</strong>.
+            </p>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Reason for Bounce</label>
+              <input
+                type="text"
+                value={bounceReasonInput}
+                onChange={(e) => setBounceReasonInput(e.target.value)}
+                placeholder="e.g. Insufficient Funds, Signature Mismatch, Stopped by Drawer"
+                className="input text-xs"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button className="btn-secondary text-xs" onClick={() => setBouncingCheque(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary bg-rose-600 hover:bg-rose-700 text-xs"
+                onClick={async () => {
+                  await onBounce(bouncingCheque.id, bounceReasonInput.trim());
+                  setBouncingCheque(null);
+                }}
+              >
+                Confirm Bounce
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

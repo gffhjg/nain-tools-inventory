@@ -106,6 +106,15 @@ CREATE TABLE IF NOT EXISTS sales (
   payment_method text NOT NULL DEFAULT 'Cash',
   status text NOT NULL DEFAULT 'pending',
   channel text NOT NULL DEFAULT 'in-store',
+  due_date text NOT NULL DEFAULT '',
+  payment_terms text NOT NULL DEFAULT '',
+  notes text NOT NULL DEFAULT '',
+  cheque_no text NOT NULL DEFAULT '',
+  cheque_bank text NOT NULL DEFAULT '',
+  cheque_date text NOT NULL DEFAULT '',
+  cheque_status text NOT NULL DEFAULT '',
+  cheque_bounce_reason text NOT NULL DEFAULT '',
+  cheque_bounce_date text NOT NULL DEFAULT '',
   created_at timestamptz DEFAULT now()
 );
 
@@ -116,6 +125,10 @@ CREATE TABLE IF NOT EXISTS sale_items (
   name text NOT NULL,
   price numeric NOT NULL,
   qty integer NOT NULL,
+  cost numeric NOT NULL DEFAULT 0,
+  is_custom boolean NOT NULL DEFAULT false,
+  hsn_code text NOT NULL DEFAULT '',
+  discount numeric NOT NULL DEFAULT 0,
   sort_order integer NOT NULL DEFAULT 0
 );
 
@@ -126,6 +139,7 @@ CREATE TABLE IF NOT EXISTS purchases (
   supplier_invoice text NOT NULL DEFAULT '',
   phone text NOT NULL DEFAULT '',
   date text NOT NULL,
+  due_date text NOT NULL DEFAULT '',
   expected_delivery text NOT NULL DEFAULT '',
   received_date text,
   item_count integer NOT NULL DEFAULT 0,
@@ -133,10 +147,15 @@ CREATE TABLE IF NOT EXISTS purchases (
   gst_rate numeric NOT NULL DEFAULT 18,
   gst_amount numeric NOT NULL DEFAULT 0,
   grand_total numeric NOT NULL DEFAULT 0,
+  amount_paid numeric NOT NULL DEFAULT 0,
   payment_status text NOT NULL DEFAULT 'Pending',
   payment_method text NOT NULL DEFAULT 'Bank Transfer',
   status text NOT NULL DEFAULT 'draft',
   notes text NOT NULL DEFAULT '',
+  cheque_no text NOT NULL DEFAULT '',
+  cheque_bank text NOT NULL DEFAULT '',
+  cheque_date text NOT NULL DEFAULT '',
+  cheque_status text NOT NULL DEFAULT '',
   created_at timestamptz DEFAULT now()
 );
 
@@ -148,6 +167,14 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   cost numeric NOT NULL,
   qty integer NOT NULL,
   gst_rate numeric NOT NULL DEFAULT 18,
+  is_new_product boolean NOT NULL DEFAULT false,
+  category text NOT NULL DEFAULT '',
+  rack_number text NOT NULL DEFAULT '',
+  size text NOT NULL DEFAULT '',
+  selling_price numeric NOT NULL DEFAULT 0,
+  box_capacity integer NOT NULL DEFAULT 1000,
+  reorder_level integer NOT NULL DEFAULT 100,
+  hsn_code text NOT NULL DEFAULT '',
   sort_order integer NOT NULL DEFAULT 0
 );
 
@@ -163,14 +190,35 @@ CREATE TABLE IF NOT EXISTS verifications (
   created_at timestamptz DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS cheques (
+  id text PRIMARY KEY,
+  type text NOT NULL DEFAULT 'received',
+  sale_id text NOT NULL DEFAULT '',
+  purchase_id text NOT NULL DEFAULT '',
+  customer_id text NOT NULL DEFAULT '',
+  customer_name text NOT NULL DEFAULT '',
+  supplier_id text NOT NULL DEFAULT '',
+  supplier_name text NOT NULL DEFAULT '',
+  invoice_number text NOT NULL DEFAULT '',
+  cheque_number text NOT NULL,
+  bank_name text NOT NULL,
+  cheque_date text NOT NULL,
+  amount numeric NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'pending_clearance',
+  bounce_reason text NOT NULL DEFAULT '',
+  bounce_date text NOT NULL DEFAULT '',
+  notes text NOT NULL DEFAULT '',
+  created_at timestamptz DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS _meta (
   key text PRIMARY KEY,
   value text NOT NULL
 );
 
-INSERT INTO _meta (key, value) VALUES ('schema_version', '3')
+INSERT INTO _meta (key, value) VALUES ('schema_version', '5')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
-INSERT INTO _meta (key, value) VALUES ('app_version', '1.2.0')
+INSERT INTO _meta (key, value) VALUES ('app_version', '1.4.0')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 CREATE INDEX IF NOT EXISTS idx_customers_name_lower ON customers (LOWER(name));
@@ -183,6 +231,8 @@ CREATE INDEX IF NOT EXISTS idx_sales_date ON sales (date);
 CREATE INDEX IF NOT EXISTS idx_sales_customer ON sales (customer);
 CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases (date);
 CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases (supplier);
+CREATE INDEX IF NOT EXISTS idx_cheques_date ON cheques (cheque_date);
+CREATE INDEX IF NOT EXISTS idx_cheques_status ON cheques (status);
 
 INSERT INTO company_settings (id) VALUES (1)
 ON CONFLICT (id) DO NOTHING;
@@ -246,7 +296,7 @@ INSERT INTO sale_items (sale_id, product_id, name, price, qty, sort_order) VALUE
 ('s3', 'p2', 'HB 4x20', 2.50, 200, 1),
 ('s4', 'p1', 'HB 3x10', 1.50, 1000, 0),
 ('s4', 'p4', 'M8 Nut', 1.00, 1000, 1),
-('s4', 'p7', 'M8 Washer', 0.75, 1000, 2),
+('s4', 'p7', 'M8 Washer', 1000, 2),
 ('s5', 'p10', 'CSK Screw M8x25', 1.75, 50, 0),
 ('s6', 'p16', 'Rivet Nut M6', 3.00, 100, 0),
 ('s6', 'p8', 'M10 Washer', 1.00, 200, 1),
@@ -286,6 +336,33 @@ ON CONFLICT (id) DO NOTHING;
 `;
 
 async function migrateSchema(db: PGlite): Promise<void> {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS cheques (
+        id text PRIMARY KEY,
+        type text NOT NULL DEFAULT 'received',
+        sale_id text NOT NULL DEFAULT '',
+        purchase_id text NOT NULL DEFAULT '',
+        customer_id text NOT NULL DEFAULT '',
+        customer_name text NOT NULL DEFAULT '',
+        supplier_id text NOT NULL DEFAULT '',
+        supplier_name text NOT NULL DEFAULT '',
+        invoice_number text NOT NULL DEFAULT '',
+        cheque_number text NOT NULL,
+        bank_name text NOT NULL,
+        cheque_date text NOT NULL,
+        amount numeric NOT NULL DEFAULT 0,
+        status text NOT NULL DEFAULT 'pending_clearance',
+        bounce_reason text NOT NULL DEFAULT '',
+        bounce_date text NOT NULL DEFAULT '',
+        notes text NOT NULL DEFAULT '',
+        created_at timestamptz DEFAULT now()
+      );
+    `);
+  } catch (err) {
+    console.error('Error creating cheques table in migration:', err);
+  }
+
   const migrations: { table: string; column: string; type: string; default?: string }[] = [
     { table: 'products', column: 'box_status_mode', type: 'text', default: "'auto'" },
     { table: 'products', column: 'manual_box_status', type: 'text', default: "'Empty'" },
@@ -311,6 +388,37 @@ async function migrateSchema(db: PGlite): Promise<void> {
     { table: 'sales', column: 'bank_ifsc', type: 'text', default: "''" },
     { table: 'sales', column: 'seller_gstin', type: 'text', default: "''" },
     { table: 'sales', column: 'seller_pan', type: 'text', default: "''" },
+    { table: 'sales', column: 'due_date', type: 'text', default: "''" },
+    { table: 'sales', column: 'payment_terms', type: 'text', default: "''" },
+    { table: 'sales', column: 'notes', type: 'text', default: "''" },
+    { table: 'sales', column: 'cheque_no', type: 'text', default: "''" },
+    { table: 'sales', column: 'cheque_bank', type: 'text', default: "''" },
+    { table: 'sales', column: 'cheque_date', type: 'text', default: "''" },
+    { table: 'sales', column: 'cheque_status', type: 'text', default: "''" },
+    { table: 'sales', column: 'cheque_bounce_reason', type: 'text', default: "''" },
+    { table: 'sales', column: 'cheque_bounce_date', type: 'text', default: "''" },
+    { table: 'purchases', column: 'due_date', type: 'text', default: "''" },
+    { table: 'purchases', column: 'amount_paid', type: 'numeric', default: '0' },
+    { table: 'purchases', column: 'cheque_no', type: 'text', default: "''" },
+    { table: 'purchases', column: 'cheque_bank', type: 'text', default: "''" },
+    { table: 'purchases', column: 'cheque_date', type: 'text', default: "''" },
+    { table: 'purchases', column: 'cheque_status', type: 'text', default: "''" },
+    { table: 'cheques', column: 'type', type: 'text', default: "'received'" },
+    { table: 'cheques', column: 'purchase_id', type: 'text', default: "''" },
+    { table: 'cheques', column: 'supplier_id', type: 'text', default: "''" },
+    { table: 'cheques', column: 'supplier_name', type: 'text', default: "''" },
+    { table: 'sale_items', column: 'cost', type: 'numeric', default: '0' },
+    { table: 'sale_items', column: 'is_custom', type: 'boolean', default: 'false' },
+    { table: 'sale_items', column: 'hsn_code', type: 'text', default: "''" },
+    { table: 'sale_items', column: 'discount', type: 'numeric', default: '0' },
+    { table: 'purchase_items', column: 'is_new_product', type: 'boolean', default: 'false' },
+    { table: 'purchase_items', column: 'category', type: 'text', default: "''" },
+    { table: 'purchase_items', column: 'rack_number', type: 'text', default: "''" },
+    { table: 'purchase_items', column: 'size', type: 'text', default: "''" },
+    { table: 'purchase_items', column: 'selling_price', type: 'numeric', default: '0' },
+    { table: 'purchase_items', column: 'box_capacity', type: 'integer', default: '1000' },
+    { table: 'purchase_items', column: 'reorder_level', type: 'integer', default: '100' },
+    { table: 'purchase_items', column: 'hsn_code', type: 'text', default: "''" },
     { table: 'customers', column: 'business_name', type: 'text', default: "''" },
     { table: 'customers', column: 'email', type: 'text', default: "''" },
     { table: 'customers', column: 'state', type: 'text', default: "''" },

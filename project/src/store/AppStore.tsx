@@ -5,6 +5,7 @@ import { useNotifications } from '@/store/NotificationStore';
 import type {
   Product, SaleRecord, PurchaseRecord, VerificationRecord,
   Customer, Supplier, SaleStatus, PurchaseStatus, CompanySettings,
+  ChequeRecord, ChequeStatus,
 } from '@/lib/types';
 
 export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>;
@@ -16,6 +17,7 @@ type StoreContextValue = {
   verifications: VerificationRecord[];
   customers: Customer[];
   suppliers: Supplier[];
+  cheques: ChequeRecord[];
   companySettings: CompanySettings | null;
   loading: boolean;
   error: string | null;
@@ -28,6 +30,9 @@ type StoreContextValue = {
   updateSaleStatus: (id: string, status: SaleStatus, amountPaid: number) => Promise<void>;
   updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string) => Promise<void>;
   addPurchase: (po: PurchaseRecord) => Promise<void>;
+  updatePurchase: (po: PurchaseRecord) => Promise<void>;
+  deletePurchase: (id: string) => Promise<void>;
+  updatePurchasePayment: (id: string, paymentStatus: 'Paid' | 'Pending', amountPaid: number, paymentMethod: import('@/lib/types').PurchasePaymentMethod, chequeNo?: string, chequeBank?: string, chequeDate?: string, chequeStatus?: ChequeStatus) => Promise<void>;
   markPurchaseReceived: (id: string) => Promise<void>;
   updatePurchaseStatus: (id: string, status: PurchaseStatus) => Promise<void>;
   addVerification: (v: VerificationRecord) => Promise<void>;
@@ -38,6 +43,11 @@ type StoreContextValue = {
   addSupplier: (s: Supplier) => Promise<void>;
   updateSupplier: (id: string, s: Supplier) => Promise<void>;
   deleteSupplier: (id: string) => Promise<void>;
+  addCheque: (cheque: ChequeRecord) => Promise<void>;
+  updateCheque: (cheque: ChequeRecord) => Promise<void>;
+  confirmChequeClearance: (chequeId: string) => Promise<void>;
+  confirmChequeBounce: (chequeId: string, reason: string, bounceDate?: string) => Promise<void>;
+  deleteCheque: (id: string) => Promise<void>;
   updateCompanySettings: (s: CompanySettings) => Promise<void>;
 };
 
@@ -50,23 +60,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [verifications, setVerifications] = useState<VerificationRecord[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [cheques, setCheques] = useState<ChequeRecord[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { addNotification } = useNotifications();
   const notifiedStockRef = useRef<Set<string>>(new Set());
+  const notifiedChequesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [p, s, po, v, c, sup, cs] = await Promise.all([
+        const [p, s, po, v, c, sup, chqs, cs] = await Promise.all([
           api.getProducts(),
           api.getSales(),
           api.getPurchases(),
           api.getVerifications(),
           api.getCustomers(),
           api.getSuppliers(),
+          api.getCheques().catch(() => []),
           api.getCompanySettings().catch(() => null),
         ]);
         if (cancelled) return;
@@ -76,6 +89,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setVerifications(v);
         setCustomers(c);
         setSuppliers(sup);
+        setCheques(chqs);
         if (cs) setCompanySettings(cs);
         setLoading(false);
       } catch (err) {
@@ -86,6 +100,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Auto-generate claimable / overdue cheque notifications
+  useEffect(() => {
+    if (loading) return;
+    const today = new Date().toISOString().slice(0, 10);
+    for (const chq of cheques) {
+      if (chq.status !== 'pending_clearance') continue;
+      const key = `${chq.id}:${chq.chequeDate}:${chq.status}`;
+      if (notifiedChequesRef.current.has(key)) continue;
+
+      if (chq.chequeDate <= today) {
+        notifiedChequesRef.current.add(key);
+        const isOverdue = chq.chequeDate < today;
+        addNotification(
+          'info',
+          isOverdue ? 'Cheque Overdue for Deposit' : 'Cheque Claimable Today',
+          `Cheque #${chq.chequeNumber} (${chq.bankName}) for ${chq.customerName} (₹${chq.amount.toLocaleString('en-IN')}) is ${isOverdue ? 'overdue since ' + chq.chequeDate : 'ready to claim/deposit today'}.`,
+        );
+      }
+    }
+  }, [cheques, loading, addNotification]);
 
   // Auto-generate stock notifications
   useEffect(() => {
@@ -138,12 +173,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await api.createSale(sale);
     setSales((prev) => [sale, ...prev]);
     addNotification('success', 'Sale Recorded', `Invoice ${sale.invoice} for ${sale.customer} has been recorded.`);
+
+    if (sale.paymentMethod === 'Cheque' || sale.chequeNo) {
+      const chequeRec: ChequeRecord = {
+        id: `chq_${sale.id}`,
+        saleId: sale.id,
+        customerId: sale.customerId,
+        customerName: sale.customer,
+        invoiceNumber: sale.invoice,
+        chequeNumber: sale.chequeNo || 'CHQ-' + sale.invoice,
+        bankName: sale.chequeBank || 'Bank Cheque',
+        chequeDate: sale.chequeDate || sale.date,
+        amount: sale.amountPaid > 0 ? sale.amountPaid : sale.grandTotal,
+        status: (sale.chequeStatus || 'pending_clearance') as ChequeStatus,
+        bounceReason: sale.chequeBounceReason || '',
+        bounceDate: sale.chequeBounceDate || '',
+        notes: sale.notes || '',
+      };
+      await api.createCheque(chequeRec);
+      setCheques((prev) => [chequeRec, ...prev]);
+    }
+
     if (sale.status !== 'draft' && sale.status !== 'cancelled') {
       const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
       setProducts((prev) =>
         prev.map((p) => {
           const soldQty = sale.items
-            .filter((item) => item.productId === p.id)
+            .filter((item) => !item.isCustom && item.productId === p.id)
             .reduce((sum, item) => sum + item.qty, 0);
           if (soldQty === 0) return p;
           const stock = Math.max(0, p.stock - soldQty);
@@ -169,7 +225,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
         setProducts((prev) =>
           prev.map((p) => {
-            const qty = oldSale.items.filter((i) => i.productId === p.id).reduce((sum, i) => sum + i.qty, 0);
+            const qty = oldSale.items
+              .filter((i) => !i.isCustom && i.productId === p.id)
+              .reduce((sum, i) => sum + i.qty, 0);
             if (qty === 0) return p;
             const stock = p.stock + qty;
             stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
@@ -185,7 +243,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
         setProducts((prev) =>
           prev.map((p) => {
-            const qty = oldSale.items.filter((i) => i.productId === p.id).reduce((sum, i) => sum + i.qty, 0);
+            const qty = oldSale.items
+              .filter((i) => !i.isCustom && i.productId === p.id)
+              .reduce((sum, i) => sum + i.qty, 0);
             if (qty === 0) return p;
             const stock = Math.max(0, p.stock - qty);
             stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
@@ -213,7 +273,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setProducts((prev) =>
         prev.map((p) => {
           const soldQty = sale.items
-            .filter((item) => item.productId === p.id)
+            .filter((item) => !item.isCustom && item.productId === p.id)
             .reduce((sum, item) => sum + item.qty, 0);
           if (soldQty === 0) return p;
           const stock = p.stock + soldQty;
@@ -230,6 +290,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     await api.deleteSale(id);
     setSales((prev) => prev.filter((s) => s.id !== id));
+    setCheques((prev) => prev.filter((c) => c.saleId !== id));
     addNotification('info', 'Invoice Deleted', `Invoice ${sale.invoice} deleted. Item quantities returned to inventory stock.`);
   }, [sales, addNotification]);
 
@@ -243,8 +304,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
     setProducts((prev) =>
       prev.map((p) => {
-        const oldQty = oldActive ? oldSale.items.filter((i) => i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
-        const newQty = newActive ? updatedSale.items.filter((i) => i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
+        const oldQty = oldActive ? oldSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
+        const newQty = newActive ? updatedSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
         const diff = newQty - oldQty;
         if (diff === 0) return p;
         const stock = Math.max(0, p.stock - diff);
@@ -270,11 +331,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [addNotification]);
 
   const applyReceivedStock = useCallback(async (po: PurchaseRecord) => {
+    const existingProducts = await api.getProducts();
     const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
-    setProducts((prev) =>
-      prev.map((p) => {
+    const newProductsToCreate: Product[] = [];
+
+    for (let idx = 0; idx < po.items.length; idx++) {
+      const item = po.items[idx];
+      const match = existingProducts.find(
+        (p) => p.id === item.productId || p.name.trim().toLowerCase() === item.name.trim().toLowerCase()
+      );
+
+      if (!match || item.isNewProduct) {
+        // Auto-add new product directly into Main Inventory
+        const newId = match ? match.id : (item.productId && !item.productId.startsWith('new_') ? item.productId : `p${Date.now()}_${idx}`);
+        if (!match) {
+          try {
+            const created = await api.createProduct(newId, {
+              name: item.name.trim(),
+              category: item.category?.trim() || 'Fasteners',
+              supplier: po.supplier.trim(),
+              rackNumber: item.rackNumber?.trim() || 'General',
+              size: item.size?.trim() || '',
+              cost: item.cost,
+              price: item.sellingPrice && item.sellingPrice > 0 ? item.sellingPrice : +(item.cost * 1.3).toFixed(2),
+              boxCapacity: item.boxCapacity || 1000,
+              reorderLevel: item.reorderLevel || 100,
+              notes: item.isNewProduct ? `Auto-created from PO ${po.poNumber}` : '',
+              image: '',
+              hsnCode: item.hsnCode || '7318150',
+            });
+            // Update initial stock to received qty
+            await api.updateProductStock(newId, item.qty, created.boxCapacity, created.reorderLevel);
+            const computed = withComputed(item.qty, created.boxCapacity, created.reorderLevel);
+            newProductsToCreate.push({
+              ...created,
+              stock: item.qty,
+              boxStatus: computed.boxStatus,
+              status: computed.status,
+            });
+          } catch (err) {
+            console.error('Failed to auto-create new product from purchase:', err);
+          }
+        }
+      }
+    }
+
+    setProducts((prev) => {
+      let nextList = prev.map((p) => {
         const receivedQty = po.items
-          .filter((item) => item.productId === p.id)
+          .filter((item) => item.productId === p.id || item.name.trim().toLowerCase() === p.name.trim().toLowerCase())
           .reduce((sum, item) => sum + item.qty, 0);
         if (receivedQty === 0) return p;
         const stock = p.stock + receivedQty;
@@ -282,8 +387,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
         const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
         return { ...p, stock, boxStatus, status: computed.status };
-      }),
-    );
+      });
+
+      // Append any newly auto-created products
+      if (newProductsToCreate.length > 0) {
+        nextList = [...newProductsToCreate, ...nextList.filter((p) => !newProductsToCreate.some((np) => np.id === p.id))];
+      }
+      return nextList;
+    });
+
     for (const u of stockUpdates) {
       await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
     }
@@ -296,7 +408,80 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (po.status === 'received') {
       await applyReceivedStock(po);
     }
+    if (po.paymentMethod === 'Cheque' || (po.chequeNo && po.chequeNo.trim() !== '')) {
+      const chq: ChequeRecord = {
+        id: `chq-po-${po.id}-${Date.now()}`,
+        type: 'issued',
+        purchaseId: po.id,
+        supplierName: po.supplier,
+        customerName: po.supplier,
+        invoiceNumber: po.poNumber,
+        chequeNumber: po.chequeNo || 'CHQ-PO',
+        bankName: po.chequeBank || 'Company Bank',
+        chequeDate: po.chequeDate || po.date,
+        amount: po.grandTotal,
+        status: po.chequeStatus || 'pending_clearance',
+        notes: `Cheque issued to supplier for PO #${po.poNumber}`,
+      };
+      await api.createCheque(chq);
+      setCheques((prev) => [chq, ...prev]);
+    }
   }, [applyReceivedStock, addNotification]);
+
+  const updatePurchase = useCallback(async (po: PurchaseRecord) => {
+    await api.updatePurchase(po);
+    setPurchases((prev) => prev.map((p) => (p.id === po.id ? po : p)));
+    addNotification('success', 'Purchase Updated', `PO ${po.poNumber} has been updated.`);
+  }, [addNotification]);
+
+  const deletePurchase = useCallback(async (id: string) => {
+    await api.deletePurchase(id);
+    setPurchases((prev) => prev.filter((p) => p.id !== id));
+    setCheques((prev) => prev.filter((c) => c.purchaseId !== id));
+    addNotification('info', 'Purchase Deleted', 'Purchase record removed.');
+  }, [addNotification]);
+
+  const updatePurchasePayment = useCallback(async (
+    id: string,
+    paymentStatus: PurchaseRecord['paymentStatus'],
+    amountPaid: number,
+    paymentMethod: import('@/lib/types').PurchasePaymentMethod,
+    chequeNo = '',
+    chequeBank = '',
+    chequeDate = '',
+    chequeStatus: ChequeStatus = 'pending_clearance'
+  ) => {
+    await api.updatePurchasePayment(id, paymentStatus, amountPaid, paymentMethod, chequeNo, chequeBank, chequeDate, chequeStatus);
+    setPurchases((prev) =>
+      prev.map((p) =>
+        p.id === id
+          ? { ...p, paymentStatus, amountPaid, paymentMethod, chequeNo, chequeBank, chequeDate, chequeStatus }
+          : p
+      )
+    );
+    if (paymentMethod === 'Cheque' && chequeNo) {
+      const po = purchases.find((p) => p.id === id);
+      if (po) {
+        const chq: ChequeRecord = {
+          id: `chq-po-${po.id}-${Date.now()}`,
+          type: 'issued',
+          purchaseId: po.id,
+          supplierName: po.supplier,
+          customerName: po.supplier,
+          invoiceNumber: po.poNumber,
+          chequeNumber: chequeNo,
+          bankName: chequeBank || 'Company Bank',
+          chequeDate: chequeDate || new Date().toISOString().slice(0, 10),
+          amount: amountPaid,
+          status: chequeStatus,
+          notes: `Cheque payment issued for PO #${po.poNumber}`,
+        };
+        await api.createCheque(chq);
+        setCheques((prev) => [chq, ...prev]);
+      }
+    }
+    addNotification('success', 'Payment Recorded', `Payment recorded for purchase.`);
+  }, [purchases, addNotification]);
 
   const markPurchaseReceived = useCallback(async (id: string) => {
     const po = purchases.find((p) => p.id === id);
@@ -309,7 +494,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setPurchases((prev) => prev.map((p) => (p.id === id ? updated : p)));
     await applyReceivedStock(updated);
     await api.markPurchaseReceived(id);
-  }, [purchases, applyReceivedStock]);
+    addNotification('success', 'Purchase Received', `PO ${po.poNumber} marked as received. Main inventory has been updated.`);
+  }, [purchases, applyReceivedStock, addNotification]);
 
   const updatePurchaseStatus = useCallback(async (id: string, status: PurchaseStatus) => {
     const po = purchases.find((p) => p.id === id);
@@ -326,9 +512,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setPurchases((prev) => prev.map((p) => (p.id === id ? updated : p)));
     if (!wasReceived && willBeReceived) {
       await applyReceivedStock(updated);
+      addNotification('success', 'Inventory Updated', `PO ${po.poNumber} received. Stock added to Main Inventory.`);
     }
     await api.updatePurchaseStatus(id, status);
-  }, [purchases, applyReceivedStock]);
+  }, [purchases, applyReceivedStock, addNotification]);
 
   const addVerification = useCallback(async (v: VerificationRecord) => {
     await api.createVerification(v);
@@ -391,6 +578,110 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSuppliers((prev) => prev.filter((x) => x.id !== id));
   }, []);
 
+  const addCheque = useCallback(async (cheque: ChequeRecord) => {
+    await api.createCheque(cheque);
+    setCheques((prev) => [cheque, ...prev]);
+    addNotification('info', 'Cheque Recorded', `Cheque #${cheque.chequeNumber} (${cheque.bankName}) for ${cheque.customerName || cheque.supplierName} recorded.`);
+  }, [addNotification]);
+
+  const updateCheque = useCallback(async (cheque: ChequeRecord) => {
+    await api.updateCheque(cheque);
+    setCheques((prev) => prev.map((c) => (c.id === cheque.id ? cheque : c)));
+    addNotification('success', 'Cheque Updated', `Cheque #${cheque.chequeNumber} updated.`);
+  }, [addNotification]);
+
+  const confirmChequeClearance = useCallback(async (chequeId: string) => {
+    const chq = cheques.find((c) => c.id === chequeId);
+    if (!chq) return;
+
+    await api.updateChequeStatus(chequeId, 'cleared');
+    setCheques((prev) => prev.map((c) => (c.id === chequeId ? { ...c, status: 'cleared' } : c)));
+
+    if (chq.saleId) {
+      const s = sales.find((sale) => sale.id === chq.saleId);
+      if (s) {
+        const updatedSale: SaleRecord = {
+          ...s,
+          chequeStatus: 'cleared',
+          amountPaid: s.grandTotal,
+          status: 'paid',
+        };
+        await api.updateSale(updatedSale);
+        setSales((prev) => prev.map((sale) => (sale.id === s.id ? updatedSale : sale)));
+      }
+    }
+    if (chq.purchaseId) {
+      const po = purchases.find((p) => p.id === chq.purchaseId);
+      if (po) {
+        const updatedPo: PurchaseRecord = {
+          ...po,
+          chequeStatus: 'cleared',
+          amountPaid: po.grandTotal,
+          paymentStatus: 'Paid',
+        };
+        await api.updatePurchase(updatedPo);
+        setPurchases((prev) => prev.map((p) => (p.id === po.id ? updatedPo : p)));
+      }
+    }
+    addNotification(
+      'success',
+      'Cheque Cleared',
+      `Cheque #${chq.chequeNumber} (${chq.bankName}) of ₹${chq.amount.toLocaleString('en-IN')} for ${chq.customerName || chq.supplierName} is confirmed CLEARED and reconciled!`,
+    );
+  }, [cheques, sales, purchases, addNotification]);
+
+  const confirmChequeBounce = useCallback(async (chequeId: string, reason: string, bounceDate?: string) => {
+    const chq = cheques.find((c) => c.id === chequeId);
+    if (!chq) return;
+    const bDate = bounceDate || new Date().toISOString().slice(0, 10);
+
+    await api.updateChequeStatus(chequeId, 'bounced', reason, bDate);
+    setCheques((prev) => prev.map((c) => (c.id === chequeId ? { ...c, status: 'bounced', bounceReason: reason, bounceDate: bDate } : c)));
+
+    if (chq.saleId) {
+      const s = sales.find((sale) => sale.id === chq.saleId);
+      if (s) {
+        const remainingPaid = Math.max(0, (s.amountPaid || 0) - chq.amount);
+        const newStatus: SaleStatus = remainingPaid === 0 ? 'pending' : (remainingPaid >= s.grandTotal ? 'paid' : 'partially-paid');
+        const updatedSale: SaleRecord = {
+          ...s,
+          chequeStatus: 'bounced',
+          chequeBounceReason: reason,
+          chequeBounceDate: bDate,
+          amountPaid: remainingPaid,
+          status: newStatus,
+        };
+        await api.updateSale(updatedSale);
+        setSales((prev) => prev.map((sale) => (sale.id === s.id ? updatedSale : sale)));
+      }
+    }
+    if (chq.purchaseId) {
+      const po = purchases.find((p) => p.id === chq.purchaseId);
+      if (po) {
+        const remainingPaid = Math.max(0, (po.amountPaid || 0) - chq.amount);
+        const updatedPo: PurchaseRecord = {
+          ...po,
+          chequeStatus: 'bounced',
+          amountPaid: remainingPaid,
+          paymentStatus: remainingPaid >= po.grandTotal ? 'Paid' : 'Pending',
+        };
+        await api.updatePurchase(updatedPo);
+        setPurchases((prev) => prev.map((p) => (p.id === po.id ? updatedPo : p)));
+      }
+    }
+    addNotification(
+      'out-of-stock',
+      '🚨 Cheque Bounced (Dishonoured)',
+      `Cheque #${chq.chequeNumber} for ₹${chq.amount.toLocaleString('en-IN')} for ${chq.customerName || chq.supplierName} has BOUNCED (${reason}). Ledger balance updated.`,
+    );
+  }, [cheques, sales, purchases, addNotification]);
+
+  const deleteCheque = useCallback(async (id: string) => {
+    await api.deleteCheque(id);
+    setCheques((prev) => prev.filter((c) => c.id !== id));
+    addNotification('info', 'Cheque Deleted', 'Cheque record removed.');
+  }, [addNotification]);
+
   const updateCompanySettings = useCallback(async (s: CompanySettings) => {
     await api.updateCompanySettings(s);
     setCompanySettings(s);
@@ -399,12 +690,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return (
     <StoreContext.Provider
       value={{
-        products, sales, purchases, verifications, customers, suppliers, companySettings,
+        products, sales, purchases, verifications, customers, suppliers, cheques, companySettings,
         loading, error,
         addProduct, updateProduct, deleteProduct,
-        addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType, addPurchase, markPurchaseReceived, updatePurchaseStatus, addVerification, updateBoxStatusMode,
+        addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
+        addPurchase, updatePurchase, deletePurchase, updatePurchasePayment, markPurchaseReceived, updatePurchaseStatus,
+        addVerification, updateBoxStatusMode,
         addCustomer, updateCustomer, deleteCustomer,
         addSupplier, updateSupplier, deleteSupplier,
+        addCheque, updateCheque, confirmChequeClearance, confirmChequeBounce, deleteCheque,
         updateCompanySettings,
       }}
     >

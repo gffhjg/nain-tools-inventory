@@ -29,18 +29,44 @@ export type InvoiceLineItem = {
   name: string;
   price: number;
   qty: number;
+  cost?: number; // Sourcing or material cost (for Gross Profit & COGS calculations)
+  isCustom?: boolean; // True for one-off/direct-sourced/metal items not saved in inventory catalog
   hsnCode?: string;
   discount?: number;
   discountType?: DiscountType;
 };
 
-export type PaymentMethod = 'Cash' | 'UPI' | 'Card';
+export type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Bank Transfer' | 'Cheque' | 'Credit / Pay Later';
 
 export type SaleStatus = 'draft' | 'paid' | 'partially-paid' | 'pending' | 'cancelled';
 
 export type DiscountType = 'amount' | 'percent';
 
 export type GstType = 'auto' | 'cgst-sgst' | 'igst' | 'exempt';
+
+export type ChequeStatus = 'pending_clearance' | 'cleared' | 'bounced' | 'cancelled';
+export type ChequeType = 'received' | 'issued';
+
+export type ChequeRecord = {
+  id: string;
+  type?: ChequeType; // 'received' (from customer) or 'issued' (to supplier)
+  saleId?: string;
+  purchaseId?: string;
+  customerId?: string;
+  customerName: string;
+  supplierId?: string;
+  supplierName?: string;
+  invoiceNumber: string;
+  chequeNumber: string;
+  bankName: string;
+  chequeDate: string; // realization / claimable date
+  amount: number;
+  status: ChequeStatus;
+  bounceReason?: string;
+  bounceDate?: string;
+  notes?: string;
+  createdAt?: string;
+};
 
 export type SaleRecord = {
   id: string;
@@ -53,6 +79,8 @@ export type SaleRecord = {
   customerState: string;
   customerStateCode: string;
   date: string;
+  dueDate?: string;
+  paymentTerms?: string;
   items: InvoiceLineItem[];
   itemCount: number;
   subtotal: number;
@@ -82,6 +110,13 @@ export type SaleRecord = {
   sellerPan?: string;
   documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE';
   freightCharges?: number;
+  notes?: string;
+  chequeNo?: string;
+  chequeBank?: string;
+  chequeDate?: string;
+  chequeStatus?: ChequeStatus;
+  chequeBounceReason?: string;
+  chequeBounceDate?: string;
 };
 
 export type PurchaseLineItem = {
@@ -90,9 +125,17 @@ export type PurchaseLineItem = {
   cost: number;
   qty: number;
   gstRate: number;
+  isNewProduct?: boolean;
+  category?: string;
+  rackNumber?: string;
+  size?: string;
+  sellingPrice?: number;
+  boxCapacity?: number;
+  reorderLevel?: number;
+  hsnCode?: string;
 };
 
-export type PurchasePaymentMethod = 'Cash' | 'UPI' | 'Bank Transfer';
+export type PurchasePaymentMethod = 'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Credit / Pay Later';
 
 export type PurchaseStatus = 'draft' | 'ordered' | 'partially-received' | 'received' | 'cancelled';
 
@@ -103,6 +146,7 @@ export type PurchaseRecord = {
   supplierInvoice: string;
   phone: string;
   date: string;
+  dueDate?: string;
   expectedDelivery: string;
   receivedDate: string | null;
   items: PurchaseLineItem[];
@@ -111,10 +155,15 @@ export type PurchaseRecord = {
   gstRate: number;
   gstAmount: number;
   grandTotal: number;
+  amountPaid?: number;
   paymentStatus: 'Paid' | 'Pending';
   paymentMethod: PurchasePaymentMethod;
   status: PurchaseStatus;
   notes: string;
+  chequeNo?: string;
+  chequeBank?: string;
+  chequeDate?: string;
+  chequeStatus?: ChequeStatus;
 };
 
 export type VerificationRecord = {

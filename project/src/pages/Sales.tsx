@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   Plus, Search, Download, Eye, ShoppingCart, TrendingUp, Clock, CheckCircle2,
-  Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3, X
+  Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3, X,
+  CreditCard, Calendar, Landmark, AlertOctagon, CheckSquare, XCircle, ArrowUpRight,
+  ShieldCheck, RefreshCw, FileText
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -10,10 +12,20 @@ import { printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeGrandTotal, computeDiscountAmount } from '@/lib/constants';
 import { downloadCSV, toCSV, money } from '@/utils/analytics';
-import type { SaleRecord, SaleStatus, InvoiceLineItem, PaymentMethod, DiscountType, Customer } from '@/lib/types';
+import type { SaleRecord, SaleStatus, InvoiceLineItem, PaymentMethod, DiscountType, Customer, ChequeRecord, ChequeStatus } from '@/lib/types';
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysToDate(dateStr: string, days: number): string {
+  try {
+    const d = new Date(dateStr || new Date());
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return dateStr;
+  }
 }
 
 function nextInvoice(existing: SaleRecord[]): string {
@@ -38,15 +50,27 @@ function nextProformaInvoice(existing: SaleRecord[]): string {
     .filter((s) => s.documentType === 'PROFORMA INVOICE' || s.invoice.startsWith('PI-'))
     .map((s) => parseInt(s.invoice.replace('PI-', ''), 10))
     .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 1000;
+  const max = nums.length ? Math.max(...nums) : 3100;
   return `PI-${max + 1}`;
 }
 
 type DraftLine = InvoiceLineItem;
 
 export default function Sales() {
-  const { sales, products, customers, addSale, updateSale, deleteSale, updateSaleDocumentType, addCustomer, companySettings } = useStore();
+  const {
+    sales, products, customers, cheques,
+    addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
+    addCustomer, addCheque, updateCheque, confirmChequeClearance, confirmChequeBounce, deleteCheque,
+    companySettings
+  } = useStore();
+
+  const [activeSalesSubTab, setActiveSalesSubTab] = useState<'invoices' | 'cheques'>('invoices');
   const [search, setSearch] = useState('');
+  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'paid' | 'pending' | 'partially-paid'>('all');
+
+  // Cheque Realisation Tracker Filter State
+  const [chequeFilter, setChequeFilter] = useState<'all' | 'claimable' | 'pending' | 'cleared' | 'bounced'>('all');
+  const [chequeSearch, setChequeSearch] = useState('');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
@@ -57,10 +81,55 @@ export default function Sales() {
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [discount, setDiscount] = useState(0);
   const [discountType, setDiscountType] = useState<DiscountType>('amount');
+
+  // Payment Options & Pay Later / Credit terms State
+  const [paymentStatusType, setPaymentStatusType] = useState<'paid' | 'pay-later' | 'partial'>('paid');
+  const [partialPaidAmount, setPartialPaidAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
+  const [paymentTerms, setPaymentTerms] = useState('Immediate');
+  const [dueDate, setDueDate] = useState('');
+  const [saleNotes, setSaleNotes] = useState('');
+
+  // Cheque Fields for Invoice Form
+  const [chequeNo, setChequeNo] = useState('');
+  const [chequeBank, setChequeBank] = useState('');
+  const [chequeDate, setChequeDate] = useState(todayISO());
+  const [chequeStatus, setChequeStatus] = useState<ChequeStatus>('pending_clearance');
+
+  // Quick Record Payment Modal State
+  const [recordPaymentModalSale, setRecordPaymentModalSale] = useState<SaleRecord | null>(null);
+  const [recordPaymentAmount, setRecordPaymentAmount] = useState('');
+  const [recordPaymentMethod, setRecordPaymentMethod] = useState<PaymentMethod>('Cash');
+  const [recordChequeNo, setRecordChequeNo] = useState('');
+  const [recordChequeBank, setRecordChequeBank] = useState('');
+  const [recordChequeDate, setRecordChequeDate] = useState(todayISO());
+
+  // Cheque Action Modals State
+  const [clearTargetCheque, setClearTargetCheque] = useState<ChequeRecord | null>(null);
+  const [bounceTargetCheque, setBounceTargetCheque] = useState<ChequeRecord | null>(null);
+  const [bounceReason, setBounceReason] = useState('Insufficient Funds (Funds Insufficient)');
+  const [customBounceReason, setCustomBounceReason] = useState('');
+  const [bounceDate, setBounceDate] = useState(todayISO());
+
+  const [editingCheque, setEditingCheque] = useState<ChequeRecord | null>(null);
+  const [editChequeNo, setEditChequeNo] = useState('');
+  const [editChequeBank, setEditChequeBank] = useState('');
+  const [editChequeDate, setEditChequeDate] = useState('');
+  const [editChequeAmount, setEditChequeAmount] = useState('');
+  const [editChequeNotes, setEditChequeNotes] = useState('');
+
   const [saleStatus, setSaleStatus] = useState<SaleStatus>('paid');
   const [amountPaid, setAmountPaid] = useState(0);
   const [productSearch, setProductSearch] = useState('');
+
+  // Custom / Direct Sourced Item State (Not saved in permanent inventory)
+  const [isAddingCustom, setIsAddingCustom] = useState(false);
+  const [customName, setCustomName] = useState('');
+  const [customPrice, setCustomPrice] = useState('');
+  const [customCost, setCustomCost] = useState('');
+  const [customQty, setCustomQty] = useState('1');
+  const [customHsn, setCustomHsn] = useState('7318150');
+  const [customDiscount, setCustomDiscount] = useState('');
 
   const [viewing, setViewing] = useState<SaleRecord | null>(null);
   const [stockError, setStockError] = useState('');
@@ -123,21 +192,39 @@ export default function Sales() {
   }, []);
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return sales.filter(
+    let list = sales;
+    if (activeFilterTab === 'paid') {
+      list = list.filter((s) => s.status === 'paid');
+    } else if (activeFilterTab === 'pending') {
+      list = list.filter((s) => s.status === 'pending');
+    } else if (activeFilterTab === 'partially-paid') {
+      list = list.filter((s) => s.status === 'partially-paid');
+    }
+
+    const q = search.toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(
       (s) =>
         s.invoice.toLowerCase().includes(q) ||
         s.customer.toLowerCase().includes(q) ||
-        s.phone.toLowerCase().includes(q)
+        s.phone.toLowerCase().includes(q) ||
+        (s.items && s.items.some((i) => i.name.toLowerCase().includes(q)))
     );
-  }, [sales, search]);
+  }, [sales, search, activeFilterTab]);
+
+  const statusCounts = useMemo(() => {
+    const paid = sales.filter((s) => s.status === 'paid').length;
+    const pending = sales.filter((s) => s.status === 'pending').length;
+    const partial = sales.filter((s) => s.status === 'partially-paid').length;
+    return { paid, pending, partial, all: sales.length };
+  }, [sales]);
 
   const summary = useMemo(() => {
     const total = sales.reduce((s, r) => s + r.grandTotal, 0);
     const paid = sales.filter((s) => s.status === 'paid').reduce((s, r) => s + r.grandTotal, 0);
     const outstanding = sales
       .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
-      .reduce((s, r) => s + (r.grandTotal - r.amountPaid), 0);
+      .reduce((s, r) => s + (r.grandTotal - (r.amountPaid || 0)), 0);
     const count = sales.length;
     return { total, paid, outstanding, count };
   }, [sales]);
@@ -184,6 +271,13 @@ export default function Sales() {
 
   const [customerGstin, setCustomerGstin] = useState('');
 
+  const selectedCustomerPendingBalance = useMemo(() => {
+    if (!selectedCustomerId || selectedCustomerId === 'new') return 0;
+    return sales
+      .filter((s) => s.customerId === selectedCustomerId && s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
+      .reduce((sum, s) => sum + (s.grandTotal - (s.amountPaid || 0)), 0);
+  }, [sales, selectedCustomerId]);
+
   const handleCustomerSelect = (custObjId: string) => {
     setSelectedCustomerId(custObjId);
     if (custObjId === '' || custObjId === 'new') {
@@ -226,7 +320,16 @@ export default function Sales() {
     setLines([]);
     setDiscount(0);
     setDiscountType('amount');
+    setPaymentStatusType('paid');
+    setPartialPaidAmount('');
     setPaymentMethod('Cash');
+    setPaymentTerms('Immediate');
+    setDueDate('');
+    setSaleNotes('');
+    setChequeNo('');
+    setChequeBank('');
+    setChequeDate(todayISO());
+    setChequeStatus('pending_clearance');
     setSaleStatus('paid');
     setAmountPaid(0);
     setProductSearch('');
@@ -234,6 +337,13 @@ export default function Sales() {
     setGstRate(18);
     setGstTaxType('local');
     setFreightCharges('0');
+    setCustomName('');
+    setCustomPrice('');
+    setCustomCost('');
+    setCustomQty('1');
+    setCustomHsn('7318150');
+    setCustomDiscount('');
+    setIsAddingCustom(false);
     setEditingSaleId(null);
   };
 
@@ -256,7 +366,20 @@ export default function Sales() {
     setLines(sale.items.map((i) => ({ ...i })));
     setDiscount(sale.discount);
     setDiscountType(sale.discountType || 'percent');
-    setPaymentMethod(sale.paymentMethod || 'Cash');
+    
+    const statusType: 'paid' | 'pay-later' | 'partial' =
+      sale.status === 'paid' ? 'paid' : sale.status === 'partially-paid' ? 'partial' : 'pay-later';
+    setPaymentStatusType(statusType);
+    setPartialPaidAmount(sale.amountPaid > 0 && sale.status === 'partially-paid' ? sale.amountPaid.toString() : '');
+    setPaymentMethod(sale.paymentMethod || (statusType === 'pay-later' ? 'Credit / Pay Later' : 'Cash'));
+    setPaymentTerms(sale.paymentTerms || (statusType === 'pay-later' ? '30 Days' : 'Immediate'));
+    setDueDate(sale.dueDate || '');
+    setSaleNotes(sale.notes || '');
+    setChequeNo(sale.chequeNo || '');
+    setChequeBank(sale.chequeBank || '');
+    setChequeDate(sale.chequeDate || sale.date || todayISO());
+    setChequeStatus(sale.chequeStatus || 'pending_clearance');
+
     setSaleStatus(sale.status || 'paid');
     setAmountPaid(sale.amountPaid);
     setPoNumber(sale.poNumber || '');
@@ -311,9 +434,40 @@ export default function Sales() {
       }
       return [
         ...prev,
-        { productId: product.id, name: product.name, price: product.price, qty: 1, hsnCode: product.hsnCode || '7318150' },
+        { productId: product.id, name: product.name, price: product.price, cost: product.cost, qty: 1, isCustom: false, hsnCode: product.hsnCode || '7318150' },
       ];
     });
+  };
+
+  const addCustomLine = () => {
+    if (!customName.trim()) return;
+    const priceVal = parseFloat(customPrice) || 0;
+    const costVal = parseFloat(customCost) || 0;
+    const qtyVal = parseInt(customQty, 10) || 1;
+    const discVal = parseFloat(customDiscount) || 0;
+    const customId = `custom_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    setLines((prev) => [
+      ...prev,
+      {
+        productId: customId,
+        name: customName.trim(),
+        price: priceVal,
+        cost: costVal,
+        qty: qtyVal,
+        isCustom: true,
+        hsnCode: customHsn.trim() || '7318150',
+        discount: discVal,
+        discountType: 'percent',
+      },
+    ]);
+    setCustomName('');
+    setCustomPrice('');
+    setCustomCost('');
+    setCustomQty('1');
+    setCustomHsn('7318150');
+    setCustomDiscount('');
+    setIsAddingCustom(false);
   };
 
   const updateQty = (productId: string, delta: number) => {
@@ -332,6 +486,12 @@ export default function Sales() {
   const setPrice = (productId: string, price: number) => {
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, price: Math.max(0, price) } : l))
+    );
+  };
+
+  const setCost = (productId: string, cost: number) => {
+    setLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, cost: Math.max(0, cost) } : l))
     );
   };
 
@@ -364,7 +524,7 @@ export default function Sales() {
 
   const stockCheck = useMemo(() => {
     for (const l of lines) {
-      if (l.qty <= 0) continue;
+      if (l.qty <= 0 || l.isCustom || l.productId.startsWith('custom_')) continue;
       const product = products.find((p) => p.id === l.productId);
       if (product && l.qty > product.stock) {
         return { ok: false, name: l.name, available: product.stock, requested: l.qty };
@@ -388,12 +548,32 @@ export default function Sales() {
       return;
     }
 
-    const effectivePaid =
-      saleStatus === 'paid'
-        ? grandTotal
-        : saleStatus === 'draft' || saleStatus === 'cancelled'
-        ? 0
-        : amountPaid;
+    let finalStatus: SaleStatus = 'paid';
+    let finalAmountPaid = grandTotal;
+    let finalPaymentMethod: PaymentMethod = paymentMethod;
+
+    if (documentType === 'PROFORMA INVOICE') {
+      finalStatus = 'draft';
+      finalAmountPaid = 0;
+    } else if (paymentStatusType === 'pay-later') {
+      finalStatus = 'pending';
+      finalAmountPaid = 0;
+      finalPaymentMethod = 'Credit / Pay Later';
+    } else if (paymentStatusType === 'partial') {
+      const parsedPartial = parseFloat(partialPaidAmount) || 0;
+      finalAmountPaid = Math.min(grandTotal, Math.max(0, parsedPartial));
+      if (finalAmountPaid >= grandTotal) {
+        finalStatus = 'paid';
+      } else if (finalAmountPaid > 0) {
+        finalStatus = 'partially-paid';
+      } else {
+        finalStatus = 'pending';
+        finalPaymentMethod = 'Credit / Pay Later';
+      }
+    } else {
+      finalStatus = 'paid';
+      finalAmountPaid = grandTotal;
+    }
 
     // Disambiguated Customer Profile Resolution
     let finalCustId = selectedCustomerId;
@@ -452,6 +632,15 @@ export default function Sales() {
       }
     }
 
+    const calculatedDueDate =
+      finalStatus === 'pending' || finalStatus === 'partially-paid'
+        ? (dueDate || addDaysToDate(date, 30))
+        : '';
+    const calculatedPaymentTerms =
+      finalStatus === 'pending' || finalStatus === 'partially-paid'
+        ? (paymentTerms || '30 Days')
+        : 'Immediate';
+
     const newSale: SaleRecord = {
       id: `s${Date.now()}`,
       invoice: invoiceNumber,
@@ -463,6 +652,9 @@ export default function Sales() {
       customerState: gstTaxType === 'local' ? 'Delhi' : 'Other State',
       customerStateCode: gstTaxType === 'local' ? '07' : '99',
       date,
+      dueDate: calculatedDueDate,
+      paymentTerms: calculatedPaymentTerms,
+      notes: saleNotes.trim(),
       items: lines,
       itemCount: lines.reduce((s, l) => s + l.qty, 0),
       subtotal,
@@ -475,9 +667,9 @@ export default function Sales() {
       igstAmount,
       gstAmount: applyGst ? gstAmount : 0,
       grandTotal,
-      amountPaid: Math.min(grandTotal, Math.max(0, effectivePaid)),
-      paymentMethod,
-      status: saleStatus,
+      amountPaid: Math.min(grandTotal, Math.max(0, finalAmountPaid)),
+      paymentMethod: finalPaymentMethod,
+      status: finalStatus,
       channel: 'in-store',
       poNumber: poNumber.trim(),
       poDate: poDate.trim(),
@@ -492,6 +684,10 @@ export default function Sales() {
       sellerGstin: sellerGstin.trim().toUpperCase(),
       sellerPan: sellerPan.trim().toUpperCase(),
       documentType,
+      chequeNo: chequeNo.trim(),
+      chequeBank: chequeBank.trim(),
+      chequeDate: paymentMethod === 'Cheque' ? (chequeDate || date) : '',
+      chequeStatus: paymentMethod === 'Cheque' ? chequeStatus : undefined,
     };
 
     if (editingSaleId) {
@@ -510,6 +706,67 @@ export default function Sales() {
     setModalOpen(false);
   };
 
+  const openRecordPaymentModal = (sale: SaleRecord) => {
+    setRecordPaymentModalSale(sale);
+    const balance = Math.max(0, sale.grandTotal - (sale.amountPaid || 0));
+    setRecordPaymentAmount(balance.toString());
+    setRecordPaymentMethod('Cash');
+    setRecordChequeNo('');
+    setRecordChequeBank('');
+    setRecordChequeDate(todayISO());
+  };
+
+  const handleRecordPayment = async () => {
+    if (!recordPaymentModalSale) return;
+    const payAmt = parseFloat(recordPaymentAmount) || 0;
+    if (payAmt <= 0) {
+      alert('Please enter a valid payment amount greater than 0.');
+      return;
+    }
+    const currentPaid = recordPaymentModalSale.amountPaid || 0;
+    const newTotalPaid = Math.min(recordPaymentModalSale.grandTotal, currentPaid + payAmt);
+    const newStatus: SaleStatus = newTotalPaid >= recordPaymentModalSale.grandTotal ? 'paid' : 'partially-paid';
+
+    if (recordPaymentMethod === 'Cheque' && recordChequeNo.trim()) {
+      const chequeRec: ChequeRecord = {
+        id: `chq_rec_${Date.now()}`,
+        saleId: recordPaymentModalSale.id,
+        customerId: recordPaymentModalSale.customerId,
+        customerName: recordPaymentModalSale.customer,
+        invoiceNumber: recordPaymentModalSale.invoice,
+        chequeNumber: recordChequeNo.trim(),
+        bankName: recordChequeBank.trim() || 'Bank Cheque',
+        chequeDate: recordChequeDate || todayISO(),
+        amount: payAmt,
+        status: 'pending_clearance',
+        notes: `Installment for invoice ${recordPaymentModalSale.invoice}`,
+      };
+      await addCheque(chequeRec);
+    }
+
+    const updatedSale: SaleRecord = {
+      ...recordPaymentModalSale,
+      amountPaid: newTotalPaid,
+      status: newStatus,
+      paymentMethod: recordPaymentMethod,
+      chequeNo: recordPaymentMethod === 'Cheque' ? recordChequeNo.trim() : recordPaymentModalSale.chequeNo,
+      chequeBank: recordPaymentMethod === 'Cheque' ? recordChequeBank.trim() : recordPaymentModalSale.chequeBank,
+      chequeDate: recordPaymentMethod === 'Cheque' ? recordChequeDate : recordPaymentModalSale.chequeDate,
+      chequeStatus: recordPaymentMethod === 'Cheque' ? 'pending_clearance' : recordPaymentModalSale.chequeStatus,
+    };
+    await updateSale(updatedSale);
+    
+    // Update local viewing state if open
+    if (viewing && viewing.id === recordPaymentModalSale.id) {
+      setViewing(updatedSale);
+    }
+
+    setRecordPaymentModalSale(null);
+    setRecordPaymentAmount('');
+    setRecordChequeNo('');
+    setRecordChequeBank('');
+  };
+
   const openConvertModal = (sale: SaleRecord) => {
     setConvertTargetSale(sale);
     setConvertInvoiceNumber(nextInvoice(sales));
@@ -526,7 +783,110 @@ export default function Sales() {
   const getWhatsAppInvoiceLink = (s: SaleRecord) => {
     const cleanPhone = s.phone.replace(/[^0-9]/g, '');
     const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    const msg = `Hello ${s.customer}, thank you for your business! Your Invoice #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)} is confirmed. Nain Tools & Bolt Co.`;
+    const dueInfo = s.status !== 'paid' ? ` | Unpaid Balance: ${money(s.grandTotal - (s.amountPaid || 0))}` : ' | Paid in Full';
+    const msg = `Hello ${s.customer}, thank you for your business! Your Invoice #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}${dueInfo} is confirmed. Nain Tools & Bolt Co.`;
+    return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
+  };
+
+  const claimableCheques = useMemo(
+    () => cheques.filter((c) => c.status === 'pending_clearance' && c.chequeDate <= todayISO()),
+    [cheques]
+  );
+  const pendingCheques = useMemo(
+    () => cheques.filter((c) => c.status === 'pending_clearance' && c.chequeDate > todayISO()),
+    [cheques]
+  );
+  const clearedCheques = useMemo(
+    () => cheques.filter((c) => c.status === 'cleared'),
+    [cheques]
+  );
+  const bouncedCheques = useMemo(
+    () => cheques.filter((c) => c.status === 'bounced'),
+    [cheques]
+  );
+
+  const chequeSummary = useMemo(() => {
+    const totalAmount = cheques.reduce((sum, c) => sum + c.amount, 0);
+    const claimableAmount = claimableCheques.reduce((sum, c) => sum + c.amount, 0);
+    const pendingAmount = pendingCheques.reduce((sum, c) => sum + c.amount, 0);
+    const clearedAmount = clearedCheques.reduce((sum, c) => sum + c.amount, 0);
+    const bouncedAmount = bouncedCheques.reduce((sum, c) => sum + c.amount, 0);
+    return { totalAmount, claimableAmount, pendingAmount, clearedAmount, bouncedAmount };
+  }, [cheques, claimableCheques, pendingCheques, clearedCheques, bouncedCheques]);
+
+  const filteredCheques = useMemo(() => {
+    const q = chequeSearch.toLowerCase().trim();
+    return cheques.filter((c) => {
+      if (chequeFilter === 'claimable') {
+        if (!(c.status === 'pending_clearance' && c.chequeDate <= todayISO())) return false;
+      } else if (chequeFilter === 'pending') {
+        if (c.status !== 'pending_clearance') return false;
+      } else if (chequeFilter === 'cleared') {
+        if (c.status !== 'cleared') return false;
+      } else if (chequeFilter === 'bounced') {
+        if (c.status !== 'bounced') return false;
+      }
+
+      if (!q) return true;
+      return (
+        c.chequeNumber.toLowerCase().includes(q) ||
+        c.bankName.toLowerCase().includes(q) ||
+        c.customerName.toLowerCase().includes(q) ||
+        c.invoiceNumber.toLowerCase().includes(q) ||
+        (c.bounceReason && c.bounceReason.toLowerCase().includes(q))
+      );
+    });
+  }, [cheques, chequeFilter, chequeSearch]);
+
+  const handleConfirmClearance = async () => {
+    if (!clearTargetCheque) return;
+    await confirmChequeClearance(clearTargetCheque.id);
+    setClearTargetCheque(null);
+  };
+
+  const handleConfirmBounce = async () => {
+    if (!bounceTargetCheque) return;
+    const finalReason = bounceReason === 'Other' ? (customBounceReason.trim() || 'Other Reason') : bounceReason;
+    await confirmChequeBounce(bounceTargetCheque.id, finalReason, bounceDate);
+    setBounceTargetCheque(null);
+    setBounceReason('Insufficient Funds (Funds Insufficient)');
+    setCustomBounceReason('');
+  };
+
+  const openEditChequeModal = (chq: ChequeRecord) => {
+    setEditingCheque(chq);
+    setEditChequeNo(chq.chequeNumber);
+    setEditChequeBank(chq.bankName);
+    setEditChequeDate(chq.chequeDate);
+    setEditChequeAmount(chq.amount.toString());
+    setEditChequeNotes(chq.notes || '');
+  };
+
+  const handleSaveEditCheque = async () => {
+    if (!editingCheque) return;
+    const updated: ChequeRecord = {
+      ...editingCheque,
+      chequeNumber: editChequeNo.trim() || editingCheque.chequeNumber,
+      bankName: editChequeBank.trim() || editingCheque.bankName,
+      chequeDate: editChequeDate || editingCheque.chequeDate,
+      amount: parseFloat(editChequeAmount) || editingCheque.amount,
+      notes: editChequeNotes.trim(),
+    };
+    await updateCheque(updated);
+    setEditingCheque(null);
+  };
+
+  const getWhatsAppChequeLink = (chq: ChequeRecord) => {
+    const cust = customers.find((c) => c.name === chq.customerName);
+    const rawPhone = cust?.phone || '';
+    const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+    const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+    let msg = `Hello ${chq.customerName}, this is regarding Cheque #${chq.chequeNumber} (${chq.bankName}) for amount ${money(chq.amount)}.`;
+    if (chq.status === 'bounced') {
+      msg = `URGENT: Hello ${chq.customerName}, Cheque #${chq.chequeNumber} (${chq.bankName}) for amount ${money(chq.amount)} has BOUNCED (${chq.bounceReason || 'Dishonoured'}). Kindly remit immediate electronic payment. Nain Tools & Bolt Co.`;
+    } else if (chq.status === 'pending_clearance') {
+      msg = `Hello ${chq.customerName}, kindly note that Cheque #${chq.chequeNumber} (${chq.bankName}) of ${money(chq.amount)} is scheduled for bank deposit on ${chq.chequeDate}. Kindly ensure sufficient funds. Thank you, Nain Tools & Bolt Co.`;
+    }
     return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
   };
 
@@ -534,7 +894,7 @@ export default function Sales() {
     <div className="animate-fade-in space-y-6 pb-12">
       <PageHeader
         title="Sales & Invoicing"
-        subtitle="Create GST compliant tax invoices, track sales history, and process customer billing."
+        subtitle="Create GST compliant tax invoices, track credit receivables, and manage cheque clearing & dishonour."
         actions={
           <div className="flex flex-wrap gap-2">
             <button
@@ -559,150 +919,601 @@ export default function Sales() {
         }
       />
 
-      {/* Metric Cards */}
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <div className="card p-5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-            <ShoppingCart className="h-5 w-5" />
-          </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.total)}</p>
-          <p className="mt-1 text-xs text-slate-500 font-medium">Total Sales Revenue</p>
-        </div>
+      {/* Main Sub-Navigation Tabs: Invoices vs Cheques Tracker */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveSalesSubTab('invoices')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition ${
+            activeSalesSubTab === 'invoices'
+              ? 'bg-brand-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100 bg-white border border-slate-200'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>Invoices & Bills</span>
+          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${activeSalesSubTab === 'invoices' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'}`}>
+            {sales.length}
+          </span>
+        </button>
 
-        <div className="card p-5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-            <CheckCircle2 className="h-5 w-5" />
-          </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.paid)}</p>
-          <p className="mt-1 text-xs text-slate-500 font-medium">Total Payments Collected</p>
-        </div>
-
-        <div className="card p-5 border-l-4 border-l-amber-500">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-            <Clock className="h-5 w-5" />
-          </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.outstanding)}</p>
-          <p className="mt-1 text-xs text-amber-600 font-semibold">Overdue Sales Receivables</p>
-        </div>
-
-        <div className="card p-5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-            <TrendingUp className="h-5 w-5" />
-          </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">{summary.count}</p>
-          <p className="mt-1 text-xs text-slate-500 font-medium">Total Invoices Issued</p>
-        </div>
+        <button
+          type="button"
+          onClick={() => setActiveSalesSubTab('cheques')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition ${
+            activeSalesSubTab === 'cheques'
+              ? 'bg-brand-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100 bg-white border border-slate-200'
+          }`}
+        >
+          <Landmark className="w-4 h-4" />
+          <span>Cheques & Realisation Tracker</span>
+          {claimableCheques.length > 0 ? (
+            <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-black animate-pulse flex items-center gap-1">
+              🔔 {claimableCheques.length} Claimable Today
+            </span>
+          ) : (
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${activeSalesSubTab === 'cheques' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'}`}>
+              {cheques.length}
+            </span>
+          )}
+        </button>
       </div>
 
-      {/* Sales List Table */}
-      <div className="card p-6 space-y-4">
-        <div className="relative max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search invoices by invoice number, customer, phone..."
-            className="input pl-9"
-          />
-        </div>
+      {activeSalesSubTab === 'invoices' && (
+        <>
+          {/* Metric Cards */}
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+            <div className="card p-5">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                <ShoppingCart className="h-5 w-5" />
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.total)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-medium">Total Sales Revenue</p>
+            </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className="px-4 py-3 font-bold text-slate-600">Invoice #</th>
-                <th className="px-4 py-3 font-bold text-slate-600">Customer</th>
-                <th className="px-4 py-3 font-bold text-slate-600">Date</th>
-                <th className="px-4 py-3 font-bold text-slate-600">Products</th>
-                <th className="px-4 py-3 font-bold text-slate-600">Total</th>
-                <th className="px-4 py-3 font-bold text-slate-600">Status</th>
-                <th className="px-4 py-3 font-bold text-slate-600 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
-                    No sales invoices found.
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50/80">
-                    <td className="px-4 py-3 font-bold text-brand-600">
-                      <div className="flex items-center gap-1.5">
-                        <span>{s.invoice}</span>
-                        {s.documentType === 'PROFORMA INVOICE' && (
-                          <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700">Proforma</span>
-                        )}
-                        {s.documentType === 'DEBIT NOTE' && (
-                          <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">Debit Note</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="font-bold text-slate-900">{s.customer}</p>
-                      {s.phone && <p className="text-[11px] text-slate-500 font-mono">{s.phone}</p>}
-                    </td>
-                    <td className="px-4 py-3 text-slate-600 font-mono">{s.date}</td>
-                    <td className="px-4 py-3 text-slate-700 font-semibold font-mono">
-                      {s.items && s.items.length > 0 ? s.items.length : s.itemCount}
-                    </td>
-                    <td className="px-4 py-3 font-black text-slate-900">{money(s.grandTotal)}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={s.status} />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {s.phone && (
-                          <a
-                            href={getWhatsAppInvoiceLink(s)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
-                            title="Share Invoice via WhatsApp"
-                          >
-                            <MessageCircle className="h-4 w-4" />
-                          </a>
-                        )}
-                        <button
-                          onClick={() => setViewing(s)}
-                          className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition"
-                          title="View Invoice"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handleEditSale(s)}
-                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                          title="Edit Invoice"
-                        >
-                          <Edit3 className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => printInvoice(s)}
-                          className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
-                          title="Print Tax Invoice"
-                        >
-                          <Printer className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteSale(s)}
-                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"
-                          title="Delete Invoice"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
+            <div className="card p-5">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.paid)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-medium">Total Payments Collected</p>
+            </div>
+
+            <div className="card p-5 border-l-4 border-l-amber-500">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                <Clock className="h-5 w-5" />
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.outstanding)}</p>
+              <p className="mt-1 text-xs text-amber-600 font-semibold">Overdue Sales Receivables</p>
+            </div>
+
+            <div className="card p-5">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+                <TrendingUp className="h-5 w-5" />
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{summary.count}</p>
+              <p className="mt-1 text-xs text-slate-500 font-medium">Total Invoices Issued</p>
+            </div>
+          </div>
+
+          {/* Sales List Table */}
+          <div className="card p-6 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              {/* Status Tabs */}
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+                <button
+                  onClick={() => setActiveFilterTab('all')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                    activeFilterTab === 'all'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  All Invoices ({statusCounts.all})
+                </button>
+                <button
+                  onClick={() => setActiveFilterTab('paid')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    activeFilterTab === 'paid'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-emerald-700 hover:bg-emerald-50'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Paid ({statusCounts.paid})
+                </button>
+                <button
+                  onClick={() => setActiveFilterTab('pending')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    activeFilterTab === 'pending'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'text-amber-700 hover:bg-amber-50'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  Pay Later / Credit ({statusCounts.pending})
+                </button>
+                <button
+                  onClick={() => setActiveFilterTab('partially-paid')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    activeFilterTab === 'partially-paid'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-blue-700 hover:bg-blue-50'
+                  }`}
+                >
+                  <TrendingUp className="w-3.5 h-3.5" />
+                  Partially Paid ({statusCounts.partial})
+                </button>
+              </div>
+
+              <div className="relative max-w-md w-full md:w-80">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by invoice #, customer, phone..."
+                  className="input pl-9"
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-3 font-bold text-slate-600">Invoice #</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Customer</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Date</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Products</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Total</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Payment Status</th>
+                    <th className="px-4 py-3 font-bold text-slate-600 text-right">Actions</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filtered.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
+                        No sales invoices found matching current filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    filtered.map((s) => (
+                      <tr key={s.id} className="hover:bg-slate-50/80">
+                        <td className="px-4 py-3 font-bold text-brand-600">
+                          <div className="flex items-center gap-1.5">
+                            <span>{s.invoice}</span>
+                            {s.documentType === 'PROFORMA INVOICE' && (
+                              <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-bold text-purple-700">Proforma</span>
+                            )}
+                            {s.documentType === 'DEBIT NOTE' && (
+                              <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">Debit Note</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="font-bold text-slate-900">{s.customer}</p>
+                          {s.phone && <p className="text-[11px] text-slate-500 font-mono">{s.phone}</p>}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600 font-mono">{s.date}</td>
+                        <td className="px-4 py-3 text-slate-700 font-semibold font-mono">
+                          {s.items && s.items.length > 0 ? s.items.length : s.itemCount}
+                        </td>
+                        <td className="px-4 py-3 font-black text-slate-900">{money(s.grandTotal)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-0.5 items-start">
+                            <StatusBadge status={s.status} />
+                            {s.status === 'pending' && (
+                              <span className="text-[10px] text-amber-700 font-bold flex items-center gap-0.5 mt-0.5">
+                                <Clock className="w-2.5 h-2.5 text-amber-600" />
+                                {s.dueDate ? `Due: ${s.dueDate}` : 'Pay Later (Full Due)'}
+                              </span>
+                            )}
+                            {s.status === 'partially-paid' && (
+                              <span className="text-[10px] text-blue-700 font-bold mt-0.5">
+                                Paid {money(s.amountPaid || 0)} · Due {money(s.grandTotal - (s.amountPaid || 0))}
+                              </span>
+                            )}
+                            {s.chequeNo && (
+                              <div className="flex flex-wrap items-center gap-1 mt-1 text-[10px] font-bold">
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">
+                                  <Landmark className="w-2.5 h-2.5" />
+                                  Cheque #{s.chequeNo}
+                                </span>
+                                {s.chequeStatus === 'bounced' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-extrabold">
+                                    Bounced
+                                  </span>
+                                ) : s.chequeStatus === 'cleared' ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-extrabold">
+                                    Cleared
+                                  </span>
+                                ) : s.chequeDate && s.chequeDate <= todayISO() ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-black animate-pulse">
+                                    🔔 Claimable
+                                  </span>
+                                ) : s.chequeDate ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                                    Due {s.chequeDate}
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft' && (
+                              <button
+                                onClick={() => openRecordPaymentModal(s)}
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                                title="Collect / Record Payment"
+                              >
+                                <CreditCard className="h-4 w-4" />
+                              </button>
+                            )}
+                            {s.phone && (
+                              <a
+                                href={getWhatsAppInvoiceLink(s)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                                title="Share Invoice via WhatsApp"
+                              >
+                                <MessageCircle className="h-4 w-4" />
+                              </a>
+                            )}
+                            <button
+                              onClick={() => setViewing(s)}
+                              className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                              title="View Invoice"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleEditSale(s)}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                              title="Edit Invoice"
+                            >
+                              <Edit3 className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => printInvoice(s, undefined, companySettings)}
+                              className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
+                              title="Print Tax Invoice"
+                            >
+                              <Printer className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSale(s)}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"
+                              title="Delete Invoice"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Cheques & Realisation Tracker View */}
+      {activeSalesSubTab === 'cheques' && (
+        <div className="space-y-6">
+          {/* Cheque Metric Cards */}
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+            <div className="card p-5 border-l-4 border-l-brand-600">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                <Landmark className="h-5 w-5" />
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{money(chequeSummary.totalAmount)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-medium">Total Registered Cheques ({cheques.length})</p>
+            </div>
+
+            <div className="card p-5 border-l-4 border-l-amber-500 bg-amber-50/20">
+              <div className="flex items-center justify-between">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                  <Clock className="h-5 w-5" />
+                </div>
+                {claimableCheques.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white animate-pulse">
+                    Action Needed
+                  </span>
+                )}
+              </div>
+              <p className="mt-4 text-2xl font-black text-amber-900">{money(chequeSummary.claimableAmount)}</p>
+              <p className="mt-1 text-xs text-amber-700 font-bold">
+                Claimable Today / Overdue ({claimableCheques.length})
+              </p>
+            </div>
+
+            <div className="card p-5 border-l-4 border-l-blue-500">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                <Calendar className="h-5 w-5" />
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{money(chequeSummary.pendingAmount)}</p>
+              <p className="mt-1 text-xs text-blue-600 font-medium">Post-Dated / In-Hand ({pendingCheques.length})</p>
+            </div>
+
+            <div className="card p-5 border-l-4 border-l-emerald-500">
+              <div className="flex items-center justify-between">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                  <CheckCircle2 className="h-5 w-5" />
+                </div>
+                {bouncedCheques.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-700 border border-rose-200">
+                    {bouncedCheques.length} Bounced ({money(chequeSummary.bouncedAmount)})
+                  </span>
+                )}
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{money(chequeSummary.clearedAmount)}</p>
+              <p className="mt-1 text-xs text-emerald-700 font-medium">Cleared & Realised ({clearedCheques.length})</p>
+            </div>
+          </div>
+
+          {/* Cheques List Card */}
+          <div className="card p-6 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              {/* Filter Tabs */}
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+                <button
+                  onClick={() => setChequeFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                    chequeFilter === 'all'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  All Cheques ({cheques.length})
+                </button>
+                <button
+                  onClick={() => setChequeFilter('claimable')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    chequeFilter === 'claimable'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'text-amber-700 hover:bg-amber-50'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  Claimable Today ({claimableCheques.length})
+                </button>
+                <button
+                  onClick={() => setChequeFilter('pending')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    chequeFilter === 'pending'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-blue-700 hover:bg-blue-50'
+                  }`}
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  Pending Deposit ({pendingCheques.length})
+                </button>
+                <button
+                  onClick={() => setChequeFilter('cleared')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    chequeFilter === 'cleared'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-emerald-700 hover:bg-emerald-50'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Cleared ({clearedCheques.length})
+                </button>
+                <button
+                  onClick={() => setChequeFilter('bounced')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    chequeFilter === 'bounced'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'text-rose-700 hover:bg-rose-50'
+                  }`}
+                >
+                  <AlertOctagon className="w-3.5 h-3.5" />
+                  Bounced ({bouncedCheques.length})
+                </button>
+              </div>
+
+              <div className="relative max-w-md w-full md:w-80">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={chequeSearch}
+                  onChange={(e) => setChequeSearch(e.target.value)}
+                  placeholder="Search cheque #, bank, customer, invoice..."
+                  className="input pl-9"
+                />
+              </div>
+            </div>
+
+            {/* Cheques Table */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-3 font-bold text-slate-600">Cheque # & Bank</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Customer</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Linked Invoice</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Realisation Date</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Cheque Amount</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Status</th>
+                    <th className="px-4 py-3 font-bold text-slate-600 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredCheques.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
+                        No cheques found matching current filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredCheques.map((c) => {
+                      const isClaimableNow = c.status === 'pending_clearance' && c.chequeDate <= todayISO();
+                      const linkedSale = sales.find((s) => s.id === c.saleId || s.invoice === c.invoiceNumber);
+
+                      return (
+                        <tr key={c.id} className={`hover:bg-slate-50/80 ${isClaimableNow ? 'bg-amber-50/30' : ''}`}>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center font-bold">
+                                <Landmark className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <p className="font-bold text-slate-900 font-mono text-sm">#{c.chequeNumber}</p>
+                                <p className="text-[11px] text-slate-500 font-semibold">{c.bankName}</p>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <p className="font-bold text-slate-900">{c.customerName}</p>
+                            {c.notes && <p className="text-[11px] text-slate-400 italic truncate max-w-xs">{c.notes}</p>}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {linkedSale ? (
+                              <button
+                                type="button"
+                                onClick={() => setViewing(linkedSale)}
+                                className="font-bold text-brand-600 hover:underline flex items-center gap-1"
+                                title="View linked invoice"
+                              >
+                                <span>{c.invoiceNumber}</span>
+                                <ArrowUpRight className="w-3 h-3" />
+                              </button>
+                            ) : (
+                              <span className="font-mono text-slate-600">{c.invoiceNumber || '—'}</span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3 font-mono">
+                            <div className="flex flex-col">
+                              <span className="font-bold text-slate-900">{c.chequeDate}</span>
+                              {isClaimableNow && (
+                                <span className="text-[10px] font-black text-amber-700 animate-pulse flex items-center gap-0.5">
+                                  🔔 Claimable Today
+                                </span>
+                              )}
+                              {c.status === 'pending_clearance' && c.chequeDate > todayISO() && (
+                                <span className="text-[10px] text-slate-400 font-medium">
+                                  In Hand (Post-Dated)
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <span className="font-black text-slate-900 font-mono text-sm">{money(c.amount)}</span>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {c.status === 'cleared' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                Cleared
+                              </span>
+                            )}
+                            {c.status === 'pending_clearance' && (
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border ${
+                                isClaimableNow
+                                  ? 'bg-amber-100 text-amber-900 border-amber-300 font-black'
+                                  : 'bg-blue-50 text-blue-800 border-blue-200'
+                              }`}>
+                                <Clock className="w-3.5 h-3.5" />
+                                {isClaimableNow ? 'Claimable' : 'Pending Clearance'}
+                              </span>
+                            )}
+                            {c.status === 'bounced' && (
+                              <div className="flex flex-col items-start gap-0.5">
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black bg-rose-100 text-rose-800 border border-rose-300">
+                                  <AlertOctagon className="w-3.5 h-3.5" />
+                                  Bounced
+                                </span>
+                                {c.bounceReason && (
+                                  <span className="text-[10px] text-rose-700 font-medium max-w-xs truncate" title={c.bounceReason}>
+                                    {c.bounceReason}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {c.status === 'pending_clearance' && (
+                                <>
+                                  <button
+                                    onClick={() => setClearTargetCheque(c)}
+                                    className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 flex items-center gap-1 transition"
+                                    title="Confirm Cheque Clearance / Claim Money"
+                                  >
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                    <span>Clear / Claim</span>
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      setBounceTargetCheque(c);
+                                      setBounceReason('Insufficient Funds (Funds Insufficient)');
+                                      setBounceDate(todayISO());
+                                    }}
+                                    className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 flex items-center gap-1 transition"
+                                    title="Mark as Bounced (Dishonoured)"
+                                  >
+                                    <AlertOctagon className="h-3.5 w-3.5 text-rose-600" />
+                                    <span>Bounced</span>
+                                  </button>
+                                </>
+                              )}
+
+                              <a
+                                href={getWhatsAppChequeLink(c)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                                title="Send Cheque Notice / Status via WhatsApp"
+                              >
+                                <MessageCircle className="h-4 w-4" />
+                              </a>
+
+                              <button
+                                onClick={() => openEditChequeModal(c)}
+                                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                title="Edit Cheque Details"
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Delete cheque #${c.chequeNumber} record?`)) {
+                                    deleteCheque(c.id);
+                                  }
+                                }}
+                                className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"
+                                title="Delete Cheque Record"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* New Invoice / Edit Invoice Modal */}
       {modalOpen && (
@@ -870,7 +1681,125 @@ export default function Sales() {
 
             {/* Item Search & Selection */}
             <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-3">
-              <label className="block text-xs font-bold text-slate-700">Add Products to Invoice</label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="block text-xs font-bold text-slate-700">Add Products to Invoice</label>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingCustom(!isAddingCustom)}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 shadow-xs ${
+                    isAddingCustom
+                      ? 'bg-purple-600 text-white border-purple-700'
+                      : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                  }`}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Custom / Direct-Sourced Product</span>
+                </button>
+              </div>
+
+              {/* Inline Custom Product Creator */}
+              {isAddingCustom && (
+                <div className="rounded-xl border-2 border-purple-200 bg-purple-50/40 p-4 space-y-3 animate-fade-in">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                        Custom Metal / Outsourced Product (Non-Inventory)
+                      </h4>
+                      <p className="text-[11px] text-purple-700">
+                        This item will <strong>not</strong> be saved to your product list, but earnings and profit will be added to your Gross Total and Reports.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingCustom(false)}
+                      className="text-purple-400 hover:text-purple-700 p-1"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
+                    <div className="md:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Product Description / Name *</label>
+                      <input
+                        type="text"
+                        value={customName}
+                        onChange={(e) => setCustomName(e.target.value)}
+                        placeholder="e.g. Custom SS 304 Flange 50mm"
+                        className="input bg-white text-xs py-1.5 font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Selling Rate (₹) *</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={customPrice}
+                        onChange={(e) => setCustomPrice(e.target.value)}
+                        placeholder="0.00"
+                        className="input bg-white text-xs py-1.5 font-bold text-slate-800"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1" title="Rate paid to the other seller or metal material cost">
+                        Sourcing Cost (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={customCost}
+                        onChange={(e) => setCustomCost(e.target.value)}
+                        placeholder="0.00"
+                        className="input bg-white text-xs py-1.5 font-semibold text-emerald-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Qty</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={customQty}
+                        onChange={(e) => setCustomQty(e.target.value)}
+                        placeholder="1"
+                        className="input bg-white text-xs py-1.5 text-center font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">HSN Code</label>
+                      <input
+                        type="text"
+                        value={customHsn}
+                        onChange={(e) => setCustomHsn(e.target.value)}
+                        placeholder="7318150"
+                        className="input bg-white text-xs py-1.5 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingCustom(false)}
+                      className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={addCustomLine}
+                      disabled={!customName.trim() || !customPrice}
+                      className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add to Invoice</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="relative">
                 <input
                   type="text"
@@ -891,21 +1820,41 @@ export default function Sales() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[420px] overflow-y-auto pr-1">
-                {searchResults.map((p) => (
+              {/* Search results or prompt to add custom item */}
+              {productSearch.trim() && searchResults.length === 0 ? (
+                <div className="flex flex-col sm:flex-row items-center justify-between p-3 rounded-lg border border-purple-200 bg-purple-50/50 gap-2">
+                  <div className="text-xs text-purple-900">
+                    <span className="font-semibold">No catalog match for &quot;{productSearch}&quot;.</span>
+                    <span className="text-purple-600 block text-[11px]">You can add this as a custom or direct-sourced product.</span>
+                  </div>
                   <button
-                    key={p.id}
-                    onClick={() => addLine(p.id)}
-                    className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-white hover:border-brand-500 hover:bg-brand-50/30 text-left transition"
+                    type="button"
+                    onClick={() => {
+                      setCustomName(productSearch.trim());
+                      setIsAddingCustom(true);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs"
                   >
-                    <div>
-                      <p className="text-xs font-bold text-slate-800">{p.name}</p>
-                      <p className="text-[11px] text-slate-500">Rack {p.rackNumber} · Stock: {p.stock}</p>
-                    </div>
-                    <span className="text-xs font-bold text-brand-600">{money(p.price)}</span>
+                    + Add as Custom Item
                   </button>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[420px] overflow-y-auto pr-1">
+                  {searchResults.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => addLine(p.id)}
+                      className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-white hover:border-brand-500 hover:bg-brand-50/30 text-left transition"
+                    >
+                      <div>
+                        <p className="text-xs font-bold text-slate-800">{p.name}</p>
+                        <p className="text-[11px] text-slate-500">Rack {p.rackNumber} · Stock: {p.stock}</p>
+                      </div>
+                      <span className="text-xs font-bold text-brand-600">{money(p.price)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Line Items Table */}
@@ -931,27 +1880,45 @@ export default function Sales() {
                       const discPct = l.discount || 0;
                       const netRate = l.price * (1 - discPct / 100);
                       const lineNet = l.qty * netRate;
-                      const isOverStock = l.qty > availStock;
+                      const isOverStock = !l.isCustom && l.qty > availStock;
                       return (
-                        <tr key={l.productId}>
+                        <tr key={l.productId} className={l.isCustom ? 'bg-purple-50/20' : ''}>
                           <td className="px-3 py-2.5">
                             <div>
-                              <p className="font-bold text-slate-800">{l.name}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="font-bold text-slate-800">{l.name}</p>
+                                {l.isCustom && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 text-purple-700 border border-purple-200">
+                                    Custom / Direct
+                                  </span>
+                                )}
+                              </div>
                               {prod?.rackNumber && (
                                 <p className="text-[10px] text-slate-400 font-normal">Rack: {prod.rackNumber}</p>
+                              )}
+                              {l.isCustom && l.cost !== undefined && l.cost > 0 && (
+                                <p className="text-[10px] text-purple-600 font-medium">
+                                  Cost: {money(l.cost)} · Profit: {money(Math.max(0, netRate - l.cost))}/pc
+                                </p>
                               )}
                             </div>
                           </td>
                           <td className="px-3 py-2.5 text-center">
-                            <span
-                              className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${
-                                isOverStock
-                                  ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              }`}
-                            >
-                              {availStock}
-                            </span>
+                            {l.isCustom ? (
+                              <span className="inline-block px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-700 border border-purple-200">
+                                Direct
+                              </span>
+                            ) : (
+                              <span
+                                className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${
+                                  isOverStock
+                                    ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                }`}
+                              >
+                                {availStock}
+                              </span>
+                            )}
                           </td>
                           <td className="px-3 py-2.5 text-center">
                             <input
@@ -1219,6 +2186,347 @@ export default function Sales() {
                 <span className="text-brand-600">{money(grandTotal)}</span>
               </div>
             </div>
+
+            {/* Payment Mode & Pay Later / Credit Terms Section */}
+            {documentType !== 'PROFORMA INVOICE' && (
+              <div className="rounded-xl border-2 border-slate-200 bg-white p-4 space-y-3.5 text-xs shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                  <div>
+                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                      <CreditCard className="w-4 h-4 text-brand-600" />
+                      Payment & Credit Terms (Settlement Mode)
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Choose whether full payment is received now or if goods are given on credit / later payment.
+                    </p>
+                  </div>
+                  {selectedCustomerPendingBalance > 0 && (
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-800">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Customer Prior Due: {money(selectedCustomerPendingBalance)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3 Payment Settlement Option Tabs */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentStatusType('paid');
+                      setPaymentMethod('Cash');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col justify-between gap-1.5 ${
+                      paymentStatusType === 'paid'
+                        ? 'border-emerald-500 bg-emerald-50/50 text-emerald-950 ring-2 ring-emerald-500/20'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs flex items-center gap-1.5">
+                        <CheckCircle2 className={`w-4 h-4 ${paymentStatusType === 'paid' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                        Full Payment (Paid)
+                      </span>
+                      {paymentStatusType === 'paid' && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700">Active</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Collected {money(grandTotal)} immediately.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentStatusType('pay-later');
+                      setPaymentMethod('Credit / Pay Later');
+                      if (!dueDate) setDueDate(addDaysToDate(date, 30));
+                      if (paymentTerms === 'Immediate') setPaymentTerms('30 Days');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col justify-between gap-1.5 ${
+                      paymentStatusType === 'pay-later'
+                        ? 'border-amber-500 bg-amber-50/50 text-amber-950 ring-2 ring-amber-500/20'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs flex items-center gap-1.5">
+                        <Clock className={`w-4 h-4 ${paymentStatusType === 'pay-later' ? 'text-amber-600' : 'text-slate-400'}`} />
+                        Pay Later / Full Credit (Udhar)
+                      </span>
+                      {paymentStatusType === 'pay-later' && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-800">Pending</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      ₹0 paid today · Full {money(grandTotal)} due later.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentStatusType('partial');
+                      if (!partialPaidAmount) setPartialPaidAmount(Math.round(grandTotal * 0.5).toString());
+                      if (!dueDate) setDueDate(addDaysToDate(date, 15));
+                      if (paymentTerms === 'Immediate') setPaymentTerms('15 Days');
+                    }}
+                    className={`p-3 rounded-xl border text-left transition flex flex-col justify-between gap-1.5 ${
+                      paymentStatusType === 'partial'
+                        ? 'border-blue-500 bg-blue-50/50 text-blue-950 ring-2 ring-blue-500/20'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs flex items-center gap-1.5">
+                        <TrendingUp className={`w-4 h-4 ${paymentStatusType === 'partial' ? 'text-blue-600' : 'text-slate-400'}`} />
+                        Partial Payment (Advance)
+                      </span>
+                      {paymentStatusType === 'partial' && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-blue-100 text-blue-800">Split</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Collect token / advance now, balance on credit.
+                    </p>
+                  </button>
+                </div>
+
+                {/* Details for Full Payment */}
+                {paymentStatusType === 'paid' && (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <span className="text-xs font-bold text-slate-700 block">Payment Method Received:</span>
+                      <span className="text-[11px] text-slate-500">Select the channel where customer paid {money(grandTotal)}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'] as PaymentMethod[]).map((pm) => (
+                        <button
+                          key={pm}
+                          type="button"
+                          onClick={() => setPaymentMethod(pm)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                            paymentMethod === pm
+                              ? 'bg-brand-600 text-white border-brand-700 shadow-xs'
+                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {pm}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Details for Pay Later / Credit */}
+                {paymentStatusType === 'pay-later' && (
+                  <div className="p-3.5 bg-amber-50/60 rounded-xl border border-amber-200 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-amber-950">Total Credit Due:</span>
+                        <span className="text-sm font-black text-amber-700 font-mono">{money(grandTotal)}</span>
+                      </div>
+                      <div className="text-[11px] text-amber-800 font-medium">
+                        Will show as <strong>Unpaid / Due</strong> on Customer Ledger & Overdue Receivables
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-amber-200/70">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Credit Terms / Days</label>
+                        <div className="flex flex-wrap gap-1">
+                          {['Immediate', '15 Days', '30 Days', '45 Days', '60 Days'].map((term) => {
+                            const days = parseInt(term, 10) || 0;
+                            return (
+                              <button
+                                key={term}
+                                type="button"
+                                onClick={() => {
+                                  setPaymentTerms(term);
+                                  setDueDate(days > 0 ? addDaysToDate(date, days) : date);
+                                }}
+                                className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition ${
+                                  paymentTerms === term
+                                    ? 'bg-amber-600 text-white border-amber-700'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                {term}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Payment Due Date</label>
+                        <input
+                          type="date"
+                          value={dueDate || addDaysToDate(date, 30)}
+                          onChange={(e) => {
+                            setDueDate(e.target.value);
+                            setPaymentTerms('Custom');
+                          }}
+                          className="input bg-white text-xs py-1 font-bold text-slate-800"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Details for Partial Payment */}
+                {paymentStatusType === 'partial' && (
+                  <div className="p-3.5 bg-blue-50/60 rounded-xl border border-blue-200 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Advance Amount Paid Today (₹) *</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={grandTotal}
+                          step="1"
+                          value={partialPaidAmount}
+                          onChange={(e) => setPartialPaidAmount(e.target.value)}
+                          placeholder="0"
+                          className="input bg-white text-xs py-1.5 font-bold text-emerald-700"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Payment Method (For Advance)</label>
+                        <select
+                          value={paymentMethod}
+                          onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                          className="input bg-white text-xs py-1.5 font-medium"
+                        >
+                          <option value="Cash">Cash</option>
+                          <option value="UPI">UPI</option>
+                          <option value="Bank Transfer">Bank Transfer</option>
+                          <option value="Cheque">Cheque</option>
+                          <option value="Card">Card</option>
+                        </select>
+                      </div>
+                      <div className="flex flex-col justify-center bg-white p-2.5 rounded-lg border border-blue-200">
+                        <span className="text-[10px] text-slate-500 font-bold uppercase">Remaining Balance Due:</span>
+                        <span className="text-sm font-black text-amber-700 font-mono">
+                          {money(Math.max(0, grandTotal - (parseFloat(partialPaidAmount) || 0)))}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-blue-200/70">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Balance Due Terms</label>
+                        <div className="flex flex-wrap gap-1">
+                          {['7 Days', '15 Days', '30 Days', '45 Days', '60 Days'].map((term) => {
+                            const days = parseInt(term, 10) || 0;
+                            return (
+                              <button
+                                key={term}
+                                type="button"
+                                onClick={() => {
+                                  setPaymentTerms(term);
+                                  setDueDate(days > 0 ? addDaysToDate(date, days) : date);
+                                }}
+                                className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition ${
+                                  paymentTerms === term
+                                    ? 'bg-blue-600 text-white border-blue-700'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                {term}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Balance Due Date</label>
+                        <input
+                          type="date"
+                          value={dueDate || addDaysToDate(date, 15)}
+                          onChange={(e) => {
+                            setDueDate(e.target.value);
+                            setPaymentTerms('Custom');
+                          }}
+                          className="input bg-white text-xs py-1 font-bold text-slate-800"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Dedicated Cheque Information Card */}
+                {paymentMethod === 'Cheque' && (
+                  <div className="p-3.5 bg-blue-50/70 rounded-xl border border-blue-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-blue-950 flex items-center gap-1.5">
+                        <Landmark className="w-4 h-4 text-blue-600" />
+                        Cheque Details & Realisation Date
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                        Cheque Mode Selected
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Cheque Leaf Number *
+                        </label>
+                        <input
+                          type="text"
+                          value={chequeNo}
+                          onChange={(e) => setChequeNo(e.target.value)}
+                          placeholder="e.g. 004821"
+                          className="input bg-white text-xs font-mono font-bold py-1.5"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Issuing Bank Name *
+                        </label>
+                        <input
+                          type="text"
+                          value={chequeBank}
+                          onChange={(e) => setChequeBank(e.target.value)}
+                          placeholder="e.g. HDFC Bank, SBI, ICICI"
+                          className="input bg-white text-xs font-semibold py-1.5"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Claimable / Realisation Date *
+                        </label>
+                        <input
+                          type="date"
+                          value={chequeDate}
+                          onChange={(e) => setChequeDate(e.target.value)}
+                          className="input bg-white text-xs font-bold py-1.5"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          Clearance Status
+                        </label>
+                        <select
+                          value={chequeStatus}
+                          onChange={(e) => setChequeStatus(e.target.value as ChequeStatus)}
+                          className="input bg-white text-xs font-semibold py-1.5"
+                        >
+                          <option value="pending_clearance">In Hand (Pending Clearance)</option>
+                          <option value="cleared">Cleared Immediately</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2">
@@ -1508,6 +2816,23 @@ export default function Sales() {
                           <span>Invoice Amount (Rs.)</span>
                           <span className="font-mono text-black">{grandTotalInt.toFixed(2)}</span>
                         </div>
+                        {viewing.documentType !== 'PROFORMA INVOICE' && (
+                          <>
+                            <div className="p-2 flex justify-between text-xs bg-emerald-50 text-emerald-800 font-bold border-t border-black">
+                              <span>Amount Paid ({viewing.paymentMethod || 'Cash'})</span>
+                              <span className="font-mono">{money(viewing.amountPaid || 0)}</span>
+                            </div>
+                            {(viewing.status === 'pending' || viewing.status === 'partially-paid' || (viewing.amountPaid || 0) < viewing.grandTotal) && (
+                              <div className="p-2 flex justify-between text-xs bg-amber-50 text-amber-900 font-black border-t border-amber-300">
+                                <span>
+                                  Balance Due {viewing.dueDate ? `(Due: ${viewing.dueDate})` : ''}
+                                  {viewing.paymentTerms ? ` · ${viewing.paymentTerms}` : ''}
+                                </span>
+                                <span className="font-mono">{money(viewing.grandTotal - (viewing.amountPaid || 0))}</span>
+                              </div>
+                            )}
+                          </>
+                        )}
                       </>
                     );
                   })()}
@@ -1588,13 +2913,25 @@ export default function Sales() {
             </div>
 
             {/* Modal Actions */}
-            <div className="flex justify-end gap-2 pt-2">
-              {viewing.documentType === 'PROFORMA INVOICE' && (
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              {viewing.status !== 'paid' && viewing.status !== 'cancelled' && viewing.status !== 'draft' && (
                 <button
                   className="btn-secondary bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100 font-bold"
+                  onClick={() => {
+                    const target = viewing;
+                    openRecordPaymentModal(target);
+                  }}
+                >
+                  <CreditCard className="h-4 w-4 text-emerald-600" />
+                  <span>Collect Payment ({money(viewing.grandTotal - (viewing.amountPaid || 0))} Due)</span>
+                </button>
+              )}
+              {viewing.documentType === 'PROFORMA INVOICE' && (
+                <button
+                  className="btn-secondary bg-purple-50 border-purple-300 text-purple-700 hover:bg-purple-100 font-bold"
                   onClick={() => openConvertModal(viewing)}
                 >
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <CheckCircle2 className="h-4 w-4 text-purple-600" />
                   <span>Convert to Tax Invoice</span>
                 </button>
               )}
@@ -1627,6 +2964,150 @@ export default function Sales() {
                 }}
               >
                 <Printer className="h-4 w-4" /> Print / Export Selected ({Object.values(exportCopies).filter(Boolean).length} {Object.values(exportCopies).filter(Boolean).length === 1 ? 'Copy' : 'Copies'})
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Quick Record Payment Modal */}
+      {recordPaymentModalSale && (
+        <Modal
+          title={`Record Payment — Invoice ${recordPaymentModalSale.invoice}`}
+          size="md"
+          onClose={() => setRecordPaymentModalSale(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-600">Customer:</span>
+                <span className="font-bold text-slate-900">{recordPaymentModalSale.customer}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Total Invoice Amount:</span>
+                <span className="font-bold text-slate-900">{money(recordPaymentModalSale.grandTotal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Amount Paid So Far:</span>
+                <span className="font-semibold text-emerald-600">{money(recordPaymentModalSale.amountPaid || 0)}</span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200 pt-2 text-sm font-black">
+                <span className="text-slate-800">Remaining Balance Due:</span>
+                <span className="text-amber-700">
+                  {money(recordPaymentModalSale.grandTotal - (recordPaymentModalSale.amountPaid || 0))}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Payment Amount Collected Today (₹) *
+              </label>
+              <input
+                type="number"
+                min="1"
+                max={recordPaymentModalSale.grandTotal - (recordPaymentModalSale.amountPaid || 0)}
+                step="1"
+                value={recordPaymentAmount}
+                onChange={(e) => setRecordPaymentAmount(e.target.value)}
+                placeholder="Enter collected amount"
+                className="input text-sm font-bold text-emerald-700 py-2 w-full"
+                autoFocus
+              />
+              <div className="flex gap-2 mt-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setRecordPaymentAmount(
+                      Math.max(0, recordPaymentModalSale.grandTotal - (recordPaymentModalSale.amountPaid || 0)).toString()
+                    )
+                  }
+                  className="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300"
+                >
+                  Pay Full Balance ({money(recordPaymentModalSale.grandTotal - (recordPaymentModalSale.amountPaid || 0))})
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Payment Method Received
+              </label>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                {(['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'] as PaymentMethod[]).map((pm) => (
+                  <button
+                    key={pm}
+                    type="button"
+                    onClick={() => setRecordPaymentMethod(pm)}
+                    className={`py-2 rounded-lg text-xs font-bold border transition ${
+                      recordPaymentMethod === pm
+                        ? 'bg-brand-600 text-white border-brand-700 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {pm}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* If Cheque selected for payment */}
+            {recordPaymentMethod === 'Cheque' && (
+              <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 space-y-2.5">
+                <span className="font-bold text-xs text-blue-950 flex items-center gap-1.5">
+                  <Landmark className="w-3.5 h-3.5 text-blue-600" />
+                  Cheque Details & Realisation Date
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Cheque Leaf No. *</label>
+                    <input
+                      type="text"
+                      value={recordChequeNo}
+                      onChange={(e) => setRecordChequeNo(e.target.value)}
+                      placeholder="e.g. 004821"
+                      className="input bg-white text-xs font-mono font-bold py-1.5 w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Issuing Bank *</label>
+                    <input
+                      type="text"
+                      value={recordChequeBank}
+                      onChange={(e) => setRecordChequeBank(e.target.value)}
+                      placeholder="e.g. HDFC / SBI"
+                      className="input bg-white text-xs font-semibold py-1.5 w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Claimable Date *</label>
+                    <input
+                      type="date"
+                      value={recordChequeDate}
+                      onChange={(e) => setRecordChequeDate(e.target.value)}
+                      className="input bg-white text-xs font-bold py-1.5 w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setRecordPaymentModalSale(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700"
+                onClick={handleRecordPayment}
+                disabled={!recordPaymentAmount || parseFloat(recordPaymentAmount) <= 0}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Confirm Payment Receipt</span>
               </button>
             </div>
           </div>
@@ -1674,6 +3155,245 @@ export default function Sales() {
               >
                 <CheckCircle2 className="h-4 w-4" />
                 <span>Confirm Conversion</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Confirm Cheque Clearance Modal */}
+      {clearTargetCheque && (
+        <Modal
+          title={`Confirm Cheque Clearance — #${clearTargetCheque.chequeNumber}`}
+          size="md"
+          onClose={() => setClearTargetCheque(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 space-y-2.5">
+              <div className="flex items-center gap-2 text-emerald-900 font-bold text-sm">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                <span>Confirm Bank Deposit & Clearance</span>
+              </div>
+              <p className="text-emerald-800 text-[11px]">
+                Confirm that cheque leaf <strong>#{clearTargetCheque.chequeNumber}</strong> ({clearTargetCheque.bankName}) has cleared in the bank account.
+              </p>
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-emerald-200/80 text-[11px]">
+                <div>
+                  <span className="text-slate-500 block">Customer:</span>
+                  <span className="font-bold text-slate-800">{clearTargetCheque.customerName}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Invoice #:</span>
+                  <span className="font-bold text-slate-800">{clearTargetCheque.invoiceNumber || '—'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Realisation Date:</span>
+                  <span className="font-bold text-slate-800">{clearTargetCheque.chequeDate}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Cheque Value:</span>
+                  <span className="font-black text-emerald-700 text-sm font-mono">{money(clearTargetCheque.amount)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-600 text-[11px]">
+              ℹ️ Marking this cheque as cleared will verify the payment in customer ledger and ensure the linked invoice is fully paid.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setClearTargetCheque(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700 flex items-center gap-1.5"
+                onClick={handleConfirmClearance}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Confirm Clearance & Realisation</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Confirm Cheque Dishonour / Bounce Modal */}
+      {bounceTargetCheque && (
+        <Modal
+          title={`Confirm Cheque Bounce (Dishonoured) — #${bounceTargetCheque.chequeNumber}`}
+          size="md"
+          onClose={() => setBounceTargetCheque(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <div className="p-4 bg-rose-50 rounded-xl border border-rose-200 space-y-2.5">
+              <div className="flex items-center gap-2 text-rose-950 font-bold text-sm">
+                <AlertOctagon className="w-5 h-5 text-rose-600" />
+                <span>Cheque Dishonour Reversal Warning</span>
+              </div>
+              <p className="text-rose-900 text-[11px] leading-relaxed">
+                Recording this cheque as bounced will <strong>reverse payment credit of {money(bounceTargetCheque.amount)}</strong>, re-opening the customer's invoice balance as <strong>unpaid / overdue</strong> on their ledger.
+              </p>
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-rose-200/80 text-[11px]">
+                <div>
+                  <span className="text-slate-500 block">Customer:</span>
+                  <span className="font-bold text-slate-800">{bounceTargetCheque.customerName}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Cheque #:</span>
+                  <span className="font-bold text-slate-800 font-mono">#{bounceTargetCheque.chequeNumber} ({bounceTargetCheque.bankName})</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Select Return / Bounce Reason *
+              </label>
+              <select
+                value={bounceReason}
+                onChange={(e) => setBounceReason(e.target.value)}
+                className="input w-full font-semibold"
+              >
+                <option value="Insufficient Funds (Funds Insufficient)">Insufficient Funds (Funds Insufficient)</option>
+                <option value="Drawer Signature Mismatch / Incomplete">Drawer Signature Mismatch / Incomplete</option>
+                <option value="Payment Stopped by Drawer (Customer)">Payment Stopped by Drawer (Customer)</option>
+                <option value="Account Closed / Frozen / Blocked">Account Closed / Frozen / Blocked</option>
+                <option value="Post-Dated / Stale Cheque (Expired)">Post-Dated / Stale Cheque (Expired)</option>
+                <option value="Other">Other Custom Reason...</option>
+              </select>
+            </div>
+
+            {bounceReason === 'Other' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Specify Custom Reason *
+                </label>
+                <input
+                  type="text"
+                  value={customBounceReason}
+                  onChange={(e) => setCustomBounceReason(e.target.value)}
+                  placeholder="Enter reason provided in bank return memo"
+                  className="input w-full"
+                  autoFocus
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Bounce / Return Memo Date *
+              </label>
+              <input
+                type="date"
+                value={bounceDate}
+                onChange={(e) => setBounceDate(e.target.value)}
+                className="input w-full font-bold"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setBounceTargetCheque(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-rose-600 hover:bg-rose-700 border-rose-700 flex items-center gap-1.5"
+                onClick={handleConfirmBounce}
+              >
+                <AlertOctagon className="w-4 h-4" />
+                <span>Confirm Bounce & Reopen Due Balance</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit Cheque Modal */}
+      {editingCheque && (
+        <Modal
+          title={`Edit Cheque Record — #${editingCheque.chequeNumber}`}
+          size="md"
+          onClose={() => setEditingCheque(null)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Cheque Leaf Number *</label>
+                <input
+                  type="text"
+                  value={editChequeNo}
+                  onChange={(e) => setEditChequeNo(e.target.value)}
+                  className="input font-mono font-bold w-full"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Bank Name *</label>
+                <input
+                  type="text"
+                  value={editChequeBank}
+                  onChange={(e) => setEditChequeBank(e.target.value)}
+                  className="input font-semibold w-full"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Claimable / Realisation Date *</label>
+                <input
+                  type="date"
+                  value={editChequeDate}
+                  onChange={(e) => setEditChequeDate(e.target.value)}
+                  className="input font-bold w-full"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Cheque Amount (₹) *</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={editChequeAmount}
+                  onChange={(e) => setEditChequeAmount(e.target.value)}
+                  className="input font-mono font-bold text-emerald-700 w-full"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Notes / Remarks</label>
+              <textarea
+                value={editChequeNotes}
+                onChange={(e) => setEditChequeNotes(e.target.value)}
+                placeholder="Branch name, clearing memo details, etc."
+                className="input w-full h-16 resize-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setEditingCheque(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSaveEditCheque}
+              >
+                <Check className="w-4 h-4" />
+                <span>Save Changes</span>
               </button>
             </div>
           </div>

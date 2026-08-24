@@ -261,6 +261,16 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
               <strong>Invoice Amount in words (Rs.) :</strong><br/>
               Rupees ${numberToWords(sale.grandTotal)}
             </div>
+            ${(sale.chequeNo) ? `
+            <div style="font-size: 9.5px; margin-bottom: 6px; background-color: #f0fdf4; padding: 3px 6px; border: 1px solid #bbf7d0; border-radius: 3px; color: #166534;">
+              <strong>Cheque Details:</strong> #${esc(sale.chequeNo)} ${sale.chequeBank ? `&nbsp;|&nbsp; <strong>Bank:</strong> ${esc(sale.chequeBank)}` : ''} ${sale.chequeDate ? `&nbsp;|&nbsp; <strong>Claimable Date:</strong> ${esc(sale.chequeDate)}` : ''} ${sale.chequeStatus === 'bounced' ? `<span style="color:#b91c1c; font-weight:bold;">(BOUNCED)</span>` : sale.chequeStatus === 'cleared' ? `<span style="color:#15803d; font-weight:bold;">(CLEARED)</span>` : ''}
+            </div>
+            ` : ''}
+            ${(sale.paymentTerms || sale.dueDate) ? `
+            <div style="font-size: 9.5px; margin-bottom: 6px; background-color: #f8fafc; padding: 3px 6px; border: 1px solid #e2e8f0; border-radius: 3px;">
+              <strong>Payment Terms:</strong> ${esc(sale.paymentTerms || 'Credit / Pay Later')} ${sale.dueDate ? `&nbsp;|&nbsp; <strong>Due Date:</strong> ${esc(sale.dueDate)}` : ''}
+            </div>
+            ` : ''}
           </div>
           
           <div>
@@ -325,10 +335,25 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
             <span>${roundOff > 0 ? '+' + roundOff.toFixed(2) : roundOff.toFixed(2)}</span>
           </div>
           ` : ''}
-          <div class="sum-line grand" style="margin-top: 16px;">
+          <div class="sum-line grand" style="margin-top: 10px;">
             <span>Invoice Amount (Rs.)</span>
             <span>${grandTotalInt.toFixed(2)}</span>
           </div>
+          ${(sale.status === 'pending' || sale.status === 'partially-paid' || (sale.amountPaid || 0) < sale.grandTotal) ? `
+          <div class="sum-line" style="color: #166534; font-weight: bold; border-top: 1px dashed #cbd5e1; padding-top: 2px;">
+            <span>Amount Paid (${sale.paymentMethod || 'Cash'})</span>
+            <span>${(sale.amountPaid || 0).toFixed(2)}</span>
+          </div>
+          <div class="sum-line" style="color: #b45309; font-weight: 800; border-top: 1px solid #cbd5e1; padding-top: 2px;">
+            <span>Balance Due ${sale.dueDate ? `(Due: ${sale.dueDate})` : ''}</span>
+            <span>${(sale.grandTotal - (sale.amountPaid || 0)).toFixed(2)}</span>
+          </div>
+          ` : `
+          <div class="sum-line" style="color: #166534; font-weight: bold; border-top: 1px dashed #cbd5e1; padding-top: 2px;">
+            <span>Payment Status</span>
+            <span>PAID IN FULL</span>
+          </div>
+          `}
         </div>
       </div>
     </div>

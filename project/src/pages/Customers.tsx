@@ -1,16 +1,16 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, FileText, Trash2, Edit2, Eye, Users, AlertTriangle, MessageCircle, DollarSign, CheckCircle2, IndianRupee } from 'lucide-react';
+import { Plus, Search, FileText, Trash2, Edit2, Eye, Users, AlertTriangle, MessageCircle, DollarSign, CheckCircle2, IndianRupee, Landmark } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
-import type { Customer, SaleStatus } from '@/lib/types';
+import type { Customer, SaleStatus, PaymentMethod, ChequeRecord } from '@/lib/types';
 
 const empty: Customer = { id: '', name: '', businessName: '', phone: '', gstin: '', email: '', address: '', state: '', stateCode: '', notes: '' };
 
 export default function Customers() {
-  const { customers, sales, addCustomer, updateCustomer, deleteCustomer, updateSaleStatus } = useStore();
+  const { customers, sales, addCustomer, updateCustomer, deleteCustomer, updateSaleStatus, updateSale, addCheque, cheques } = useStore();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
@@ -25,6 +25,10 @@ export default function Customers() {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string>('');
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [isFullPayment, setIsFullPayment] = useState<boolean>(true);
+  const [payMethod, setPayMethod] = useState<PaymentMethod>('Cash');
+  const [payChequeNo, setPayChequeNo] = useState('');
+  const [payChequeBank, setPayChequeBank] = useState('');
+  const [payChequeDate, setPayChequeDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const enriched = useMemo(() => {
     return customers.map((c) => {
@@ -91,9 +95,13 @@ export default function Customers() {
     }
     setPayTarget({ customer: c, pendingInvoices: pending });
     setSelectedInvoiceId(pending[0].id);
-    const due = pending[0].grandTotal - pending[0].amountPaid;
+    const due = pending[0].grandTotal - (pending[0].amountPaid || 0);
     setPaymentAmount(due);
     setIsFullPayment(true);
+    setPayMethod('Cash');
+    setPayChequeNo('');
+    setPayChequeBank('');
+    setPayChequeDate(new Date().toISOString().slice(0, 10));
   };
 
   const handleRecordPayment = async () => {
@@ -108,7 +116,34 @@ export default function Customers() {
       newStatus = 'paid';
     }
 
-    await updateSaleStatus(selectedInvoiceId, newStatus, newTotalPaid);
+    if (payMethod === 'Cheque' && payChequeNo.trim()) {
+      const chequeRec: ChequeRecord = {
+        id: `chq_cust_${Date.now()}`,
+        saleId: inv.id,
+        customerId: inv.customerId || payTarget.customer.id,
+        customerName: payTarget.customer.name,
+        invoiceNumber: inv.invoice,
+        chequeNumber: payChequeNo.trim(),
+        bankName: payChequeBank.trim() || 'Bank Cheque',
+        chequeDate: payChequeDate || new Date().toISOString().slice(0, 10),
+        amount: paymentAmount,
+        status: 'pending_clearance',
+        notes: `Recorded against Invoice #${inv.invoice}`,
+      };
+      await addCheque(chequeRec);
+    }
+
+    const updatedSale = {
+      ...inv,
+      amountPaid: newTotalPaid,
+      status: newStatus,
+      paymentMethod: payMethod,
+      chequeNo: payMethod === 'Cheque' ? payChequeNo.trim() : inv.chequeNo,
+      chequeBank: payMethod === 'Cheque' ? payChequeBank.trim() : inv.chequeBank,
+      chequeDate: payMethod === 'Cheque' ? payChequeDate : inv.chequeDate,
+      chequeStatus: payMethod === 'Cheque' ? 'pending_clearance' : inv.chequeStatus,
+    };
+    await updateSale(updatedSale);
     setPayTarget(null);
   };
 
@@ -390,9 +425,69 @@ export default function Customers() {
                 type="number"
                 value={paymentAmount}
                 onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
-                className="input"
+                className="input font-bold text-emerald-700"
               />
             </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">Payment Method</label>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                {(['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'] as PaymentMethod[]).map((pm) => (
+                  <button
+                    key={pm}
+                    type="button"
+                    onClick={() => setPayMethod(pm)}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
+                      payMethod === pm
+                        ? 'bg-brand-600 text-white border-brand-700 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {pm}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {payMethod === 'Cheque' && (
+              <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 space-y-2.5">
+                <span className="font-bold text-xs text-blue-950 flex items-center gap-1.5">
+                  <Landmark className="w-3.5 h-3.5 text-blue-600" />
+                  Cheque Details & Realisation Date
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Cheque Leaf No. *</label>
+                    <input
+                      type="text"
+                      value={payChequeNo}
+                      onChange={(e) => setPayChequeNo(e.target.value)}
+                      placeholder="e.g. 004821"
+                      className="input bg-white text-xs font-mono font-bold py-1.5 w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Issuing Bank *</label>
+                    <input
+                      type="text"
+                      value={payChequeBank}
+                      onChange={(e) => setPayChequeBank(e.target.value)}
+                      placeholder="e.g. HDFC / SBI"
+                      className="input bg-white text-xs font-semibold py-1.5 w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Claimable Date *</label>
+                    <input
+                      type="date"
+                      value={payChequeDate}
+                      onChange={(e) => setPayChequeDate(e.target.value)}
+                      className="input bg-white text-xs font-bold py-1.5 w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2 pt-4">
               <button className="btn-secondary" onClick={() => setPayTarget(null)}>

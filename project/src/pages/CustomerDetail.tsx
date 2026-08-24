@@ -2,7 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useMemo } from 'react';
 import {
   ArrowLeft, Phone, MapPin, FileText, IndianRupee, TrendingUp,
-  ShoppingCart, Clock, Tag, StickyNote,
+  ShoppingCart, Clock, Tag, StickyNote, Landmark, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -12,13 +12,21 @@ import { money } from '@/utils/analytics';
 export default function CustomerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { customers, sales, products } = useStore();
+  const { customers, sales, products, cheques } = useStore();
 
   const customer = useMemo(() => customers.find((c) => c.id === id), [customers, id]);
 
   const customerSales = useMemo(
     () => sales.filter((s) => s.customer === customer?.name).sort((a, b) => b.date.localeCompare(a.date)),
     [sales, customer],
+  );
+
+  const customerCheques = useMemo(
+    () =>
+      cheques
+        .filter((c) => (c.customerId && c.customerId === customer?.id) || c.customerName === customer?.name)
+        .sort((a, b) => b.chequeDate.localeCompare(a.chequeDate)),
+    [cheques, customer],
   );
 
   const businessSummary = useMemo(() => {
@@ -270,6 +278,82 @@ export default function CustomerDetail() {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      {/* Cheques In Hand & Realisation History */}
+      <div className="mt-4 card overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+          <div className="flex items-center gap-2">
+            <Landmark className="h-5 w-5 text-brand-600" />
+            <h3 className="font-semibold text-slate-800">Cheques & Realisation History</h3>
+          </div>
+          <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+            {customerCheques.length} Cheques Recorded
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-slate-50/80">
+              <tr>
+                <th className="table-th">Cheque #</th>
+                <th className="table-th">Issuing Bank</th>
+                <th className="table-th">Claimable / Realisation Date</th>
+                <th className="table-th">Invoice #</th>
+                <th className="table-th text-right">Amount</th>
+                <th className="table-th text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {customerCheques.map((chq) => {
+                const isCleared = chq.status === 'cleared';
+                const isBounced = chq.status === 'bounced';
+                const isClaimableToday = chq.status === 'pending_clearance' && chq.chequeDate <= new Date().toISOString().slice(0, 10);
+                return (
+                  <tr key={chq.id} className="hover:bg-slate-50/50">
+                    <td className="table-td font-mono font-bold text-slate-800">#{chq.chequeNumber}</td>
+                    <td className="table-td font-medium text-slate-700">{chq.bankName}</td>
+                    <td className="table-td text-slate-600">
+                      <div className="flex items-center gap-1.5">
+                        <span>{chq.chequeDate}</span>
+                        {isClaimableToday && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 animate-pulse">
+                            Claimable Today
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-td text-slate-500">{chq.invoiceNumber || '—'}</td>
+                    <td className="table-td text-right font-bold tabular-nums text-slate-900">{money(chq.amount)}</td>
+                    <td className="table-td text-center">
+                      {isCleared && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" /> Cleared
+                        </span>
+                      )}
+                      {isBounced && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200" title={chq.bounceReason}>
+                          <AlertTriangle className="w-3 h-3" /> Bounced ({chq.bounceReason || 'Dishonoured'})
+                        </span>
+                      )}
+                      {!isCleared && !isBounced && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                          <Clock className="w-3 h-3" /> In Hand (Pending)
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {customerCheques.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="table-td text-center text-slate-400 py-8">
+                    No cheque payments recorded for this customer yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

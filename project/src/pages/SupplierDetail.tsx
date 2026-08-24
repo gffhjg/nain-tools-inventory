@@ -2,7 +2,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useMemo } from 'react';
 import {
   ArrowLeft, Phone, MapPin, FileText, IndianRupee, TrendingDown,
-  Truck, Clock, Tag, StickyNote, BarChart3,
+  Truck, Clock, Tag, StickyNote, BarChart3, Landmark, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -12,13 +12,21 @@ import { money } from '@/utils/analytics';
 export default function SupplierDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { suppliers, purchases, products } = useStore();
+  const { suppliers, purchases, products, cheques } = useStore();
 
   const supplier = useMemo(() => suppliers.find((s) => s.id === id), [suppliers, id]);
 
   const supplierPurchases = useMemo(
     () => purchases.filter((p) => p.supplier === supplier?.name).sort((a, b) => b.date.localeCompare(a.date)),
     [purchases, supplier],
+  );
+
+  const supplierCheques = useMemo(
+    () =>
+      cheques
+        .filter((c) => (c.supplierId && c.supplierId === supplier?.id) || c.supplierName === supplier?.name || c.customerName === supplier?.name)
+        .sort((a, b) => b.chequeDate.localeCompare(a.chequeDate)),
+    [cheques, supplier],
   );
 
   const businessSummary = useMemo(() => {
@@ -275,6 +283,82 @@ export default function SupplierDetail() {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      {/* Cheques Issued to Supplier */}
+      <div className="mt-4 card overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+          <div className="flex items-center gap-2">
+            <Landmark className="h-5 w-5 text-brand-600" />
+            <h3 className="font-semibold text-slate-800">Cheques Issued & Settlement Tracker</h3>
+          </div>
+          <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+            {supplierCheques.length} Cheques Issued
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-slate-50/80">
+              <tr>
+                <th className="table-th">Cheque #</th>
+                <th className="table-th">Bank Name</th>
+                <th className="table-th">Due / Realisation Date</th>
+                <th className="table-th">PO / Bill #</th>
+                <th className="table-th text-right">Amount</th>
+                <th className="table-th text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {supplierCheques.map((chq) => {
+                const isCleared = chq.status === 'cleared';
+                const isBounced = chq.status === 'bounced';
+                const isClaimableToday = chq.status === 'pending_clearance' && chq.chequeDate <= new Date().toISOString().slice(0, 10);
+                return (
+                  <tr key={chq.id} className="hover:bg-slate-50/50">
+                    <td className="table-td font-mono font-bold text-slate-800">#{chq.chequeNumber}</td>
+                    <td className="table-td font-medium text-slate-700">{chq.bankName}</td>
+                    <td className="table-td text-slate-600">
+                      <div className="flex items-center gap-1.5">
+                        <span>{chq.chequeDate}</span>
+                        {isClaimableToday && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 animate-pulse">
+                            Due Today
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-td text-slate-500">{chq.invoiceNumber || '—'}</td>
+                    <td className="table-td text-right font-bold tabular-nums text-slate-900">{money(chq.amount)}</td>
+                    <td className="table-td text-center">
+                      {isCleared && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" /> Cleared
+                        </span>
+                      )}
+                      {isBounced && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200" title={chq.bounceReason}>
+                          <AlertTriangle className="w-3 h-3" /> Bounced ({chq.bounceReason || 'Dishonoured'})
+                        </span>
+                      )}
+                      {!isCleared && !isBounced && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                          <Clock className="w-3 h-3" /> Issued (Pending Clearing)
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {supplierCheques.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="table-td text-center text-slate-400 py-8">
+                    No outward cheques recorded for this supplier yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

@@ -2,21 +2,24 @@ import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
-  Trash2, Minus, Printer, CheckCircle2, Package, X
+  Trash2, Minus, Printer, CheckCircle2, Package, X, AlertTriangle, Sparkles,
+  ShoppingCart, ArrowRight, Landmark, CreditCard, Calendar
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
-import { GST_RATE, computeDiscountAmount, computeGrandTotal } from '@/lib/constants';
+import { GST_RATE, computeDiscountAmount, computeGrandTotal, productCategories } from '@/lib/constants';
 import { downloadCSV, toCSV, money } from '@/utils/analytics';
-import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType } from '@/lib/types';
+import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType, Product, ChequeStatus } from '@/lib/types';
 
 const paymentTone: Record<PurchasePaymentMethod, string> = {
   Cash: 'bg-accent-50 text-accent-600',
   UPI: 'bg-brand-50 text-brand-600',
   'Bank Transfer': 'bg-amber-50 text-amber-600',
+  Cheque: 'bg-indigo-50 text-indigo-600',
+  'Credit / Pay Later': 'bg-warn-50 text-warn-600',
 };
 
 function todayISO() {
@@ -61,10 +64,10 @@ function nextDebitNote(existingSales: SaleRecord[]): string {
 type DraftLine = PurchaseLineItem;
 
 export default function Purchase() {
-  const { purchases, products, suppliers, sales, addPurchase, addSale, deleteSale, companySettings } = useStore();
+  const { purchases, products, suppliers, sales, addPurchase, addSale, deleteSale, updatePurchasePayment, companySettings } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'orders' | 'bills' | 'credit-notes'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'orders' | 'bills' | 'credit-notes' | 'suggestions'>('all');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [supplier, setSupplier] = useState('');
@@ -77,7 +80,35 @@ export default function Purchase() {
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Pending'>('Paid');
   const [paymentMethod, setPaymentMethod] = useState<PurchasePaymentMethod>('Bank Transfer');
+  const [poDueDate, setPoDueDate] = useState('');
+  const [poPaymentTerms, setPoPaymentTerms] = useState('Immediate');
+  const [poChequeNo, setPoChequeNo] = useState('');
+  const [poChequeBank, setPoChequeBank] = useState('');
+  const [poChequeDate, setPoChequeDate] = useState(todayISO());
+  const [poChequeStatus, setPoChequeStatus] = useState<ChequeStatus>('pending_clearance');
+
+  // Quick Record Payment Modal for Purchase Orders
+  const [payTargetPO, setPayTargetPO] = useState<PurchaseRecord | null>(null);
+  const [recordPayAmount, setRecordPayAmount] = useState('');
+  const [recordPayMethod, setRecordPayMethod] = useState<PurchasePaymentMethod>('Bank Transfer');
+  const [recordPayChequeNo, setRecordPayChequeNo] = useState('');
+  const [recordPayChequeBank, setRecordPayChequeBank] = useState('');
+  const [recordPayChequeDate, setRecordPayChequeDate] = useState(todayISO());
+
   const [productSearch, setProductSearch] = useState('');
+
+  // New Product Creator State in Purchase Order (auto-adds to Main Inventory)
+  const [isAddingNewProduct, setIsAddingNewProduct] = useState(false);
+  const [newProdName, setNewProdName] = useState('');
+  const [newProdCategory, setNewProdCategory] = useState('Bolts');
+  const [newProdRack, setNewProdRack] = useState('');
+  const [newProdSize, setNewProdSize] = useState('');
+  const [newProdCost, setNewProdCost] = useState('');
+  const [newProdPrice, setNewProdPrice] = useState('');
+  const [newProdBoxCap, setNewProdBoxCap] = useState('1000');
+  const [newProdReorder, setNewProdReorder] = useState('100');
+  const [newProdHsn, setNewProdHsn] = useState('7318150');
+  const [newProdQty, setNewProdQty] = useState('1000');
 
   // Purchase Bill Modal State (rich Tax Invoice features for Purchase Bill)
   const [pbModalOpen, setPbModalOpen] = useState(false);
@@ -248,6 +279,20 @@ export default function Purchase() {
       .slice(0, 6);
   }, [productSearch, products]);
 
+  const resetNewProductForm = () => {
+    setNewProdName('');
+    setNewProdCategory('Bolts');
+    setNewProdRack('');
+    setNewProdSize('');
+    setNewProdCost('');
+    setNewProdPrice('');
+    setNewProdBoxCap('1000');
+    setNewProdReorder('100');
+    setNewProdHsn('7318150');
+    setNewProdQty('1000');
+    setIsAddingNewProduct(false);
+  };
+
   const resetForm = () => {
     setSupplier('');
     setSupplierInvoice('');
@@ -259,7 +304,14 @@ export default function Purchase() {
     setLines([]);
     setPaymentStatus('Paid');
     setPaymentMethod('Bank Transfer');
+    setPoDueDate('');
+    setPoPaymentTerms('Immediate');
+    setPoChequeNo('');
+    setPoChequeBank('');
+    setPoChequeDate(todayISO());
+    setPoChequeStatus('pending_clearance');
     setProductSearch('');
+    resetNewProductForm();
   };
 
   const poStatusOptions: { value: typeof poStatus; label: string }[] = [
@@ -296,6 +348,37 @@ export default function Purchase() {
     });
   };
 
+  const addNewProductLine = () => {
+    if (!newProdName.trim()) return;
+    const costVal = parseFloat(newProdCost) || 0;
+    const priceVal = parseFloat(newProdPrice) || +(costVal * 1.3).toFixed(2);
+    const qtyVal = parseInt(newProdQty, 10) || 1000;
+    const boxCapVal = parseInt(newProdBoxCap, 10) || 1000;
+    const reorderVal = parseInt(newProdReorder, 10) || 100;
+    const newTempId = `new_p${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    setLines((prev) => [
+      ...prev,
+      {
+        productId: newTempId,
+        name: newProdName.trim(),
+        cost: costVal,
+        qty: qtyVal,
+        gstRate: GST_RATE,
+        isNewProduct: true,
+        category: newProdCategory.trim() || 'Fasteners',
+        rackNumber: newProdRack.trim() || 'General',
+        size: newProdSize.trim(),
+        sellingPrice: priceVal,
+        boxCapacity: boxCapVal,
+        reorderLevel: reorderVal,
+        hsnCode: newProdHsn.trim() || '7318150',
+      },
+    ]);
+
+    resetNewProductForm();
+  };
+
   const updateQty = (productId: string, delta: number) => {
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, qty: Math.max(0, l.qty + delta) } : l)),
@@ -317,6 +400,36 @@ export default function Purchase() {
 
   const removeLine = (productId: string) => {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
+  };
+
+  // Inventory restock low-stock suggestions calculation
+  const lowStockItems = useMemo(() => {
+    return products.filter((p) => p.status === 'low-stock' || p.status === 'out-of-stock' || p.stock <= p.reorderLevel);
+  }, [products]);
+
+  const createPOFromSuggestions = (selectedItems?: Product[]) => {
+    const itemsToOrder = selectedItems || lowStockItems;
+    if (itemsToOrder.length === 0) return;
+    resetForm();
+    const commonSupplier = itemsToOrder[0]?.supplier || '';
+    if (commonSupplier) {
+      setSupplier(commonSupplier);
+      const s = suppliers.find((x) => x.name === commonSupplier);
+      if (s && s.phone) setPhone(s.phone);
+    }
+    const newLines: DraftLine[] = itemsToOrder.map((p) => {
+      const neededQty = Math.max(p.reorderLevel * 2, p.boxCapacity - p.stock, 500);
+      return {
+        productId: p.id,
+        name: p.name,
+        cost: p.cost,
+        qty: neededQty,
+        gstRate: GST_RATE,
+      };
+    });
+    setLines(newLines);
+    setNotes(`Auto-generated from Inventory Restock Suggestions (${itemsToOrder.length} items)`);
+    setModalOpen(true);
   };
 
   const canSubmit = supplier.trim() !== '' && lines.length > 0;
@@ -530,6 +643,7 @@ export default function Purchase() {
       supplierInvoice: supplierInvoice.trim(),
       phone: phone.trim() || '—',
       date,
+      dueDate: poDueDate || '',
       expectedDelivery: expectedDelivery || '',
       receivedDate: poStatus === 'received' ? date : null,
       items: lines.map((l) => ({ ...l })),
@@ -538,14 +652,43 @@ export default function Purchase() {
       gstRate: GST_RATE,
       gstAmount,
       grandTotal,
+      amountPaid: paymentStatus === 'Paid' ? grandTotal : 0,
       paymentStatus,
       paymentMethod,
       status: poStatus,
       notes: notes.trim(),
+      chequeNo: paymentMethod === 'Cheque' ? poChequeNo.trim() : '',
+      chequeBank: paymentMethod === 'Cheque' ? poChequeBank.trim() : '',
+      chequeDate: paymentMethod === 'Cheque' ? poChequeDate : '',
+      chequeStatus: paymentMethod === 'Cheque' ? poChequeStatus : undefined,
     };
     addPurchase(po);
     setModalOpen(false);
     resetForm();
+  };
+
+  const handleRecordPoPayment = async () => {
+    if (!payTargetPO) return;
+    const payVal = parseFloat(recordPayAmount) || 0;
+    if (payVal <= 0) return;
+    const currentPaid = payTargetPO.amountPaid ?? (payTargetPO.paymentStatus === 'Paid' ? payTargetPO.grandTotal : 0);
+    const newPaid = currentPaid + payVal;
+    const newStatus = newPaid >= payTargetPO.grandTotal ? 'Paid' : 'Pending';
+
+    await updatePurchasePayment(
+      payTargetPO.id,
+      newStatus,
+      newPaid,
+      recordPayMethod,
+      recordPayMethod === 'Cheque' ? recordPayChequeNo.trim() : '',
+      recordPayMethod === 'Cheque' ? recordPayChequeBank.trim() : '',
+      recordPayMethod === 'Cheque' ? recordPayChequeDate : '',
+      'pending_clearance'
+    );
+    setPayTargetPO(null);
+    setRecordPayAmount('');
+    setRecordPayChequeNo('');
+    setRecordPayChequeBank('');
   };
 
   const handleExport = () => {
@@ -627,6 +770,7 @@ export default function Purchase() {
           <div className="flex items-center gap-1 overflow-x-auto bg-slate-100 p-1 rounded-xl border border-slate-200">
             {[
               { id: 'all', label: `All (${combinedRecords.length})` },
+              { id: 'suggestions', label: `Restock Suggestions (${lowStockItems.length})`, highlight: lowStockItems.length > 0 },
               { id: 'credit-notes', label: `Credit Notes (${summary.countCN})` },
               { id: 'bills', label: `Purchase Bills (${summary.countPB})` },
               { id: 'orders', label: `Purchase Orders (${summary.countPO})` },
@@ -634,137 +778,295 @@ export default function Purchase() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
                   activeTab === tab.id
-                    ? 'bg-white text-slate-900 shadow-xs'
+                    ? tab.id === 'suggestions'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'bg-white text-slate-900 shadow-xs'
+                    : tab.highlight
+                    ? 'text-amber-700 bg-amber-100/70 hover:bg-amber-100 font-extrabold'
                     : 'text-slate-600 hover:bg-slate-200/60'
                 }`}
               >
-                {tab.label}
+                {tab.id === 'suggestions' && <Sparkles className="w-3.5 h-3.5" />}
+                <span>{tab.label}</span>
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      <div className="mt-4 card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px]">
-            <thead className="bg-slate-50/80">
-              <tr>
-                <th className="table-th">Doc Number</th>
-                <th className="table-th">Type</th>
-                <th className="table-th">Supplier</th>
-                <th className="table-th">Products</th>
-                <th className="table-th">Date</th>
-                <th className="table-th text-right">Grand Total</th>
-                <th className="table-th text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((rec) => {
-                const isPO = rec.kind === 'po';
-                const isCN = rec.typeLabel === 'CREDIT NOTE';
-                const isDN = rec.typeLabel === 'DEBIT NOTE';
-                return (
-                  <tr
-                    key={rec.id}
-                    className="cursor-pointer transition hover:bg-slate-50/50"
-                    onClick={() => {
-                      if (isPO) navigate(`/purchase/${rec.id}`);
-                      else setPbViewing(rec.raw);
-                    }}
-                  >
-                    <td className="table-td font-semibold text-brand-600">{rec.docNumber}</td>
-                    <td className="table-td">
-                      <span
-                        className={`badge font-bold ${
-                          isCN
-                            ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                            : isDN
-                            ? 'bg-amber-100 text-amber-700 border border-amber-200'
-                            : isPO
-                            ? 'bg-blue-100 text-blue-700 border border-blue-200'
-                            : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
-                        }`}
-                      >
-                        {rec.typeLabel}
-                      </span>
-                    </td>
-                    <td className="table-td font-medium text-slate-800">{rec.supplier}</td>
-                    <td className="table-td">
-                      <div className="space-y-0.5">
-                        {rec.items.slice(0, 2).map((it, idx) => (
-                          <div key={idx} className="text-xs text-slate-600">
-                            <span className="font-medium text-slate-800">{it.name}</span>
-                            {' '}
-                            <span className="text-slate-400">({it.qty.toLocaleString('en-IN')} pcs)</span>
-                          </div>
-                        ))}
-                        {rec.items.length > 2 && (
-                          <div className="text-xs text-brand-600">+{rec.items.length - 2} more…</div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="table-td text-slate-600">{rec.date}</td>
-                    <td className="table-td text-right font-semibold tabular-nums text-slate-900">
-                      ₹{rec.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="table-td" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => {
-                            if (isPO) navigate(`/purchase/${rec.id}`);
-                            else setPbViewing(rec.raw);
-                          }}
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                          title="View Details"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (isPO) handlePrint(rec.raw);
-                            else printInvoice(rec.raw, undefined, companySettings);
-                          }}
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                          title="Print Document"
-                        >
-                          <Printer className="h-4 w-4" />
-                        </button>
-                        {!isPO && (
-                          <button
-                            onClick={() => {
-                              if (window.confirm(`Are you sure you want to delete ${rec.docNumber}?`)) {
-                                deleteSale(rec.id);
-                              }
-                            }}
-                            className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
-                            title="Delete Document"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
-          <p className="text-sm text-slate-500">
-            Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{' '}
-            <span className="font-semibold text-slate-700">{purchases.length}</span> orders
-          </p>
-          <div className="flex items-center gap-1">
-            <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Previous</button>
-            <button className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white">1</button>
-            <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Next</button>
+      {activeTab === 'suggestions' ? (
+        <div className="mt-4 space-y-4">
+          <div className="card p-5 bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-transparent border-amber-200">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 text-amber-600 shrink-0">
+                  <AlertTriangle className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    Inventory Restock Suggestions
+                    <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                      {lowStockItems.length} Products Low / Out of Stock
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    These items are below their minimum reorder levels in main inventory. Generate purchase orders automatically with 1-click.
+                  </p>
+                </div>
+              </div>
+              {lowStockItems.length > 0 && (
+                <button
+                  onClick={() => createPOFromSuggestions()}
+                  className="btn-primary bg-amber-600 hover:bg-amber-700 text-white shadow-sm flex items-center gap-2 shrink-0"
+                >
+                  <ShoppingCart className="h-4 w-4" />
+                  <span>Order All Suggested Items ({lowStockItems.length})</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="card overflow-hidden">
+            {lowStockItems.length === 0 ? (
+              <div className="p-12 text-center">
+                <PackageCheck className="h-12 w-12 text-emerald-500 mx-auto mb-3" />
+                <h4 className="text-base font-bold text-slate-800">All Stock Levels Optimal!</h4>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                  No products are currently at or below their reorder thresholds. Main inventory is fully stocked.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px]">
+                  <thead className="bg-slate-50/80">
+                    <tr>
+                      <th className="table-th">Product & Size</th>
+                      <th className="table-th">Category / Rack</th>
+                      <th className="table-th">Supplier</th>
+                      <th className="table-th text-center">Stock Level</th>
+                      <th className="table-th text-center">Reorder Threshold</th>
+                      <th className="table-th text-right">Suggested Qty</th>
+                      <th className="table-th text-right">Est. Unit Cost</th>
+                      <th className="table-th text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {lowStockItems.map((p) => {
+                      const suggestedQty = Math.max(p.reorderLevel * 2, p.boxCapacity - p.stock, 500);
+                      const isOut = p.stock <= 0;
+                      return (
+                        <tr key={p.id} className="hover:bg-slate-50/50 transition">
+                          <td className="table-td">
+                            <div>
+                              <p className="font-bold text-slate-900">{p.name}</p>
+                              {p.size && <p className="text-[11px] text-slate-500">Size: {p.size}</p>}
+                            </div>
+                          </td>
+                          <td className="table-td">
+                            <span className="badge bg-slate-100 text-slate-700 font-medium">
+                              {p.category}
+                            </span>
+                            <span className="text-[11px] text-slate-400 block mt-0.5">Rack: {p.rackNumber}</span>
+                          </td>
+                          <td className="table-td text-slate-700 font-medium">{p.supplier || 'Any Supplier'}</td>
+                          <td className="table-td text-center">
+                            <span
+                              className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${
+                                isOut
+                                  ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                  : 'bg-amber-100 text-amber-700 border border-amber-200'
+                              }`}
+                            >
+                              {p.stock.toLocaleString('en-IN')} pcs {isOut ? '(Out of Stock)' : '(Low Stock)'}
+                            </span>
+                          </td>
+                          <td className="table-td text-center text-xs font-semibold text-slate-600">
+                            {p.reorderLevel.toLocaleString('en-IN')} pcs
+                          </td>
+                          <td className="table-td text-right font-bold text-brand-600">
+                            {suggestedQty.toLocaleString('en-IN')} pcs
+                          </td>
+                          <td className="table-td text-right font-medium text-slate-900">
+                            ₹{p.cost.toFixed(2)}
+                          </td>
+                          <td className="table-td text-right">
+                            <button
+                              onClick={() => createPOFromSuggestions([p])}
+                              className="px-3 py-1.5 rounded-lg bg-brand-50 hover:bg-brand-100 text-brand-700 font-bold text-xs transition border border-brand-200 inline-flex items-center gap-1.5"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              <span>Create PO</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="mt-4 card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px]">
+              <thead className="bg-slate-50/80">
+                <tr>
+                  <th className="table-th">Doc Number</th>
+                  <th className="table-th">Type</th>
+                  <th className="table-th">Supplier</th>
+                  <th className="table-th">Products</th>
+                  <th className="table-th">Date</th>
+                  <th className="table-th text-right">Grand Total</th>
+                  <th className="table-th text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((rec) => {
+                  const isPO = rec.kind === 'po';
+                  const isCN = rec.typeLabel === 'CREDIT NOTE';
+                  const isDN = rec.typeLabel === 'DEBIT NOTE';
+                  return (
+                    <tr
+                      key={rec.id}
+                      className="cursor-pointer transition hover:bg-slate-50/50"
+                      onClick={() => {
+                        if (isPO) navigate(`/purchase/${rec.id}`);
+                        else setPbViewing(rec.raw);
+                      }}
+                    >
+                      <td className="table-td font-semibold text-brand-600">{rec.docNumber}</td>
+                      <td className="table-td">
+                        <span
+                          className={`badge font-bold ${
+                            isCN
+                              ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                              : isDN
+                              ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                              : isPO
+                              ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                              : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                          }`}
+                        >
+                          {rec.typeLabel}
+                        </span>
+                      </td>
+                      <td className="table-td font-medium text-slate-800">{rec.supplier}</td>
+                      <td className="table-td">
+                        <div className="space-y-0.5">
+                          {rec.items.slice(0, 2).map((it, idx) => (
+                            <div key={idx} className="text-xs text-slate-600">
+                              <span className="font-medium text-slate-800">{it.name}</span>
+                              {' '}
+                              <span className="text-slate-400">({it.qty.toLocaleString('en-IN')} pcs)</span>
+                            </div>
+                          ))}
+                          {rec.items.length > 2 && (
+                            <div className="text-xs text-brand-600">+{rec.items.length - 2} more…</div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="table-td text-slate-600">
+                        <div>
+                          <span>{rec.date}</span>
+                          {isPO && (rec.raw as PurchaseRecord).dueDate && (
+                            <span className="block text-[10px] text-amber-700 font-semibold">
+                              Due: {(rec.raw as PurchaseRecord).dueDate}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="table-td text-right">
+                        <div className="font-semibold tabular-nums text-slate-900">
+                          ₹{rec.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                        {isPO && (
+                          <div className="mt-0.5 flex items-center justify-end gap-1">
+                            {rec.paymentStatus === 'Paid' ? (
+                              <span className="text-[10px] font-bold text-accent-700 bg-accent-50 px-1.5 py-0.5 rounded">
+                                {rec.paymentMethod === 'Cheque' ? `Cheque #${(rec.raw as PurchaseRecord).chequeNo || ''}` : 'Paid'}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                                Pending Credit
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="table-td" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          {isPO && rec.paymentStatus === 'Pending' && (
+                            <button
+                              onClick={() => {
+                                setPayTargetPO(rec.raw);
+                                const paidAlready = rec.raw.amountPaid || 0;
+                                const rem = Math.max(0, rec.raw.grandTotal - paidAlready);
+                                setRecordPayAmount(String(rem));
+                              }}
+                              className="rounded-lg p-2 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition"
+                              title="Record Payment to Supplier"
+                            >
+                              <CreditCard className="h-4 w-4" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (isPO) navigate(`/purchase/${rec.id}`);
+                              else setPbViewing(rec.raw);
+                            }}
+                            className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+                            title="View Details"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (isPO) handlePrint(rec.raw);
+                              else printInvoice(rec.raw, undefined, companySettings);
+                            }}
+                            className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+                            title="Print Document"
+                          >
+                            <Printer className="h-4 w-4" />
+                          </button>
+                          {!isPO && (
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Are you sure you want to delete ${rec.docNumber}?`)) {
+                                  deleteSale(rec.id);
+                                }
+                              }}
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
+                              title="Delete Document"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
+            <p className="text-sm text-slate-500">
+              Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{' '}
+              <span className="font-semibold text-slate-700">{purchases.length}</span> orders
+            </p>
+            <div className="flex items-center gap-1">
+              <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Previous</button>
+              <button className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white">1</button>
+              <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Modal
         open={modalOpen}
@@ -873,7 +1175,176 @@ export default function Purchase() {
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">Add Products</label>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+              <label className="block text-sm font-medium text-slate-700">Add Products</label>
+              <button
+                type="button"
+                onClick={() => setIsAddingNewProduct(!isAddingNewProduct)}
+                className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 shadow-xs ${
+                  isAddingNewProduct
+                    ? 'bg-emerald-600 text-white border-emerald-700'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                }`}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add New Product to Main Inventory</span>
+              </button>
+            </div>
+
+            {/* Inline New Product Creator */}
+            {isAddingNewProduct && (
+              <div className="mb-4 rounded-xl border-2 border-emerald-200 bg-emerald-50/40 p-4 space-y-3 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      Add New Product to Main Inventory
+                    </h4>
+                    <p className="text-[11px] text-emerald-700">
+                      This new product will automatically be added to your <strong>Main Inventory & Catalog</strong> when this purchase order is received.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingNewProduct(false)}
+                    className="text-emerald-400 hover:text-emerald-700 p-1"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Product Name *</label>
+                    <input
+                      type="text"
+                      value={newProdName}
+                      onChange={(e) => setNewProdName(e.target.value)}
+                      placeholder="e.g. Hex Bolt SS 304 M12x50"
+                      className="input bg-white text-xs py-1.5 font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Category</label>
+                    <select
+                      value={newProdCategory}
+                      onChange={(e) => setNewProdCategory(e.target.value)}
+                      className="input bg-white text-xs py-1.5"
+                    >
+                      {productCategories.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Size / Spec</label>
+                    <input
+                      type="text"
+                      value={newProdSize}
+                      onChange={(e) => setNewProdSize(e.target.value)}
+                      placeholder="e.g. M12x50"
+                      className="input bg-white text-xs py-1.5"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Rack #</label>
+                    <input
+                      type="text"
+                      value={newProdRack}
+                      onChange={(e) => setNewProdRack(e.target.value)}
+                      placeholder="e.g. B-05"
+                      className="input bg-white text-xs py-1.5 font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Purchase Cost (₹) *</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newProdCost}
+                      onChange={(e) => {
+                        setNewProdCost(e.target.value);
+                        if (!newProdPrice) {
+                          const c = parseFloat(e.target.value) || 0;
+                          setNewProdPrice((c * 1.3).toFixed(2));
+                        }
+                      }}
+                      placeholder="0.00"
+                      className="input bg-white text-xs py-1.5 font-bold text-emerald-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Selling Rate (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newProdPrice}
+                      onChange={(e) => setNewProdPrice(e.target.value)}
+                      placeholder="0.00"
+                      className="input bg-white text-xs py-1.5 font-bold text-brand-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Qty to Order</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={newProdQty}
+                      onChange={(e) => setNewProdQty(e.target.value)}
+                      placeholder="1000"
+                      className="input bg-white text-xs py-1.5 text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Box Capacity</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={newProdBoxCap}
+                      onChange={(e) => setNewProdBoxCap(e.target.value)}
+                      placeholder="1000"
+                      className="input bg-white text-xs py-1.5 text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Reorder Level</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={newProdReorder}
+                      onChange={(e) => setNewProdReorder(e.target.value)}
+                      placeholder="100"
+                      className="input bg-white text-xs py-1.5 text-center"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingNewProduct(false)}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addNewProductLine}
+                    disabled={!newProdName.trim() || !newProdCost}
+                    className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add to Order</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
@@ -909,8 +1380,19 @@ export default function Purchase() {
                 </div>
               )}
               {productSearch && searchResults.length === 0 && (
-                <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 shadow-card">
-                  No products found.
+                <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 shadow-card flex items-center justify-between gap-2">
+                  <span className="text-xs text-slate-600">No existing product match for &quot;{productSearch}&quot;.</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewProdName(productSearch.trim());
+                      setIsAddingNewProduct(true);
+                      setProductSearch('');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs"
+                  >
+                    + Add as New Product
+                  </button>
                 </div>
               )}
             </div>
@@ -931,9 +1413,21 @@ export default function Purchase() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {lines.map((l) => (
-                    <tr key={l.productId}>
+                    <tr key={l.productId} className={l.isNewProduct ? 'bg-emerald-50/20' : ''}>
                       <td className="table-td">
-                        <p className="font-medium text-slate-800">{l.name}</p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="font-medium text-slate-800">{l.name}</p>
+                          {l.isNewProduct && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 border border-emerald-200">
+                              + Auto-Adds to Main Inventory
+                            </span>
+                          )}
+                        </div>
+                        {l.isNewProduct && (
+                          <p className="text-[10px] text-emerald-700 mt-0.5">
+                            Category: {l.category || 'Fasteners'} · Rack: {l.rackNumber || 'General'} · Sell: ₹{l.sellingPrice?.toFixed(2) || '0.00'}
+                          </p>
+                        )}
                       </td>
                       <td className="table-td">
                         <div className="flex items-center justify-center gap-1.5">
@@ -995,45 +1489,157 @@ export default function Purchase() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Payment Status</label>
-              <div className="flex gap-2">
-                {(['Paid', 'Pending'] as const).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setPaymentStatus(s)}
-                    className={`flex-1 rounded-xl border py-2.5 text-sm font-semibold transition ${
-                      paymentStatus === s
-                        ? s === 'Paid'
-                          ? 'border-accent-500 bg-accent-50 text-accent-700'
-                          : 'border-warn-500 bg-warn-50 text-warn-700'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
+          <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <CreditCard className="w-4 h-4 text-brand-600" />
+                <span>Supplier Settlement & Payment Terms</span>
+              </label>
+              <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${paymentStatus === 'Paid' ? 'bg-accent-100 text-accent-800' : 'bg-amber-100 text-amber-800'}`}>
+                {paymentStatus === 'Paid' ? '✓ Settled Now' : '⏳ Credit / Pay Later'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-slate-600">Payment Status</label>
+                <div className="flex gap-2">
+                  {(['Paid', 'Pending'] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setPaymentStatus(s)}
+                      className={`flex-1 rounded-xl border py-2 text-xs font-bold transition ${
+                        paymentStatus === s
+                          ? s === 'Paid'
+                            ? 'border-accent-500 bg-accent-50 text-accent-700'
+                            : 'border-warn-500 bg-warn-50 text-warn-700'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {s === 'Paid' ? 'Paid Immediately' : 'Pay Later / Credit'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-slate-600">Payment Method</label>
+                <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+                  {(['Bank Transfer', 'UPI', 'Cash', 'Cheque', 'Credit / Pay Later'] as PurchasePaymentMethod[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => {
+                        setPaymentMethod(m);
+                        if (m === 'Credit / Pay Later') setPaymentStatus('Pending');
+                      }}
+                      className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold transition truncate text-center ${
+                        paymentMethod === m
+                          ? 'border-brand-500 bg-brand-50 text-brand-700 shadow-xs'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Payment Method</label>
-              <div className="flex gap-2">
-                {(['Cash', 'UPI', 'Bank Transfer'] as PurchasePaymentMethod[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setPaymentMethod(m)}
-                    className={`flex-1 rounded-xl border py-2.5 text-sm font-semibold transition ${
-                      paymentMethod === m
-                        ? 'border-brand-500 bg-brand-50 text-brand-700'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {m}
-                  </button>
-                ))}
+
+            {/* Cheque Details Card */}
+            {paymentMethod === 'Cheque' && (
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3.5 space-y-3 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                    <Landmark className="w-4 h-4 text-indigo-600" />
+                    <span>Outward Cheque Details (Issued to Supplier)</span>
+                  </h4>
+                  <span className="text-[10px] font-semibold text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full">
+                    Auto-tracked in Cheque Register
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Cheque Leaf # *</label>
+                    <input
+                      type="text"
+                      value={poChequeNo}
+                      onChange={(e) => setPoChequeNo(e.target.value)}
+                      placeholder="e.g. 004821"
+                      className="input bg-white text-xs py-1.5 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Bank Name *</label>
+                    <input
+                      type="text"
+                      value={poChequeBank}
+                      onChange={(e) => setPoChequeBank(e.target.value)}
+                      placeholder="e.g. HDFC Bank, SBI"
+                      className="input bg-white text-xs py-1.5"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Realisation / Due Date *</label>
+                    <input
+                      type="date"
+                      value={poChequeDate}
+                      onChange={(e) => setPoChequeDate(e.target.value)}
+                      className="input bg-white text-xs py-1.5"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* Credit Terms & Due Date */}
+            {(paymentStatus === 'Pending' || paymentMethod === 'Credit / Pay Later') && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-3 space-y-2.5 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Credit Terms & Expected Payment Due Date</span>
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(['Immediate', '15 Days', '30 Days', '45 Days', '60 Days'] as const).map((term) => {
+                    const days = term === 'Immediate' ? 0 : parseInt(term, 10);
+                    return (
+                      <button
+                        key={term}
+                        type="button"
+                        onClick={() => {
+                          setPoPaymentTerms(term);
+                          const d = new Date(date || new Date().toISOString().slice(0, 10));
+                          d.setDate(d.getDate() + days);
+                          setPoDueDate(d.toISOString().slice(0, 10));
+                        }}
+                        className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition ${
+                          poPaymentTerms === term
+                            ? 'bg-amber-500 text-white border-amber-600'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
+                        }`}
+                      >
+                        {term}
+                      </button>
+                    );
+                  })}
+                  <div className="flex items-center gap-1 ml-auto">
+                    <span className="text-[11px] font-semibold text-slate-600">Due:</span>
+                    <input
+                      type="date"
+                      value={poDueDate}
+                      onChange={(e) => {
+                        setPoDueDate(e.target.value);
+                        setPoPaymentTerms('Custom');
+                      }}
+                      className="input bg-white text-xs py-1 px-2 w-32"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div>
@@ -1809,6 +2415,123 @@ export default function Purchase() {
                 </button>
               </div>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Quick Record Payment Modal for Purchase Orders */}
+      {payTargetPO && (
+        <Modal
+          open={!!payTargetPO}
+          onClose={() => setPayTargetPO(null)}
+          title="Record Supplier Payment"
+          subtitle={`PO #${payTargetPO.poNumber} · Supplier: ${payTargetPO.supplier}`}
+          size="md"
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setPayTargetPO(null)}>Cancel</button>
+              <button
+                className="btn-primary bg-emerald-600 hover:bg-emerald-700"
+                onClick={handleRecordPoPayment}
+                disabled={!recordPayAmount || parseFloat(recordPayAmount) <= 0}
+              >
+                <CheckCircle2 className="w-4 h-4" /> Save Payment
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+              <div className="flex justify-between text-xs text-slate-600">
+                <span>Total PO Value:</span>
+                <span className="font-bold tabular-nums text-slate-800">{money(payTargetPO.grandTotal)}</span>
+              </div>
+              <div className="flex justify-between text-xs text-slate-600">
+                <span>Already Paid:</span>
+                <span className="font-bold tabular-nums text-emerald-700">
+                  {money(payTargetPO.amountPaid || (payTargetPO.paymentStatus === 'Paid' ? payTargetPO.grandTotal : 0))}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm font-bold border-t border-slate-200 pt-2 text-slate-900">
+                <span>Balance Due to Supplier:</span>
+                <span className="font-bold tabular-nums text-amber-700">
+                  {money(Math.max(0, payTargetPO.grandTotal - (payTargetPO.amountPaid || (payTargetPO.paymentStatus === 'Paid' ? payTargetPO.grandTotal : 0))))}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Payment Amount (₹) *</label>
+              <input
+                type="number"
+                min="1"
+                step="0.01"
+                value={recordPayAmount}
+                onChange={(e) => setRecordPayAmount(e.target.value)}
+                placeholder="Enter amount being paid"
+                className="input text-sm font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Payment Mode *</label>
+              <div className="grid grid-cols-4 gap-2">
+                {(['Bank Transfer', 'UPI', 'Cash', 'Cheque'] as PurchasePaymentMethod[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setRecordPayMethod(m)}
+                    className={`py-2 px-2 text-xs font-bold rounded-lg border transition text-center ${
+                      recordPayMethod === m
+                        ? 'border-brand-500 bg-brand-50 text-brand-700'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {recordPayMethod === 'Cheque' && (
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3.5 space-y-3">
+                <div className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                  <Landmark className="w-4 h-4 text-indigo-600" />
+                  <span>Cheque Details (Issued to Supplier)</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Cheque Leaf # *</label>
+                    <input
+                      type="text"
+                      value={recordPayChequeNo}
+                      onChange={(e) => setRecordPayChequeNo(e.target.value)}
+                      placeholder="e.g. 004821"
+                      className="input bg-white text-xs py-1.5 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Bank Name *</label>
+                    <input
+                      type="text"
+                      value={recordPayChequeBank}
+                      onChange={(e) => setRecordPayChequeBank(e.target.value)}
+                      placeholder="e.g. HDFC Bank"
+                      className="input bg-white text-xs py-1.5"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Cheque Date / Realisation *</label>
+                    <input
+                      type="date"
+                      value={recordPayChequeDate}
+                      onChange={(e) => setRecordPayChequeDate(e.target.value)}
+                      className="input bg-white text-xs py-1.5"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </Modal>
       )}
