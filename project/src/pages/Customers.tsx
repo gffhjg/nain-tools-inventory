@@ -29,6 +29,7 @@ export default function Customers() {
   const [payChequeNo, setPayChequeNo] = useState('');
   const [payChequeBank, setPayChequeBank] = useState('');
   const [payChequeDate, setPayChequeDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [filterTab, setFilterTab] = useState<'all' | 'overdue' | 'clear'>('all');
 
   const enriched = useMemo(() => {
     return customers.map((c) => {
@@ -45,13 +46,14 @@ export default function Customers() {
   }, [customers, sales]);
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
+    const q = search.toLowerCase().trim();
     return enriched.filter((c) => {
-      const matchesSearch = c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.gstin.toLowerCase().includes(q);
-      const matchesFilter = filterOutstanding ? c.outstanding > 0 : true;
-      return matchesSearch && matchesFilter;
+      if (filterTab === 'overdue' && c.outstanding <= 0) return false;
+      if (filterTab === 'clear' && (c.outstanding > 0 || c.saleCount === 0)) return false;
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.gstin.toLowerCase().includes(q);
     });
-  }, [enriched, search, filterOutstanding]);
+  }, [enriched, search, filterTab]);
 
   const totalOutstandingAll = useMemo(
     () => enriched.reduce((acc, c) => acc + c.outstanding, 0),
@@ -169,38 +171,79 @@ export default function Customers() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <div className="card p-5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-            <Users className="h-5 w-5" />
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            filterTab === 'all'
+              ? 'ring-2 ring-brand-500/80 bg-brand-50/20 border-brand-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setFilterTab('all')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold">
+              <Users className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
+              All Profiles
+            </span>
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">{customers.length}</p>
-          <p className="mt-1 text-xs text-slate-500 font-medium">Total Registered Customers</p>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{customers.length}</p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">Registered Customers</p>
         </div>
 
         <div className="card p-5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-            <FileText className="h-5 w-5" />
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 font-bold">
+              <FileText className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md">
+              Order Volume
+            </span>
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">{enriched.reduce((s, c) => s + c.saleCount, 0)}</p>
-          <p className="mt-1 text-xs text-slate-500 font-medium">Total Orders Placed</p>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{enriched.reduce((s, c) => s + c.saleCount, 0)}</p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">Total Orders Placed</p>
         </div>
 
-        <div className="card p-5 border-l-4 border-l-amber-500">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-            <IndianRupee className="h-5 w-5" />
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            filterTab === 'overdue'
+              ? 'ring-2 ring-amber-500/80 bg-amber-50/20 border-amber-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setFilterTab('overdue')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 font-bold">
+              <IndianRupee className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md">
+              Filter Overdue
+            </span>
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">{money(totalOutstandingAll)}</p>
-          <p className="mt-1 text-xs text-amber-600 font-semibold">Total Overdue Receivables</p>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(totalOutstandingAll)}</p>
+          <p className="mt-1 text-xs text-amber-600 font-semibold">Overdue Receivables</p>
         </div>
 
-        <div className="card p-5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-            <CheckCircle2 className="h-5 w-5" />
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            filterTab === 'clear'
+              ? 'ring-2 ring-emerald-500/80 bg-emerald-50/20 border-emerald-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setFilterTab('clear')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 font-bold">
+              <CheckCircle2 className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+              Clean Accounts
+            </span>
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
             {enriched.filter((c) => c.outstanding === 0 && c.saleCount > 0).length}
           </p>
-          <p className="mt-1 text-xs text-slate-500 font-medium">Clear Account Customers</p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">Zero Balance Accounts</p>
         </div>
       </div>
 
@@ -218,13 +261,34 @@ export default function Customers() {
             />
           </div>
 
-          <button
-            onClick={() => setFilterOutstanding((v) => !v)}
-            className={`btn ${filterOutstanding ? 'bg-amber-600 text-white' : 'btn-secondary'}`}
-          >
-            <AlertTriangle className="h-4 w-4" />
-            {filterOutstanding ? 'Showing Overdue Only' : 'Filter Overdue Receivables'}
-          </button>
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+            <button
+              onClick={() => setFilterTab('all')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                filterTab === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              All Customers ({customers.length})
+            </button>
+            <button
+              onClick={() => setFilterTab('overdue')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                filterTab === 'overdue' ? 'bg-amber-600 text-white shadow-sm' : 'text-amber-700 hover:bg-amber-50'
+              }`}
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Overdue ({enriched.filter((c) => c.outstanding > 0).length})
+            </button>
+            <button
+              onClick={() => setFilterTab('clear')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                filterTab === 'clear' ? 'bg-emerald-600 text-white shadow-sm' : 'text-emerald-700 hover:bg-emerald-50'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Clean ({enriched.filter((c) => c.outstanding === 0 && c.saleCount > 0).length})
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -432,7 +496,7 @@ export default function Customers() {
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">Payment Method</label>
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
-                {(['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'] as PaymentMethod[]).map((pm) => (
+                {(['Cash', 'UPI', 'Bank Transfer', 'Cheque'] as PaymentMethod[]).map((pm) => (
                   <button
                     key={pm}
                     type="button"

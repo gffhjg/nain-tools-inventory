@@ -59,6 +59,10 @@ type SaleRow = {
   due_date?: string; payment_terms?: string; notes?: string;
   cheque_no?: string; cheque_bank?: string; cheque_date?: string;
   cheque_status?: string; cheque_bounce_reason?: string; cheque_bounce_date?: string;
+  pi_expiration_date?: string;
+  converted_from_pi_number?: string;
+  converted_to_invoice?: string;
+  converted_at?: string;
 };
 
 type SaleItemRow = {
@@ -118,6 +122,10 @@ function mapSale(r: SaleRow, items: InvoiceLineItem[]): SaleRecord {
     chequeStatus: (r.cheque_status || undefined) as SaleRecord['chequeStatus'],
     chequeBounceReason: r.cheque_bounce_reason || '',
     chequeBounceDate: r.cheque_bounce_date || '',
+    piExpirationDate: r.pi_expiration_date || '',
+    convertedFromPiNumber: r.converted_from_pi_number || '',
+    convertedToInvoice: r.converted_to_invoice || '',
+    convertedAt: r.converted_at || '',
   };
 }
 
@@ -546,9 +554,9 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel, document_type, po_number, po_date, transport_mode, vehicle_number, eway_bill, vendor_code, bank_name, bank_account, bank_ifsc, seller_gstin, seller_pan, due_date, payment_terms, notes, cheque_no, cheque_bank, cheque_date, cheque_status, cheque_bounce_reason, cheque_bounce_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45)`,
-      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || ''],
+      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel, document_type, po_number, po_date, transport_mode, vehicle_number, eway_bill, vendor_code, bank_name, bank_account, bank_ifsc, seller_gstin, seller_pan, due_date, payment_terms, notes, cheque_no, cheque_bank, cheque_date, cheque_status, cheque_bounce_reason, cheque_bounce_date, pi_expiration_date, converted_from_pi_number, converted_to_invoice, converted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49)`,
+      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.piExpirationDate || '', sale.convertedFromPiNumber || '', sale.convertedToInvoice || '', sale.convertedAt || ''],
     );
     for (let i = 0; i < sale.items.length; i++) {
       const item = sale.items[i];
@@ -565,10 +573,11 @@ export const api = {
     await db.query('UPDATE sales SET status=$1, amount_paid=$2 WHERE id=$3', [status, amountPaid, id]);
   },
 
-  async updateSaleDocument(id: string, documentType: string, invoice: string): Promise<void> {
+  async updateSaleDocument(id: string, documentType: string, invoice: string, convertedFromPiNumber: string = ''): Promise<void> {
     validateNonEmpty(invoice, 'Invoice number');
     const db = await getDb();
-    await db.query('UPDATE sales SET document_type = $1, invoice = $2 WHERE id = $3', [documentType, invoice, id]);
+    const today = new Date().toISOString().slice(0, 10);
+    await db.query('UPDATE sales SET document_type = $1, invoice = $2, converted_from_pi_number = $3, converted_at = $4 WHERE id = $5', [documentType, invoice, convertedFromPiNumber, convertedFromPiNumber ? today : '', id]);
   },
 
   async updateSale(sale: SaleRecord): Promise<void> {
@@ -586,8 +595,8 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `UPDATE sales SET invoice=$1, customer=$2, customer_id=$3, phone=$4, customer_gstin=$5, customer_state=$6, customer_state_code=$7, date=$8, item_count=$9, subtotal=$10, discount=$11, discount_type=$12, gst_rate=$13, gst_type=$14, cgst_amount=$15, sgst_amount=$16, igst_amount=$17, gst_amount=$18, grand_total=$19, amount_paid=$20, payment_method=$21, status=$22, channel=$23, document_type=$24, po_number=$25, po_date=$26, transport_mode=$27, vehicle_number=$28, eway_bill=$29, vendor_code=$30, bank_name=$31, bank_account=$32, bank_ifsc=$33, seller_gstin=$34, seller_pan=$35, due_date=$36, payment_terms=$37, notes=$38, cheque_no=$39, cheque_bank=$40, cheque_date=$41, cheque_status=$42, cheque_bounce_reason=$43, cheque_bounce_date=$44 WHERE id=$45`,
-      [sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.id],
+      `UPDATE sales SET invoice=$1, customer=$2, customer_id=$3, phone=$4, customer_gstin=$5, customer_state=$6, customer_state_code=$7, date=$8, item_count=$9, subtotal=$10, discount=$11, discount_type=$12, gst_rate=$13, gst_type=$14, cgst_amount=$15, sgst_amount=$16, igst_amount=$17, gst_amount=$18, grand_total=$19, amount_paid=$20, payment_method=$21, status=$22, channel=$23, document_type=$24, po_number=$25, po_date=$26, transport_mode=$27, vehicle_number=$28, eway_bill=$29, vendor_code=$30, bank_name=$31, bank_account=$32, bank_ifsc=$33, seller_gstin=$34, seller_pan=$35, due_date=$36, payment_terms=$37, notes=$38, cheque_no=$39, cheque_bank=$40, cheque_date=$41, cheque_status=$42, cheque_bounce_reason=$43, cheque_bounce_date=$44, pi_expiration_date=$45, converted_from_pi_number=$46, converted_to_invoice=$47, converted_at=$48 WHERE id=$49`,
+      [sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.piExpirationDate || '', sale.convertedFromPiNumber || '', sale.convertedToInvoice || '', sale.convertedAt || '', sale.id],
     );
     await db.query('DELETE FROM sale_items WHERE sale_id = $1', [sale.id]);
     for (let i = 0; i < sale.items.length; i++) {

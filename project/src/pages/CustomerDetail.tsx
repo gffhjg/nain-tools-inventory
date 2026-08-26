@@ -100,6 +100,24 @@ export default function CustomerDetail() {
     { label: 'Avg. Order Value', value: money(businessSummary.avgOrder), icon: Tag, tone: 'bg-slate-100 text-slate-600' },
   ];
 
+  const piStats = useMemo(() => {
+    const piList = customerSales.filter(
+      (s) => s.documentType === 'PROFORMA INVOICE' || s.convertedFromPiNumber || (s.invoice && s.invoice.startsWith('PI-'))
+    );
+    const totalGiven = piList.length;
+    const converted = customerSales.filter((s) => Boolean(s.convertedFromPiNumber)).length;
+    const today = new Date().toISOString().slice(0, 10);
+    const expired = piList.filter(
+      (s) => s.documentType === 'PROFORMA INVOICE' && s.piExpirationDate && s.piExpirationDate <= today
+    ).length;
+    const active = piList.filter(
+      (s) => s.documentType === 'PROFORMA INVOICE' && (!s.piExpirationDate || s.piExpirationDate > today)
+    ).length;
+    const conversionRate = totalGiven > 0 ? Math.round((converted / totalGiven) * 100) : 0;
+
+    return { totalGiven, converted, expired, active, conversionRate, piList };
+  }, [customerSales]);
+
   return (
     <div className="animate-fade-in">
       <PageHeader
@@ -159,6 +177,47 @@ export default function CustomerDetail() {
         </div>
       </div>
 
+      {/* Proforma & Quote Purchase Tracking Card */}
+      {piStats.totalGiven > 0 && (
+        <div className="mt-4 card p-5 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-purple-50/20 border border-purple-200">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-purple-950 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-purple-600" />
+                Proforma Quotes &amp; Purchase Performance
+              </h3>
+              <p className="text-xs text-purple-700 mt-0.5">
+                Track quotations given to {customer.name} and whether they resulted in completed purchases.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <span className="px-3 py-1 rounded-xl text-xs font-black bg-purple-600 text-white shadow-xs">
+                {piStats.conversionRate}% Purchase Conversion
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 bg-white rounded-xl border border-purple-100 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-500 block">Total Quotes Given</span>
+              <span className="text-lg font-black text-purple-900">{piStats.totalGiven} PIs</span>
+            </div>
+            <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-xs">
+              <span className="text-[11px] font-bold text-emerald-700 block">✅ Purchased (Converted)</span>
+              <span className="text-lg font-black text-emerald-900">{piStats.converted} Orders</span>
+            </div>
+            <div className="p-3 bg-white rounded-xl border border-amber-200 shadow-xs">
+              <span className="text-[11px] font-bold text-amber-700 block">⏳ Active Quotes (Pending)</span>
+              <span className="text-lg font-black text-amber-900">{piStats.active} Open</span>
+            </div>
+            <div className="p-3 bg-white rounded-xl border border-rose-200 shadow-xs">
+              <span className="text-[11px] font-bold text-rose-700 block">❌ Did Not Purchase (Expired)</span>
+              <span className="text-lg font-black text-rose-900">{piStats.expired} Expired</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Invoice Timeline */}
       <div className="mt-4 card overflow-hidden">
         <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-3">
@@ -182,7 +241,21 @@ export default function CustomerDetail() {
             <tbody className="divide-y divide-slate-100">
               {customerSales.map((s) => (
                 <tr key={s.id} className="hover:bg-slate-50/50">
-                  <td className="table-td font-medium text-slate-800">{s.invoice}</td>
+                  <td className="table-td font-medium text-slate-800">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>{s.invoice}</span>
+                      {s.convertedFromPiNumber && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                          From PI: {s.convertedFromPiNumber}
+                        </span>
+                      )}
+                      {s.documentType === 'PROFORMA INVOICE' && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                          Proforma Quote
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="table-td text-slate-600">{s.date}</td>
                   <td className="table-td text-right tabular-nums">{s.itemCount}</td>
                   <td className="table-td text-right font-semibold tabular-nums">{money(s.grandTotal)}</td>

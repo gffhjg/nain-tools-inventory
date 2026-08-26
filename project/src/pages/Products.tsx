@@ -13,7 +13,7 @@ import { downloadCSV, toCSV } from '@/utils/analytics';
 
 const statusFilters = ['all', 'in-stock', 'low-stock', 'out-of-stock'] as const;
 
-type SortKey = 'name' | 'stock' | 'supplier' | 'rackNumber' | 'category' | 'lastVerification' | 'reorderLevel' | 'boxStatus';
+type SortKey = 'name' | 'stock' | 'supplier' | 'rackNumber' | 'lastVerification' | 'reorderLevel' | 'boxStatus';
 type SortDir = 'asc' | 'desc';
 
 const boxStatusOrder: Record<string, number> = {
@@ -24,7 +24,6 @@ export default function Products() {
   const { products: items, verifications, addProduct, updateProduct, deleteProduct, addVerification } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('All');
   const [statusFilter, setStatusFilter] = useState<(typeof statusFilters)[number]>('all');
   const [formOpen, setFormOpen] = useState(false);
 
@@ -45,21 +44,15 @@ export default function Products() {
     return map;
   }, [verifications]);
 
-  const allCategories = useMemo(() => {
-    return Array.from(new Set([...productCategories, ...items.map((p) => p.category).filter(Boolean)]));
-  }, [items]);
-
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     const filteredList = items.filter((p) => {
       const matchesSearch =
         p.name.toLowerCase().includes(q) ||
-        p.category.toLowerCase().includes(q) ||
         p.rackNumber.toLowerCase().includes(q) ||
         p.supplier.toLowerCase().includes(q);
-      const matchesCategory = category === 'All' || p.category === category;
       const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
-      return matchesSearch && matchesCategory && matchesStatus;
+      return matchesSearch && matchesStatus;
     });
     const sorted = [...filteredList].sort((a, b) => {
       let cmp = 0;
@@ -68,7 +61,6 @@ export default function Products() {
         case 'stock': cmp = a.stock - b.stock; break;
         case 'supplier': cmp = a.supplier.localeCompare(b.supplier); break;
         case 'rackNumber': cmp = a.rackNumber.localeCompare(b.rackNumber); break;
-        case 'category': cmp = a.category.localeCompare(b.category); break;
         case 'lastVerification':
           cmp = (lastVerificationDate[a.id] ?? '0000').localeCompare(lastVerificationDate[b.id] ?? '0000');
           break;
@@ -78,7 +70,7 @@ export default function Products() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return sorted;
-  }, [items, search, category, statusFilter, sortKey, sortDir, lastVerificationDate]);
+  }, [items, search, statusFilter, sortKey, sortDir, lastVerificationDate]);
 
   const summary = useMemo(() => {
     const totalUnits = items.reduce((s, p) => s + p.stock, 0);
@@ -134,7 +126,7 @@ export default function Products() {
 
   const handleExport = () => {
     const rows = filtered.map((p) => ({
-      Name: p.name, Category: p.category, Supplier: p.supplier,
+      Name: p.name, Supplier: p.supplier,
       Rack: p.rackNumber, EstStock: p.stock, BoxCapacity: p.boxCapacity,
       BoxStatus: p.boxStatus, BoxStatusMode: p.boxStatusMode,
       Cost: p.cost.toFixed(2), Price: p.price.toFixed(2),
@@ -196,24 +188,11 @@ export default function Products() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name, category, or rack…"
+              placeholder="Search products by name, rack, or supplier…"
               className="input pl-10"
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2">
-              <Filter className="h-4 w-4 text-slate-400" />
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="input w-auto py-2"
-              >
-                <option value="All">All Categories</option>
-                {allCategories.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </div>
             <div className="flex rounded-xl border border-slate-200 bg-slate-50 p-1">
               {statusFilters.map((s) => (
                 <button
@@ -242,7 +221,6 @@ export default function Products() {
               <tr>
                 <th className="table-th w-10"><input type="checkbox" className="rounded border-slate-300" /></th>
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('name')}>Product Name <SortIcon col="name" /></th>
-                <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('category')}>Category <SortIcon col="category" /></th>
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('supplier')}>Supplier <SortIcon col="supplier" /></th>
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('rackNumber')}>Rack <SortIcon col="rackNumber" /></th>
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('stock')}>Est. Stock <SortIcon col="stock" /></th>
@@ -271,7 +249,6 @@ export default function Products() {
                       </div>
                     </div>
                   </td>
-                  <td className="table-td text-slate-600">{p.category}</td>
                   <td className="table-td text-slate-600">{p.supplier}</td>
                   <td className="table-td text-slate-600">{p.rackNumber}</td>
                   <td className="table-td text-right">

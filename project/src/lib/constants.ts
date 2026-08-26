@@ -1,8 +1,6 @@
 import type { BoxStatus, Product, DiscountType, GstType } from './types';
 
-export const productCategories = [
-  'Bolts', 'Nuts', 'Washers', 'Screws', 'Fasteners', 'Threaded Rods', 'Anchors', 'Industrial Hardware',
-];
+export const productCategories: string[] = [];
 
 export const boxStatuses: BoxStatus[] = ['Full', '75% Full', 'Half', 'Very Low', 'Almost Empty', 'Empty'];
 

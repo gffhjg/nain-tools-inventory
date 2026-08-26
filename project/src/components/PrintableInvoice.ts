@@ -261,7 +261,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
               <strong>Invoice Amount in words (Rs.) :</strong><br/>
               Rupees ${numberToWords(sale.grandTotal)}
             </div>
-            ${(sale.chequeNo) ? `
+            ${(sale.paymentMethod === 'Cheque' && sale.chequeNo) ? `
             <div style="font-size: 9.5px; margin-bottom: 6px; background-color: #f0fdf4; padding: 3px 6px; border: 1px solid #bbf7d0; border-radius: 3px; color: #166534;">
               <strong>Cheque Details:</strong> #${esc(sale.chequeNo)} ${sale.chequeBank ? `&nbsp;|&nbsp; <strong>Bank:</strong> ${esc(sale.chequeBank)}` : ''} ${sale.chequeDate ? `&nbsp;|&nbsp; <strong>Claimable Date:</strong> ${esc(sale.chequeDate)}` : ''} ${sale.chequeStatus === 'bounced' ? `<span style="color:#b91c1c; font-weight:bold;">(BOUNCED)</span>` : sale.chequeStatus === 'cleared' ? `<span style="color:#15803d; font-weight:bold;">(CLEARED)</span>` : ''}
             </div>

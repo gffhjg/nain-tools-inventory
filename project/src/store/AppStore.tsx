@@ -22,13 +22,13 @@ type StoreContextValue = {
   loading: boolean;
   error: string | null;
   addProduct: (data: ProductFormData) => Promise<void>;
-  updateProduct: (id: string, data: ProductFormData) => Promise<void>;
+  updateProduct: (id: string, data: ProductFormData & { stock?: number }) => Promise<void>;
   deleteProduct: (id: string) => Promise<void>;
   addSale: (sale: SaleRecord) => Promise<void>;
   updateSale: (sale: SaleRecord) => Promise<void>;
   deleteSale: (id: string) => Promise<void>;
   updateSaleStatus: (id: string, status: SaleStatus, amountPaid: number) => Promise<void>;
-  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string) => Promise<void>;
+  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string, convertedFromPiNumber?: string) => Promise<void>;
   addPurchase: (po: PurchaseRecord) => Promise<void>;
   updatePurchase: (po: PurchaseRecord) => Promise<void>;
   deletePurchase: (id: string) => Promise<void>;
@@ -150,14 +150,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addNotification('success', 'Product Created', `${product.name} has been added to inventory.`);
   }, [addNotification]);
 
-  const updateProduct = useCallback(async (id: string, data: ProductFormData) => {
+  const updateProduct = useCallback(async (id: string, data: ProductFormData & { stock?: number }) => {
     await api.updateProduct(id, data);
+    if (data.stock !== undefined) {
+      await api.updateProductStock(id, data.stock, data.boxCapacity, data.reorderLevel);
+    }
     setProducts((prev) =>
       prev.map((p) => {
         if (p.id !== id) return p;
-        const computed = withComputed(p.stock, data.boxCapacity, data.reorderLevel);
+        const newStock = data.stock !== undefined ? data.stock : p.stock;
+        const computed = withComputed(newStock, data.boxCapacity, data.reorderLevel);
         const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
-        return { ...p, ...data, id, stock: p.stock, boxStatus, status: computed.status };
+        return { ...p, ...data, id, stock: newStock, boxStatus, status: computed.status };
       }),
     );
     addNotification('success', 'Product Updated', `${data.name} has been updated.`);
@@ -174,7 +178,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSales((prev) => [sale, ...prev]);
     addNotification('success', 'Sale Recorded', `Invoice ${sale.invoice} for ${sale.customer} has been recorded.`);
 
-    if (sale.paymentMethod === 'Cheque' || sale.chequeNo) {
+    if (sale.paymentMethod === 'Cheque' && sale.chequeNo) {
       const chequeRec: ChequeRecord = {
         id: `chq_${sale.id}`,
         saleId: sale.id,
@@ -321,12 +325,44 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     await api.updateSale(updatedSale);
     setSales((prev) => prev.map((s) => (s.id === updatedSale.id ? updatedSale : s)));
+
+    if (updatedSale.paymentMethod === 'Cheque' && updatedSale.chequeNo) {
+      const chequeRec: ChequeRecord = {
+        id: `chq_${updatedSale.id}`,
+        saleId: updatedSale.id,
+        customerId: updatedSale.customerId,
+        customerName: updatedSale.customer,
+        invoiceNumber: updatedSale.invoice,
+        chequeNumber: updatedSale.chequeNo,
+        bankName: updatedSale.chequeBank || 'Bank Cheque',
+        chequeDate: updatedSale.chequeDate || updatedSale.date,
+        amount: updatedSale.amountPaid > 0 ? updatedSale.amountPaid : updatedSale.grandTotal,
+        status: (updatedSale.chequeStatus || 'pending_clearance') as ChequeStatus,
+        bounceReason: updatedSale.chequeBounceReason || '',
+        bounceDate: updatedSale.chequeBounceDate || '',
+        notes: updatedSale.notes || '',
+      };
+      await api.createCheque(chequeRec);
+      setCheques((prev) => {
+        const idx = prev.findIndex((c) => c.saleId === updatedSale.id || c.id === chequeRec.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = chequeRec;
+          return next;
+        }
+        return [chequeRec, ...prev];
+      });
+    } else {
+      setCheques((prev) => prev.filter((c) => c.saleId !== updatedSale.id));
+    }
+
     addNotification('success', 'Invoice Updated', `Invoice ${updatedSale.invoice} updated and inventory stock adjusted.`);
   }, [sales, addNotification]);
 
-  const updateSaleDocumentType = useCallback(async (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string) => {
-    await api.updateSaleDocument(id, documentType, invoice);
-    setSales((prev) => prev.map((s) => (s.id === id ? { ...s, documentType, invoice } : s)));
+  const updateSaleDocumentType = useCallback(async (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string, convertedFromPiNumber: string = '') => {
+    await api.updateSaleDocument(id, documentType, invoice, convertedFromPiNumber);
+    const today = new Date().toISOString().slice(0, 10);
+    setSales((prev) => prev.map((s) => (s.id === id ? { ...s, documentType, invoice, convertedFromPiNumber: convertedFromPiNumber || s.convertedFromPiNumber, convertedAt: convertedFromPiNumber ? today : s.convertedAt } : s)));
     addNotification('success', 'Document Converted', `Converted to ${documentType} (${invoice}).`);
   }, [addNotification]);
 

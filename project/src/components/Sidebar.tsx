@@ -46,19 +46,19 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       />
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-brand-950 text-slate-200 transition-transform duration-300 lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-r border-slate-800/80 text-slate-200 shadow-2xl transition-transform duration-300 lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         {/* Logo */}
-        <div className="flex h-16 items-center justify-between px-5">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-500 text-white shadow-lg shadow-brand-500/30">
+        <div className="flex h-16 items-center justify-between px-5 border-b border-slate-800/60">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 text-white shadow-md shadow-brand-500/30 ring-1 ring-white/20">
               <Boxes className="h-5 w-5" />
             </div>
             <div className="leading-tight">
-              <span className="block text-base font-bold tracking-tight text-white">Nain Tools</span>
-              <span className="block text-[11px] font-medium text-brand-300">Bolt & Fastener Co.</span>
+              <span className="block text-base font-extrabold tracking-tight text-white">Nain Tools</span>
+              <span className="block text-[10.5px] font-semibold text-brand-300 tracking-wide uppercase">Bolt &amp; Fastener Co.</span>
             </div>
           </div>
           <button
@@ -70,9 +70,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         {/* Nav */}
-        <nav className="mt-2 flex-1 space-y-1 px-3">
-          <p className="px-3 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-wider text-brand-400/70">
-            Menu
+        <nav className="mt-3 flex-1 space-y-1.5 px-3">
+          <p className="px-3 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
+            Navigation
           </p>
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -83,14 +83,14 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 end={item.to === '/'}
                 onClick={onClose}
                 className={({ isActive }) =>
-                  `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                  `group flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-bold transition-all duration-200 ${
                     isActive
-                      ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/25'
-                      : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                      ? 'bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-md shadow-brand-600/30 ring-1 ring-white/10'
+                      : 'text-slate-400 hover:bg-white/5 hover:text-slate-100'
                   }`
                 }
               >
-                <Icon className="h-[18px] w-[18px] shrink-0" />
+                <Icon className="h-4 w-4 shrink-0" />
                 <span>{item.label}</span>
               </NavLink>
             );

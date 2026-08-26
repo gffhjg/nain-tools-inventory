@@ -11,10 +11,11 @@ import {
   type DateRange,
 } from '@/utils/analytics';
 
-type ReportType = 'sales' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding' | 'cheques';
+type ReportType = 'sales' | 'proforma' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding' | 'cheques';
 
 const reportTypes: { id: ReportType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'sales', label: 'Sales Report', icon: ShoppingCart },
+  { id: 'proforma', label: 'Proforma & Quote Conversion', icon: FileText },
   { id: 'purchase', label: 'Purchase Report', icon: Truck },
   { id: 'cheques', label: 'Cheque Register', icon: Landmark },
   { id: 'inventory', label: 'Inventory Report', icon: Package },
@@ -64,6 +65,19 @@ export default function Reports() {
           { label: 'Pending Payments', value: money(stats.pendingPayments), icon: Clock, tone: 'bg-warn-50 text-warn-600' },
           { label: 'Avg. Order Value', value: stats.totalSalesCount > 0 ? money(stats.totalRevenue / stats.totalSalesCount) : '₹0.00', icon: TrendingUp, tone: 'bg-slate-100 text-slate-600' },
         ];
+      case 'proforma': {
+        const totalPi = filteredSales.filter((s) => s.documentType === 'PROFORMA INVOICE' || s.convertedFromPiNumber || (s.invoice && s.invoice.startsWith('PI-')));
+        const convertedPi = filteredSales.filter((s) => Boolean(s.convertedFromPiNumber));
+        const rate = totalPi.length > 0 ? Math.round((convertedPi.length / totalPi.length) * 100) : 0;
+        const today = new Date().toISOString().slice(0, 10);
+        const expiredPi = totalPi.filter((s) => s.documentType === 'PROFORMA INVOICE' && s.piExpirationDate && s.piExpirationDate <= today);
+        return [
+          { label: 'Total Quotes Issued', value: `${totalPi.length} PIs (${money(totalPi.reduce((s, r) => s + r.grandTotal, 0))})`, icon: FileText, tone: 'bg-purple-50 text-purple-600' },
+          { label: 'Purchased / Converted', value: `${convertedPi.length} Orders (${money(convertedPi.reduce((s, r) => s + r.grandTotal, 0))})`, icon: CheckCircle2, tone: 'bg-emerald-50 text-emerald-600' },
+          { label: 'Quote Conversion Rate', value: `${rate}%`, icon: TrendingUp, tone: 'bg-brand-50 text-brand-600' },
+          { label: 'Did Not Purchase (Expired)', value: `${expiredPi.length} Expired (${money(expiredPi.reduce((s, r) => s + r.grandTotal, 0))})`, icon: AlertTriangle, tone: 'bg-rose-50 text-rose-600' },
+        ];
+      }
       case 'purchase':
         return [
           { label: 'Total Purchase Value', value: money(stats.totalPurchaseValue), icon: Truck, tone: 'bg-brand-50 text-brand-600' },
@@ -172,7 +186,7 @@ export default function Reports() {
         break;
       case 'inventory':
         rows = products.map((p) => ({
-          Name: p.name, Category: p.category, Supplier: p.supplier,
+          Name: p.name, Supplier: p.supplier,
           Rack: p.rackNumber,
           'Est. Stock': p.stock, 'Box Capacity': p.boxCapacity,
           'Reorder Level': p.reorderLevel,
@@ -204,7 +218,7 @@ export default function Reports() {
         rows = products
           .filter((p) => p.status !== 'in-stock')
           .map((p) => ({
-            Name: p.name, Category: p.category,
+            Name: p.name,
             Stock: p.stock, 'Reorder Level': p.reorderLevel,
             Supplier: p.supplier, Status: p.status,
           }));
@@ -313,9 +327,9 @@ export default function Reports() {
         bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Purchases</span><span>${money(stats.totalPurchaseValue)}</span></div></div>`;
         break;
       case 'inventory':
-        bodyHTML += '<table><thead><tr><th>Product</th><th>Category</th><th>Est. Stock</th><th>Box Cap.</th><th style="text-align:right;">Cost</th><th style="text-align:right;">Price</th><th style="text-align:right;">Profit</th><th style="text-align:right;">Value</th><th>Status</th></tr></thead><tbody>';
+        bodyHTML += '<table><thead><tr><th>Product</th><th>Est. Stock</th><th>Box Cap.</th><th style="text-align:right;">Cost</th><th style="text-align:right;">Price</th><th style="text-align:right;">Profit</th><th style="text-align:right;">Value</th><th>Status</th></tr></thead><tbody>';
         for (const p of products) {
-          bodyHTML += `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.category)}</td><td>${p.stock}</td><td>${p.boxCapacity}</td><td style="text-align:right;">${money(p.cost)}</td><td style="text-align:right;">${money(p.price)}</td><td style="text-align:right;">${money(p.price - p.cost)}</td><td style="text-align:right;">${money(p.stock * p.cost)}</td><td>${escapeHtml(p.status)}</td></tr>`;
+          bodyHTML += `<tr><td>${escapeHtml(p.name)}</td><td>${p.stock}</td><td>${p.boxCapacity}</td><td style="text-align:right;">${money(p.cost)}</td><td style="text-align:right;">${money(p.price)}</td><td style="text-align:right;">${money(p.price - p.cost)}</td><td style="text-align:right;">${money(p.stock * p.cost)}</td><td>${escapeHtml(p.status)}</td></tr>`;
         }
         bodyHTML += '</tbody></table>';
         bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Inventory Value</span><span>${money(stats.inventoryValue)}</span></div></div>`;
@@ -499,6 +513,7 @@ export default function Reports() {
       {/* Report body */}
       <div className="mt-6">
         {activeReport === 'sales' && <SalesReport sales={filteredSales} />}
+        {activeReport === 'proforma' && <ProformaReport sales={filteredSales} />}
         {activeReport === 'purchase' && <PurchaseReport purchases={filteredPurchases} />}
         {activeReport === 'cheques' && (
           <ChequesReport
@@ -514,6 +529,159 @@ export default function Reports() {
         {activeReport === 'gst' && <GSTReport sales={filteredSales} purchases={filteredPurchases} />}
         {activeReport === 'cust-outstanding' && <CustomerOutstandingReport sales={sales} customers={customers} />}
         {activeReport === 'sup-outstanding' && <SupplierOutstandingReport purchases={purchases} suppliers={suppliers} />}
+      </div>
+    </div>
+  );
+}
+
+function addMonthsToDate(dateStr: string, months: number = 1): string {
+  try {
+    const d = new Date(dateStr || new Date());
+    d.setMonth(d.getMonth() + months);
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return dateStr;
+  }
+}
+
+function ProformaReport({ sales }: { sales: SaleRecord[] }) {
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'converted' | 'active' | 'expired'>('all');
+
+  const piList = useMemo(() => {
+    return sales.filter(
+      (s) => s.documentType === 'PROFORMA INVOICE' || Boolean(s.convertedFromPiNumber) || (s.invoice && s.invoice.startsWith('PI-'))
+    );
+  }, [sales]);
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    const today = new Date().toISOString().slice(0, 10);
+    return piList.filter((s) => {
+      if (filterStatus === 'converted' && !s.convertedFromPiNumber) return false;
+      if (filterStatus === 'active' && (s.convertedFromPiNumber || (s.piExpirationDate && s.piExpirationDate <= today))) return false;
+      if (filterStatus === 'expired' && (s.convertedFromPiNumber || !s.piExpirationDate || s.piExpirationDate > today)) return false;
+
+      if (!q) return true;
+      return (
+        s.invoice.toLowerCase().includes(q) ||
+        s.customer.toLowerCase().includes(q) ||
+        (s.convertedFromPiNumber && s.convertedFromPiNumber.toLowerCase().includes(q))
+      );
+    });
+  }, [piList, filterStatus, search]);
+
+  const summary = useMemo(() => {
+    const totalGiven = piList.length;
+    const totalGivenVal = piList.reduce((s, r) => s + r.grandTotal, 0);
+    const converted = piList.filter((s) => Boolean(s.convertedFromPiNumber));
+    const convertedVal = converted.reduce((s, r) => s + r.grandTotal, 0);
+    const today = new Date().toISOString().slice(0, 10);
+    const expired = piList.filter((s) => s.documentType === 'PROFORMA INVOICE' && s.piExpirationDate && s.piExpirationDate <= today);
+    const expiredVal = expired.reduce((s, r) => s + r.grandTotal, 0);
+    const conversionRate = totalGiven > 0 ? Math.round((converted.length / totalGiven) * 100) : 0;
+
+    return { totalGiven, totalGivenVal, convertedCount: converted.length, convertedVal, expiredCount: expired.length, expiredVal, conversionRate };
+  }, [piList]);
+
+  if (piList.length === 0) return <EmptyReport />;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-2xl border border-purple-200 bg-purple-50/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-xl border border-purple-200 bg-white p-1">
+            {[
+              { id: 'all', label: `All Quotes (${piList.length})` },
+              { id: 'active', label: 'Active Quotes' },
+              { id: 'converted', label: `✅ Purchased / Converted (${summary.convertedCount})` },
+              { id: 'expired', label: `❌ Did Not Purchase (${summary.expiredCount})` },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setFilterStatus(tab.id as typeof filterStatus)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-bold transition ${
+                  filterStatus === tab.id ? 'bg-purple-600 text-white shadow-xs' : 'text-purple-700 hover:bg-purple-50'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative w-full sm:w-64">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search quote #, customer…"
+            className="input w-full pl-3 pr-3 text-xs"
+          />
+        </div>
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 font-bold text-slate-700">
+              <tr>
+                <th className="p-3 text-left">Quote / Invoice #</th>
+                <th className="p-3 text-left">Customer Name</th>
+                <th className="p-3 text-left">Quote Date</th>
+                <th className="p-3 text-left">Validity / Expiration</th>
+                <th className="p-3 text-right">Amount (₹)</th>
+                <th className="p-3 text-left">Purchase Outcome / Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {filtered.map((s) => {
+                const today = new Date().toISOString().slice(0, 10);
+                const isConverted = Boolean(s.convertedFromPiNumber);
+                const isExpired = s.documentType === 'PROFORMA INVOICE' && s.piExpirationDate && s.piExpirationDate <= today;
+
+                return (
+                  <tr key={s.id} className="hover:bg-purple-50/30">
+                    <td className="p-3 font-bold text-slate-900">
+                      <div className="flex items-center gap-1.5">
+                        <span>{s.invoice}</span>
+                        {isConverted && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-100 text-purple-800 font-bold">
+                            From PI: {s.convertedFromPiNumber}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-3 font-medium text-slate-800">{s.customer}</td>
+                    <td className="p-3 text-slate-600 font-mono">{s.date}</td>
+                    <td className="p-3 text-slate-600 font-mono">
+                      {s.piExpirationDate ? s.piExpirationDate : addMonthsToDate(s.date, 1)}
+                    </td>
+                    <td className="p-3 text-right font-black text-slate-900">{money(s.grandTotal)}</td>
+                    <td className="p-3">
+                      {isConverted ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Purchased · Tax Invoice #{s.invoice}
+                        </span>
+                      ) : isExpired ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          Did Not Purchase (Expired)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          <Clock className="w-3.5 h-3.5" />
+                          Active Quote (Pending Purchase)
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -634,7 +802,6 @@ function InventoryReport({ products }: { products: Product[] }) {
           <thead className="bg-slate-50/80">
             <tr>
               <th className="table-th">Product</th>
-              <th className="table-th">Category</th>
               <th className="table-th">Supplier</th>
               <th className="table-th">Rack</th>
               <th className="table-th text-right">Est. Stock</th>
@@ -651,7 +818,6 @@ function InventoryReport({ products }: { products: Product[] }) {
             {products.map((p) => (
               <tr key={p.id} className="transition hover:bg-slate-50/50">
                 <td className="table-td font-semibold text-slate-800">{p.name}</td>
-                <td className="table-td text-slate-600">{p.category}</td>
                 <td className="table-td text-slate-600">{p.supplier}</td>
                 <td className="table-td text-slate-600">{p.rackNumber}</td>
                 <td className="table-td text-right font-semibold tabular-nums">{p.stock}</td>

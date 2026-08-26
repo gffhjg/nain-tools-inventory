@@ -28,6 +28,16 @@ function addDaysToDate(dateStr: string, days: number): string {
   }
 }
 
+function addMonthsToDate(dateStr: string, months: number = 1): string {
+  try {
+    const d = new Date(dateStr || new Date());
+    d.setMonth(d.getMonth() + months);
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return dateStr;
+  }
+}
+
 function nextInvoice(existing: SaleRecord[]): string {
   const nums = existing
     .map((s) => parseInt(s.invoice.replace('INV-', ''), 10))
@@ -59,14 +69,14 @@ type DraftLine = InvoiceLineItem;
 export default function Sales() {
   const {
     sales, products, customers, cheques,
-    addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
+    updateProduct, addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
     addCustomer, addCheque, updateCheque, confirmChequeClearance, confirmChequeBounce, deleteCheque,
     companySettings
   } = useStore();
 
   const [activeSalesSubTab, setActiveSalesSubTab] = useState<'invoices' | 'cheques'>('invoices');
   const [search, setSearch] = useState('');
-  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'paid' | 'pending' | 'partially-paid'>('all');
+  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'paid' | 'pending' | 'partially-paid' | 'proforma' | 'debit-note'>('all');
 
   // Cheque Realisation Tracker Filter State
   const [chequeFilter, setChequeFilter] = useState<'all' | 'claimable' | 'pending' | 'cleared' | 'bounced'>('all');
@@ -75,9 +85,24 @@ export default function Sales() {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [customer, setCustomer] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [date, setDate] = useState(todayISO());
+
+  const filteredCustomers = useMemo(() => {
+    const q = customer.trim().toLowerCase();
+    if (!q) return customers.slice(0, 8);
+    return customers
+      .filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.phone && c.phone.includes(q)) ||
+          (c.gstin && c.gstin.toLowerCase().includes(q))
+      )
+      .slice(0, 8);
+  }, [customers, customer]);
+  const [piExpirationDate, setPiExpirationDate] = useState(addMonthsToDate(todayISO(), 1));
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [discount, setDiscount] = useState(0);
   const [discountType, setDiscountType] = useState<DiscountType>('amount');
@@ -134,6 +159,35 @@ export default function Sales() {
   const [viewing, setViewing] = useState<SaleRecord | null>(null);
   const [stockError, setStockError] = useState('');
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+
+  // Quick Edit Product Master directly during Billing
+  const [quickEditProduct, setQuickEditProduct] = useState<import('@/lib/types').Product | null>(null);
+  const [quickEditProductModalOpen, setQuickEditProductModalOpen] = useState(false);
+  const [quickEditFormData, setQuickEditFormData] = useState({
+    name: '',
+    category: 'Bolts',
+    supplier: '',
+    rackNumber: '',
+    size: '',
+    cost: 0,
+    price: 0,
+    stock: 0,
+    boxCapacity: 1000,
+    reorderLevel: 100,
+    hsnCode: '7318150',
+    notes: '',
+  });
+
+  // Quick Edit Custom Line Item
+  const [quickEditCustomLine, setQuickEditCustomLine] = useState<DraftLine | null>(null);
+  const [quickEditCustomModalOpen, setQuickEditCustomModalOpen] = useState(false);
+  const [quickCustomFormData, setQuickCustomFormData] = useState({
+    name: '',
+    price: 0,
+    cost: 0,
+    qty: 1,
+    hsnCode: '7318150',
+  });
 
   const [convertTargetSale, setConvertTargetSale] = useState<SaleRecord | null>(null);
   const [convertInvoiceNumber, setConvertInvoiceNumber] = useState('');
@@ -194,11 +248,15 @@ export default function Sales() {
   const filtered = useMemo(() => {
     let list = sales;
     if (activeFilterTab === 'paid') {
-      list = list.filter((s) => s.status === 'paid');
+      list = list.filter((s) => s.status === 'paid' && s.documentType !== 'PROFORMA INVOICE');
     } else if (activeFilterTab === 'pending') {
-      list = list.filter((s) => s.status === 'pending');
+      list = list.filter((s) => s.status === 'pending' && s.documentType !== 'PROFORMA INVOICE');
     } else if (activeFilterTab === 'partially-paid') {
-      list = list.filter((s) => s.status === 'partially-paid');
+      list = list.filter((s) => s.status === 'partially-paid' && s.documentType !== 'PROFORMA INVOICE');
+    } else if (activeFilterTab === 'proforma') {
+      list = list.filter((s) => s.documentType === 'PROFORMA INVOICE' && !s.convertedFromPiNumber);
+    } else if (activeFilterTab === 'debit-note') {
+      list = list.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'));
     }
 
     const q = search.toLowerCase().trim();
@@ -213,20 +271,30 @@ export default function Sales() {
   }, [sales, search, activeFilterTab]);
 
   const statusCounts = useMemo(() => {
-    const paid = sales.filter((s) => s.status === 'paid').length;
-    const pending = sales.filter((s) => s.status === 'pending').length;
-    const partial = sales.filter((s) => s.status === 'partially-paid').length;
-    return { paid, pending, partial, all: sales.length };
+    const paid = sales.filter((s) => s.status === 'paid' && s.documentType !== 'PROFORMA INVOICE').length;
+    const pending = sales.filter((s) => s.status === 'pending' && s.documentType !== 'PROFORMA INVOICE').length;
+    const partial = sales.filter((s) => s.status === 'partially-paid' && s.documentType !== 'PROFORMA INVOICE').length;
+    const proforma = sales.filter((s) => s.documentType === 'PROFORMA INVOICE' && !s.convertedFromPiNumber).length;
+    const debitNote = sales.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-')).length;
+    return { paid, pending, partial, proforma, debitNote, all: sales.length };
   }, [sales]);
 
   const summary = useMemo(() => {
-    const total = sales.reduce((s, r) => s + r.grandTotal, 0);
-    const paid = sales.filter((s) => s.status === 'paid').reduce((s, r) => s + r.grandTotal, 0);
+    const total = sales.filter((s) => s.documentType !== 'PROFORMA INVOICE').reduce((s, r) => s + r.grandTotal, 0);
+    const paid = sales.filter((s) => s.status === 'paid' && s.documentType !== 'PROFORMA INVOICE').reduce((s, r) => s + r.grandTotal, 0);
     const outstanding = sales
-      .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
+      .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft' && s.documentType !== 'PROFORMA INVOICE')
       .reduce((s, r) => s + (r.grandTotal - (r.amountPaid || 0)), 0);
-    const count = sales.length;
-    return { total, paid, outstanding, count };
+
+    const piList = sales.filter((s) => s.documentType === 'PROFORMA INVOICE' && !s.convertedFromPiNumber);
+    const piCount = piList.length;
+    const piTotal = piList.reduce((s, r) => s + r.grandTotal, 0);
+
+    const dnList = sales.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'));
+    const dnCount = dnList.length;
+    const dnTotal = dnList.reduce((s, r) => s + r.grandTotal, 0);
+
+    return { total, paid, outstanding, count: sales.length, piCount, piTotal, piList, dnCount, dnTotal, dnList };
   }, [sales]);
 
   const [freightCharges, setFreightCharges] = useState('0');
@@ -264,7 +332,6 @@ export default function Sales() {
     return products.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
-        p.category.toLowerCase().includes(q) ||
         p.rackNumber.toLowerCase().includes(q)
     );
   }, [products, productSearch]);
@@ -317,6 +384,7 @@ export default function Sales() {
     setDocumentType('TAX INVOICE');
     setPreviewCopyTag('Original For Recipient');
     setDate(todayISO());
+    setPiExpirationDate(addMonthsToDate(todayISO(), 1));
     setLines([]);
     setDiscount(0);
     setDiscountType('amount');
@@ -363,6 +431,7 @@ export default function Sales() {
     setAddress(sale.customerAddress || '');
     setCustomerGstin(sale.customerGstin || '');
     setDate(sale.date);
+    setPiExpirationDate(sale.piExpirationDate || addMonthsToDate(sale.date || todayISO(), 1));
     setLines(sale.items.map((i) => ({ ...i })));
     setDiscount(sale.discount);
     setDiscountType(sale.discountType || 'percent');
@@ -421,6 +490,7 @@ export default function Sales() {
     resetForm();
     setDocumentType('PROFORMA INVOICE');
     setCustomInvoiceNumber(nextProformaInvoice(sales));
+    setPiExpirationDate(addMonthsToDate(todayISO(), 1));
     setModalOpen(true);
   };
 
@@ -518,6 +588,98 @@ export default function Sales() {
 
   const removeLine = (productId: string) => {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
+  };
+
+  const handleOpenQuickEdit = (line: DraftLine) => {
+    if (line.isCustom) {
+      setQuickEditCustomLine(line);
+      setQuickCustomFormData({
+        name: line.name,
+        price: line.price,
+        cost: line.cost || 0,
+        qty: line.qty,
+        hsnCode: line.hsnCode || '7318150',
+      });
+      setQuickEditCustomModalOpen(true);
+    } else {
+      const prod = products.find((p) => p.id === line.productId);
+      if (!prod) return;
+      setQuickEditProduct(prod);
+      setQuickEditFormData({
+        name: prod.name,
+        category: prod.category || 'Bolts',
+        supplier: prod.supplier || '',
+        rackNumber: prod.rackNumber || '',
+        size: prod.size || '',
+        cost: prod.cost || 0,
+        price: prod.price || 0,
+        stock: prod.stock || 0,
+        boxCapacity: prod.boxCapacity || 1000,
+        reorderLevel: prod.reorderLevel || 100,
+        hsnCode: prod.hsnCode || '7318150',
+        notes: prod.notes || '',
+      });
+      setQuickEditProductModalOpen(true);
+    }
+  };
+
+  const handleSaveQuickEditProduct = async () => {
+    if (!quickEditProduct) return;
+    try {
+      await updateProduct(quickEditProduct.id, {
+        name: quickEditFormData.name.trim(),
+        category: quickEditFormData.category.trim() || 'Bolts',
+        supplier: quickEditFormData.supplier.trim(),
+        rackNumber: quickEditFormData.rackNumber.trim(),
+        size: quickEditFormData.size.trim(),
+        cost: quickEditFormData.cost,
+        price: quickEditFormData.price,
+        stock: quickEditFormData.stock,
+        boxCapacity: quickEditFormData.boxCapacity,
+        reorderLevel: quickEditFormData.reorderLevel,
+        hsnCode: quickEditFormData.hsnCode.trim() || '7318150',
+        notes: quickEditFormData.notes.trim(),
+        image: quickEditProduct.image || '',
+      });
+
+      // Synchronize current invoice draft line item
+      setLines((prev) =>
+        prev.map((l) => {
+          if (l.productId !== quickEditProduct.id) return l;
+          return {
+            ...l,
+            name: quickEditFormData.name.trim(),
+            price: quickEditFormData.price,
+            cost: quickEditFormData.cost,
+            hsnCode: quickEditFormData.hsnCode.trim() || '7318150',
+          };
+        })
+      );
+
+      setQuickEditProductModalOpen(false);
+      setQuickEditProduct(null);
+    } catch (err) {
+      alert(`Failed to update product: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleSaveQuickEditCustomLine = () => {
+    if (!quickEditCustomLine) return;
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.productId !== quickEditCustomLine.productId) return l;
+        return {
+          ...l,
+          name: quickCustomFormData.name.trim(),
+          price: quickCustomFormData.price,
+          cost: quickCustomFormData.cost,
+          qty: quickCustomFormData.qty,
+          hsnCode: quickCustomFormData.hsnCode.trim() || '7318150',
+        };
+      })
+    );
+    setQuickEditCustomModalOpen(false);
+    setQuickEditCustomLine(null);
   };
 
   const canSubmit = customer.trim() !== '' && invoiceNumber.trim() !== '' && lines.length > 0 && lines.every((l) => l.qty > 0);
@@ -684,10 +846,11 @@ export default function Sales() {
       sellerGstin: sellerGstin.trim().toUpperCase(),
       sellerPan: sellerPan.trim().toUpperCase(),
       documentType,
-      chequeNo: chequeNo.trim(),
-      chequeBank: chequeBank.trim(),
-      chequeDate: paymentMethod === 'Cheque' ? (chequeDate || date) : '',
-      chequeStatus: paymentMethod === 'Cheque' ? chequeStatus : undefined,
+      chequeNo: finalPaymentMethod === 'Cheque' ? chequeNo.trim() : '',
+      chequeBank: finalPaymentMethod === 'Cheque' ? chequeBank.trim() : '',
+      chequeDate: finalPaymentMethod === 'Cheque' ? (chequeDate || date) : '',
+      chequeStatus: finalPaymentMethod === 'Cheque' ? chequeStatus : undefined,
+      piExpirationDate: documentType === 'PROFORMA INVOICE' ? (piExpirationDate || addMonthsToDate(date, 1)) : '',
     };
 
     if (editingSaleId) {
@@ -708,24 +871,36 @@ export default function Sales() {
 
   const openRecordPaymentModal = (sale: SaleRecord) => {
     setRecordPaymentModalSale(sale);
-    const balance = Math.max(0, sale.grandTotal - (sale.amountPaid || 0));
-    setRecordPaymentAmount(balance.toString());
-    setRecordPaymentMethod('Cash');
-    setRecordChequeNo('');
-    setRecordChequeBank('');
-    setRecordChequeDate(todayISO());
+    setRecordPaymentAmount((sale.grandTotal - (sale.amountPaid || 0)).toString());
+    setRecordPaymentMethod(sale.paymentMethod || 'Cash');
+    setRecordChequeNo(sale.chequeNo || '');
+    setRecordChequeBank(sale.chequeBank || '');
+    setRecordChequeDate(sale.chequeDate || todayISO());
   };
 
   const handleRecordPayment = async () => {
     if (!recordPaymentModalSale) return;
-    const payAmt = parseFloat(recordPaymentAmount) || 0;
-    if (payAmt <= 0) {
-      alert('Please enter a valid payment amount greater than 0.');
-      return;
-    }
-    const currentPaid = recordPaymentModalSale.amountPaid || 0;
-    const newTotalPaid = Math.min(recordPaymentModalSale.grandTotal, currentPaid + payAmt);
-    const newStatus: SaleStatus = newTotalPaid >= recordPaymentModalSale.grandTotal ? 'paid' : 'partially-paid';
+    const addedPay = parseFloat(recordPaymentAmount) || 0;
+    if (addedPay <= 0) return;
+
+    const newTotalPaid = Math.min(recordPaymentModalSale.grandTotal, (recordPaymentModalSale.amountPaid || 0) + addedPay);
+    const newStatus: SaleStatus =
+      newTotalPaid >= recordPaymentModalSale.grandTotal
+        ? 'paid'
+        : newTotalPaid > 0
+        ? 'partially-paid'
+        : 'pending';
+
+    const updatedSale: SaleRecord = {
+      ...recordPaymentModalSale,
+      amountPaid: newTotalPaid,
+      status: newStatus,
+      paymentMethod: recordPaymentMethod,
+      chequeNo: recordPaymentMethod === 'Cheque' ? recordChequeNo.trim() : '',
+      chequeBank: recordPaymentMethod === 'Cheque' ? recordChequeBank.trim() : '',
+      chequeDate: recordPaymentMethod === 'Cheque' ? recordChequeDate : '',
+      chequeStatus: recordPaymentMethod === 'Cheque' ? 'pending_clearance' : undefined,
+    };
 
     if (recordPaymentMethod === 'Cheque' && recordChequeNo.trim()) {
       const chequeRec: ChequeRecord = {
@@ -737,25 +912,15 @@ export default function Sales() {
         chequeNumber: recordChequeNo.trim(),
         bankName: recordChequeBank.trim() || 'Bank Cheque',
         chequeDate: recordChequeDate || todayISO(),
-        amount: payAmt,
+        amount: addedPay,
         status: 'pending_clearance',
         notes: `Installment for invoice ${recordPaymentModalSale.invoice}`,
       };
       await addCheque(chequeRec);
     }
 
-    const updatedSale: SaleRecord = {
-      ...recordPaymentModalSale,
-      amountPaid: newTotalPaid,
-      status: newStatus,
-      paymentMethod: recordPaymentMethod,
-      chequeNo: recordPaymentMethod === 'Cheque' ? recordChequeNo.trim() : recordPaymentModalSale.chequeNo,
-      chequeBank: recordPaymentMethod === 'Cheque' ? recordChequeBank.trim() : recordPaymentModalSale.chequeBank,
-      chequeDate: recordPaymentMethod === 'Cheque' ? recordChequeDate : recordPaymentModalSale.chequeDate,
-      chequeStatus: recordPaymentMethod === 'Cheque' ? 'pending_clearance' : recordPaymentModalSale.chequeStatus,
-    };
     await updateSale(updatedSale);
-    
+
     // Update local viewing state if open
     if (viewing && viewing.id === recordPaymentModalSale.id) {
       setViewing(updatedSale);
@@ -775,8 +940,9 @@ export default function Sales() {
   const handleConfirmConvert = async () => {
     if (!convertTargetSale || !convertInvoiceNumber.trim()) return;
     const newInvoiceNo = convertInvoiceNumber.trim();
-    await updateSaleDocumentType(convertTargetSale.id, 'TAX INVOICE', newInvoiceNo);
-    setViewing((prev) => (prev && prev.id === convertTargetSale.id ? { ...prev, documentType: 'TAX INVOICE', invoice: newInvoiceNo } : prev));
+    const origPiNo = convertTargetSale.invoice;
+    await updateSaleDocumentType(convertTargetSale.id, 'TAX INVOICE', newInvoiceNo, origPiNo);
+    setViewing((prev) => (prev && prev.id === convertTargetSale.id ? { ...prev, documentType: 'TAX INVOICE', invoice: newInvoiceNo, convertedFromPiNumber: origPiNo } : prev));
     setConvertTargetSale(null);
   };
 
@@ -926,7 +1092,7 @@ export default function Sales() {
           onClick={() => setActiveSalesSubTab('invoices')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition ${
             activeSalesSubTab === 'invoices'
-              ? 'bg-brand-600 text-white shadow-xs'
+              ? 'bg-brand-600 text-white shadow-sm'
               : 'text-slate-600 hover:bg-slate-100 bg-white border border-slate-200'
           }`}
         >
@@ -942,7 +1108,7 @@ export default function Sales() {
           onClick={() => setActiveSalesSubTab('cheques')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition ${
             activeSalesSubTab === 'cheques'
-              ? 'bg-brand-600 text-white shadow-xs'
+              ? 'bg-brand-600 text-white shadow-sm'
               : 'text-slate-600 hover:bg-slate-100 bg-white border border-slate-200'
           }`}
         >
@@ -963,37 +1129,105 @@ export default function Sales() {
       {activeSalesSubTab === 'invoices' && (
         <>
           {/* Metric Cards */}
-          <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-            <div className="card p-5">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                <ShoppingCart className="h-5 w-5" />
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-5">
+            <div
+              className={`card p-5 cursor-pointer transition-all duration-200 ${
+                activeFilterTab === 'all'
+                  ? 'ring-2 ring-brand-500/80 bg-brand-50/20 border-brand-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setActiveFilterTab('all')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold">
+                  <ShoppingCart className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
+                  All Sales
+                </span>
               </div>
-              <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.total)}</p>
-              <p className="mt-1 text-xs text-slate-500 font-medium">Total Sales Revenue</p>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(summary.total)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-semibold">Total Revenue ({statusCounts.all})</p>
             </div>
 
-            <div className="card p-5">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-                <CheckCircle2 className="h-5 w-5" />
+            <div
+              className={`card p-5 cursor-pointer transition-all duration-200 ${
+                activeFilterTab === 'paid'
+                  ? 'ring-2 ring-emerald-500/80 bg-emerald-50/20 border-emerald-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setActiveFilterTab('paid')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 font-bold">
+                  <CheckCircle2 className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                  {statusCounts.paid} Paid
+                </span>
               </div>
-              <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.paid)}</p>
-              <p className="mt-1 text-xs text-slate-500 font-medium">Total Payments Collected</p>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(summary.paid)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-semibold">Collected Payments</p>
             </div>
 
-            <div className="card p-5 border-l-4 border-l-amber-500">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-                <Clock className="h-5 w-5" />
+            <div
+              className={`card p-5 cursor-pointer transition-all duration-200 ${
+                activeFilterTab === 'pending'
+                  ? 'ring-2 ring-amber-500/80 bg-amber-50/20 border-amber-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setActiveFilterTab('pending')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 font-bold">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md">
+                  {statusCounts.pending} Unpaid
+                </span>
               </div>
-              <p className="mt-4 text-2xl font-black text-slate-900">{money(summary.outstanding)}</p>
-              <p className="mt-1 text-xs text-amber-600 font-semibold">Overdue Sales Receivables</p>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(summary.outstanding)}</p>
+              <p className="mt-1 text-xs text-amber-600 font-semibold">Overdue Receivables</p>
             </div>
 
-            <div className="card p-5">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-                <TrendingUp className="h-5 w-5" />
+            <div
+              className={`card p-5 cursor-pointer transition-all duration-200 ${
+                activeFilterTab === 'proforma'
+                  ? 'ring-2 ring-purple-500/80 bg-purple-50/20 border-purple-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setActiveFilterTab('proforma')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-50 text-purple-600 font-bold">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md">
+                  1 Mo Expiration
+                </span>
               </div>
-              <p className="mt-4 text-2xl font-black text-slate-900">{summary.count}</p>
-              <p className="mt-1 text-xs text-slate-500 font-medium">Total Invoices Issued</p>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{summary.piCount} PIs ({money(summary.piTotal)})</p>
+              <p className="mt-1 text-xs text-purple-600 font-semibold">Proforma Quotes</p>
+            </div>
+
+            <div
+              className={`card p-5 cursor-pointer transition-all duration-200 ${
+                activeFilterTab === 'debit-note'
+                  ? 'ring-2 ring-indigo-500/80 bg-indigo-50/20 border-indigo-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setActiveFilterTab('debit-note')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 font-bold">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
+                  Sales Adjustment
+                </span>
+              </div>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{summary.dnCount} DNs ({money(summary.dnTotal)})</p>
+              <p className="mt-1 text-xs text-indigo-600 font-semibold">Debit Notes</p>
             </div>
           </div>
 
@@ -1006,7 +1240,7 @@ export default function Sales() {
                   onClick={() => setActiveFilterTab('all')}
                   className={`px-3 py-1.5 rounded-lg font-bold transition ${
                     activeFilterTab === 'all'
-                      ? 'bg-white text-slate-900 shadow-xs'
+                      ? 'bg-white text-slate-900 shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -1016,7 +1250,7 @@ export default function Sales() {
                   onClick={() => setActiveFilterTab('paid')}
                   className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
                     activeFilterTab === 'paid'
-                      ? 'bg-emerald-600 text-white shadow-xs'
+                      ? 'bg-emerald-600 text-white shadow-sm'
                       : 'text-emerald-700 hover:bg-emerald-50'
                   }`}
                 >
@@ -1027,7 +1261,7 @@ export default function Sales() {
                   onClick={() => setActiveFilterTab('pending')}
                   className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
                     activeFilterTab === 'pending'
-                      ? 'bg-amber-600 text-white shadow-xs'
+                      ? 'bg-amber-600 text-white shadow-sm'
                       : 'text-amber-700 hover:bg-amber-50'
                   }`}
                 >
@@ -1038,12 +1272,34 @@ export default function Sales() {
                   onClick={() => setActiveFilterTab('partially-paid')}
                   className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
                     activeFilterTab === 'partially-paid'
-                      ? 'bg-blue-600 text-white shadow-xs'
+                      ? 'bg-blue-600 text-white shadow-sm'
                       : 'text-blue-700 hover:bg-blue-50'
                   }`}
                 >
                   <TrendingUp className="w-3.5 h-3.5" />
                   Partially Paid ({statusCounts.partial})
+                </button>
+                <button
+                  onClick={() => setActiveFilterTab('proforma')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    activeFilterTab === 'proforma'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-purple-700 hover:bg-purple-50 font-extrabold'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Proforma Invoices ({statusCounts.proforma})
+                </button>
+                <button
+                  onClick={() => setActiveFilterTab('debit-note')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                    activeFilterTab === 'debit-note'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-indigo-700 hover:bg-indigo-50 font-extrabold'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Debit Notes ({statusCounts.debitNote})
                 </button>
               </div>
 
@@ -1104,19 +1360,44 @@ export default function Sales() {
                         <td className="px-4 py-3 font-black text-slate-900">{money(s.grandTotal)}</td>
                         <td className="px-4 py-3">
                           <div className="flex flex-col gap-0.5 items-start">
-                            <StatusBadge status={s.status} />
-                            {s.status === 'pending' && (
+                            {s.documentType === 'PROFORMA INVOICE' ? (
+                              <div className="flex flex-col gap-1 items-start">
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-100 text-purple-800 border border-purple-200 flex items-center gap-1">
+                                  <Calendar className="w-2.5 h-2.5 text-purple-600" />
+                                  {s.piExpirationDate ? (
+                                    s.piExpirationDate <= todayISO() ? (
+                                      <span className="text-rose-700 font-black">Expired ({s.piExpirationDate})</span>
+                                    ) : (
+                                      <span>Valid until {s.piExpirationDate} (1 Month)</span>
+                                    )
+                                  ) : (
+                                    <span>Valid for 1 Month ({addMonthsToDate(s.date, 1)})</span>
+                                  )}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openConvertModal(s)}
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition shadow-xs"
+                                  title="Convert Proforma Quote to Official Tax Invoice"
+                                >
+                                  + Convert to Tax Invoice
+                                </button>
+                              </div>
+                            ) : (
+                              <StatusBadge status={s.status} />
+                            )}
+                            {s.status === 'pending' && s.documentType !== 'PROFORMA INVOICE' && (
                               <span className="text-[10px] text-amber-700 font-bold flex items-center gap-0.5 mt-0.5">
                                 <Clock className="w-2.5 h-2.5 text-amber-600" />
                                 {s.dueDate ? `Due: ${s.dueDate}` : 'Pay Later (Full Due)'}
                               </span>
                             )}
-                            {s.status === 'partially-paid' && (
+                            {s.status === 'partially-paid' && s.documentType !== 'PROFORMA INVOICE' && (
                               <span className="text-[10px] text-blue-700 font-bold mt-0.5">
                                 Paid {money(s.amountPaid || 0)} · Due {money(s.grandTotal - (s.amountPaid || 0))}
                               </span>
                             )}
-                            {s.chequeNo && (
+                            {s.paymentMethod === 'Cheque' && s.chequeNo && (
                               <div className="flex flex-wrap items-center gap-1 mt-1 text-[10px] font-bold">
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">
                                   <Landmark className="w-2.5 h-2.5" />
@@ -1523,61 +1804,108 @@ export default function Sales() {
           onClose={() => setModalOpen(false)}
         >
           <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
-            {/* Customer Selector / Input */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Select Customer</label>
-                <select
-                  value={selectedCustomerId}
-                  onChange={(e) => handleCustomerSelect(e.target.value)}
-                  className="input"
-                >
-                  <option value="">-- Select Saved Customer --</option>
-                  <option value="new">+ Enter New Customer</option>
-                  {customers.map((c) => {
-                    const extra = [c.phone, c.gstin ? `GST: ${c.gstin}` : '', c.address].filter(Boolean).join(' · ');
-                    return (
-                      <option key={c.id} value={c.id}>
-                        {c.name} {extra ? `(${extra})` : ''}
-                      </option>
-                    );
-                  })}
-                </select>
+            {/* Refined Autocomplete Customer Selector */}
+            <div className="border border-slate-200 rounded-xl p-3.5 bg-slate-50/70 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-800">Customer &amp; Billing Details</label>
+                {customer.trim() && !customers.some((c) => c.name.trim().toLowerCase() === customer.trim().toLowerCase()) && (
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    ✨ New Customer (Auto-saves to Master List)
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Autocomplete Input for Customer Name */}
+                <div className="relative">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Customer / Firm Name *</label>
+                  <input
+                    type="text"
+                    value={customer}
+                    onFocus={() => setShowCustomerDropdown(true)}
+                    onChange={(e) => {
+                      setCustomer(e.target.value);
+                      setShowCustomerDropdown(true);
+                      if (selectedCustomerId !== 'new') setSelectedCustomerId('new');
+                    }}
+                    placeholder="Type or search customer..."
+                    className="input bg-white text-xs font-medium"
+                  />
+
+                  {/* Floating Autocomplete List */}
+                  {showCustomerDropdown && filteredCustomers.length > 0 && (
+                    <>
+                      <div className="fixed inset-0 z-20" onClick={() => setShowCustomerDropdown(false)} />
+                      <div className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg divide-y divide-slate-100">
+                        {filteredCustomers.map((c) => (
+                          <div
+                            key={c.id}
+                            onMouseDown={() => {
+                              setSelectedCustomerId(c.id);
+                              setCustomer(c.name);
+                              setPhone(c.phone || '');
+                              setAddress(c.address || '');
+                              setCustomerGstin(c.gstin || '');
+                              setShowCustomerDropdown(false);
+                            }}
+                            className="p-2 hover:bg-indigo-50 cursor-pointer transition rounded-lg text-xs"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-900">{c.name}</span>
+                              {c.gstin && (
+                                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
+                                  {c.gstin}
+                                </span>
+                              )}
+                            </div>
+                            {(c.phone || c.address) && (
+                              <p className="text-[10.5px] text-slate-500 mt-0.5 truncate">
+                                {c.phone && `📞 ${c.phone}`} {c.phone && c.address && '·'} {c.address && `📍 ${c.address}`}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Phone Number</label>
+                  <input
+                    type="text"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="Mobile for WhatsApp"
+                    className="input bg-white text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Customer GSTIN</label>
+                  <input
+                    type="text"
+                    value={customerGstin}
+                    onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
+                    placeholder="e.g. 07AAAAA0000A1Z5"
+                    className="input bg-white text-xs font-mono uppercase"
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Customer Name *</label>
-                <input
-                  type="text"
-                  value={customer}
-                  onChange={(e) => setCustomer(e.target.value)}
-                  placeholder="Customer / Firm Name"
-                  className="input"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number</label>
-                <input
-                  type="text"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="Mobile number for WhatsApp"
-                  className="input"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Customer Address</label>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Billing / Delivery Address</label>
                 <input
                   type="text"
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
-                  placeholder="Billing / Delivery Address"
-                  className="input"
+                  placeholder="Address details..."
+                  className="input bg-white text-xs"
                 />
               </div>
+            </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   {documentType === 'DEBIT NOTE' ? 'Debit Note Number *' : documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice Number *' : 'Invoice Number *'}
@@ -1596,22 +1924,62 @@ export default function Sales() {
                 <input
                   type="date"
                   value={date}
-                  onChange={(e) => setDate(e.target.value)}
+                  onChange={(e) => {
+                    const newDate = e.target.value;
+                    setDate(newDate);
+                    if (documentType === 'PROFORMA INVOICE') {
+                      setPiExpirationDate(addMonthsToDate(newDate, 1));
+                    }
+                  }}
                   className="input"
                 />
               </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">GST Number (GSTIN)</label>
-                <input
-                  type="text"
-                  value={customerGstin}
-                  onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
-                  placeholder="e.g. 07AAAAA0000A1Z5"
-                  className="input font-mono uppercase"
-                />
-              </div>
             </div>
+
+            {documentType === 'PROFORMA INVOICE' && (
+              <div className="rounded-xl border border-purple-200 bg-purple-50/70 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                    <Calendar className="w-4 h-4 text-purple-600" />
+                    Proforma Invoice (PI) Expiration Date
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-200 text-purple-800">
+                    1 Month Validity Period
+                  </span>
+                </div>
+                <p className="text-[11px] text-purple-700">
+                  Proforma Invoices are valid for 1 month by default. Adjust the expiration date or choose presets below:
+                </p>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <input
+                    type="date"
+                    value={piExpirationDate}
+                    onChange={(e) => setPiExpirationDate(e.target.value)}
+                    className="input text-xs font-bold w-40 text-purple-900 border-purple-300 focus:border-purple-500 bg-white"
+                  />
+                  <div className="flex flex-wrap items-center gap-1">
+                    {[
+                      { label: '1 Month (Standard)', months: 1 },
+                      { label: '15 Days', days: 15 },
+                      { label: '2 Months', months: 2 },
+                      { label: '3 Months', months: 3 },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => {
+                          if (opt.months) setPiExpirationDate(addMonthsToDate(date, opt.months));
+                          else if (opt.days) setPiExpirationDate(addDaysToDate(date, opt.days));
+                        }}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold border border-purple-200 bg-white text-purple-800 hover:bg-purple-100 transition"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Optional Tax & Transport Metadata section */}
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
@@ -1841,17 +2209,55 @@ export default function Sales() {
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[420px] overflow-y-auto pr-1">
                   {searchResults.map((p) => (
-                    <button
+                    <div
                       key={p.id}
-                      onClick={() => addLine(p.id)}
-                      className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-white hover:border-brand-500 hover:bg-brand-50/30 text-left transition"
+                      className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-white hover:border-indigo-300 text-left transition group"
                     >
-                      <div>
-                        <p className="text-xs font-bold text-slate-800">{p.name}</p>
-                        <p className="text-[11px] text-slate-500">Rack {p.rackNumber} · Stock: {p.stock}</p>
+                      <button
+                        type="button"
+                        onClick={() => addLine(p.id)}
+                        className="flex-1 text-left cursor-pointer"
+                      >
+                        <p className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 transition">{p.name}</p>
+                        <p className="text-[11px] text-slate-500">Rack {p.rackNumber} · Stock: <span className="font-bold text-emerald-700">{p.stock}</span></p>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-brand-600">{money(p.price)}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setQuickEditProduct(p);
+                            setQuickEditFormData({
+                              name: p.name,
+                              category: p.category || 'Bolts',
+                              supplier: p.supplier || '',
+                              rackNumber: p.rackNumber || '',
+                              size: p.size || '',
+                              cost: p.cost || 0,
+                              price: p.price || 0,
+                              stock: p.stock || 0,
+                              boxCapacity: p.boxCapacity || 1000,
+                              reorderLevel: p.reorderLevel || 100,
+                              hsnCode: p.hsnCode || '7318150',
+                              notes: p.notes || '',
+                            });
+                            setQuickEditProductModalOpen(true);
+                          }}
+                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                          title="Quick Edit Product Master"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addLine(p.id)}
+                          className="px-2 py-1 bg-brand-600 hover:bg-brand-700 text-white text-[11px] font-bold rounded transition"
+                        >
+                          + Add
+                        </button>
                       </div>
-                      <span className="text-xs font-bold text-brand-600">{money(p.price)}</span>
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -1886,7 +2292,15 @@ export default function Sales() {
                           <td className="px-3 py-2.5">
                             <div>
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <p className="font-bold text-slate-800">{l.name}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenQuickEdit(l)}
+                                  className="font-bold text-slate-800 hover:text-indigo-600 hover:underline text-left inline-flex items-center gap-1 group transition cursor-pointer"
+                                  title="Click to edit product master stock, price, rack, or details"
+                                >
+                                  <span>{l.name}</span>
+                                  <Edit3 className="w-3 h-3 text-indigo-500 opacity-0 group-hover:opacity-100 transition" />
+                                </button>
                                 {l.isCustom && (
                                   <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 text-purple-700 border border-purple-200">
                                     Custom / Direct
@@ -1905,19 +2319,29 @@ export default function Sales() {
                           </td>
                           <td className="px-3 py-2.5 text-center">
                             {l.isCustom ? (
-                              <span className="inline-block px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-700 border border-purple-200">
-                                Direct
-                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenQuickEdit(l)}
+                                title="Click to edit custom item details"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-700 border border-purple-200 hover:bg-purple-200 transition"
+                              >
+                                <span>Direct</span>
+                                <Edit3 className="w-2.5 h-2.5" />
+                              </button>
                             ) : (
-                              <span
-                                className={`inline-block px-2.5 py-1 rounded-full text-xs font-bold ${
+                              <button
+                                type="button"
+                                onClick={() => handleOpenQuickEdit(l)}
+                                title="Click to edit product master stock or details"
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold transition hover:scale-105 cursor-pointer ${
                                   isOverStock
-                                    ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    ? 'bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
                                 }`}
                               >
-                                {availStock}
-                              </span>
+                                <span>{availStock}</span>
+                                <Edit3 className="w-2.5 h-2.5 opacity-70" />
+                              </button>
                             )}
                           </td>
                           <td className="px-3 py-2.5 text-center">
@@ -1974,12 +2398,24 @@ export default function Sales() {
                             {money(lineNet)}
                           </td>
                           <td className="px-3 py-2.5 text-right">
-                            <button
-                              onClick={() => removeLine(l.productId)}
-                              className="text-slate-400 hover:text-rose-600 p-1 transition"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenQuickEdit(l)}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                                title="Edit Product Master (Stock, Price, Rack, Details)"
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeLine(l.productId)}
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                                title="Remove item"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -2301,7 +2737,7 @@ export default function Sales() {
                       <span className="text-[11px] text-slate-500">Select the channel where customer paid {money(grandTotal)}</span>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      {(['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'] as PaymentMethod[]).map((pm) => (
+                      {(['Cash', 'UPI', 'Bank Transfer', 'Cheque'] as PaymentMethod[]).map((pm) => (
                         <button
                           key={pm}
                           type="button"
@@ -2699,7 +3135,37 @@ export default function Sales() {
                             return (
                               <tr key={idx} className="align-top">
                                 <td className="border-r border-black p-1.5 text-center">{idx + 1}</td>
-                                <td className="border-r border-black p-1.5 font-bold pl-3">{it.name}</td>
+                                <td className="border-r border-black p-1.5 font-bold pl-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const prod = products.find((p) => p.id === it.productId || p.name.trim().toLowerCase() === it.name.trim().toLowerCase());
+                                      if (prod) {
+                                        setQuickEditProduct(prod);
+                                        setQuickEditFormData({
+                                          name: prod.name,
+                                          category: prod.category || 'Bolts',
+                                          supplier: prod.supplier || '',
+                                          rackNumber: prod.rackNumber || '',
+                                          size: prod.size || '',
+                                          cost: prod.cost || 0,
+                                          price: prod.price || 0,
+                                          stock: prod.stock || 0,
+                                          boxCapacity: prod.boxCapacity || 1000,
+                                          reorderLevel: prod.reorderLevel || 100,
+                                          hsnCode: prod.hsnCode || '7318150',
+                                          notes: prod.notes || '',
+                                        });
+                                        setQuickEditProductModalOpen(true);
+                                      }
+                                    }}
+                                    className="hover:text-indigo-600 hover:underline text-left inline-flex items-center gap-1 group transition cursor-pointer"
+                                    title="Quick Edit Product Master (Stock, Price, Rack, Details)"
+                                  >
+                                    <span>{it.name}</span>
+                                    <Edit3 className="w-3 h-3 text-indigo-500 opacity-0 group-hover:opacity-100 transition" />
+                                  </button>
+                                </td>
                                 <td className="border-r border-black p-1.5 text-center font-mono">{it.hsnCode || '7318150'}</td>
                                 <td className="border-r border-black p-1.5 text-right font-mono">{it.qty.toFixed(2)} PCS</td>
                                 <td className="border-r border-black p-1.5 text-right font-mono">{unitPrice.toFixed(2)}</td>
@@ -3034,7 +3500,7 @@ export default function Sales() {
                 Payment Method Received
               </label>
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
-                {(['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'] as PaymentMethod[]).map((pm) => (
+                {(['Cash', 'UPI', 'Bank Transfer', 'Cheque'] as PaymentMethod[]).map((pm) => (
                   <button
                     key={pm}
                     type="button"
@@ -3394,6 +3860,208 @@ export default function Sales() {
               >
                 <Check className="w-4 h-4" />
                 <span>Save Changes</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Quick Edit Product Master Modal (Inside Billing Process) */}
+      {quickEditProductModalOpen && quickEditProduct && (
+        <Modal
+          title={`Quick Edit Product Master — ${quickEditProduct.name}`}
+          size="md"
+          onClose={() => setQuickEditProductModalOpen(false)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-900">
+              <p className="font-bold flex items-center gap-1.5">
+                <Edit3 className="w-4 h-4 text-blue-600" />
+                Updating Product Master directly during Billing
+              </p>
+              <p className="text-[11px] text-blue-700 mt-0.5">
+                Changes saved here will update the master catalog database and immediately sync with your active invoice without losing your draft.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Product Name *</label>
+                <input
+                  type="text"
+                  value={quickEditFormData.name}
+                  onChange={(e) => setQuickEditFormData({ ...quickEditFormData, name: e.target.value })}
+                  className="input font-semibold text-slate-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-indigo-50/70 border border-indigo-200 p-2.5 rounded-xl">
+                  <label className="block font-bold text-indigo-900 mb-1 flex items-center justify-between">
+                    <span>Available Stock (Pcs)</span>
+                    <span className="text-[10px] font-extrabold bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded">Master</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={quickEditFormData.stock}
+                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, stock: parseInt(e.target.value, 10) || 0 })}
+                    className="input bg-white font-extrabold text-indigo-900 text-sm border-indigo-300 focus:border-indigo-600"
+                  />
+                  <p className="text-[10px] text-indigo-600 mt-1">Adjust database stock instantly</p>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Selling Rate (₹) *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={quickEditFormData.price}
+                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, price: parseFloat(e.target.value) || 0 })}
+                    className="input font-bold text-emerald-700"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Master selling price</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Purchase Cost (₹)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={quickEditFormData.cost}
+                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, cost: parseFloat(e.target.value) || 0 })}
+                    className="input"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Rack Location</label>
+                  <input
+                    type="text"
+                    value={quickEditFormData.rackNumber}
+                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, rackNumber: e.target.value })}
+                    placeholder="e.g. A-01"
+                    className="input"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">HSN Code</label>
+                <input
+                  type="text"
+                  value={quickEditFormData.hsnCode}
+                  onChange={(e) => setQuickEditFormData({ ...quickEditFormData, hsnCode: e.target.value })}
+                  className="input font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setQuickEditProductModalOpen(false)}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveQuickEditProduct}
+                className="btn-primary bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                Save & Update Invoice
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Quick Edit Custom Line Modal */}
+      {quickEditCustomModalOpen && quickEditCustomLine && (
+        <Modal
+          title={`Edit Custom Line Item — ${quickEditCustomLine.name}`}
+          size="md"
+          onClose={() => setQuickEditCustomModalOpen(false)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Product Description / Name *</label>
+              <input
+                type="text"
+                value={quickCustomFormData.name}
+                onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, name: e.target.value })}
+                className="input font-semibold"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Selling Rate (₹) *</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={quickCustomFormData.price}
+                  onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, price: parseFloat(e.target.value) || 0 })}
+                  className="input font-bold text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Sourcing Cost (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={quickCustomFormData.cost}
+                  onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, cost: parseFloat(e.target.value) || 0 })}
+                  className="input text-emerald-700"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Quantity</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={quickCustomFormData.qty}
+                  onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, qty: parseInt(e.target.value, 10) || 1 })}
+                  className="input text-center font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">HSN Code</label>
+                <input
+                  type="text"
+                  value={quickCustomFormData.hsnCode}
+                  onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, hsnCode: e.target.value })}
+                  className="input font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setQuickEditCustomModalOpen(false)}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveQuickEditCustomLine}
+                className="btn-primary"
+              >
+                Save Line Item
               </button>
             </div>
           </div>

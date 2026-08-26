@@ -397,6 +397,10 @@ async function migrateSchema(db: PGlite): Promise<void> {
     { table: 'sales', column: 'cheque_status', type: 'text', default: "''" },
     { table: 'sales', column: 'cheque_bounce_reason', type: 'text', default: "''" },
     { table: 'sales', column: 'cheque_bounce_date', type: 'text', default: "''" },
+    { table: 'sales', column: 'pi_expiration_date', type: 'text', default: "''" },
+    { table: 'sales', column: 'converted_from_pi_number', type: 'text', default: "''" },
+    { table: 'sales', column: 'converted_to_invoice', type: 'text', default: "''" },
+    { table: 'sales', column: 'converted_at', type: 'text', default: "''" },
     { table: 'purchases', column: 'due_date', type: 'text', default: "''" },
     { table: 'purchases', column: 'amount_paid', type: 'numeric', default: '0' },
     { table: 'purchases', column: 'cheque_no', type: 'text', default: "''" },
@@ -428,21 +432,26 @@ async function migrateSchema(db: PGlite): Promise<void> {
     { table: 'suppliers', column: 'state', type: 'text', default: "''" },
     { table: 'suppliers', column: 'state_code', type: 'text', default: "''" },
   ];
-  for (const m of migrations) {
-    try {
-      const { rows } = await db.query<{ exists: boolean }>(
-        `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2) as exists`,
-        [m.table, m.column],
-      );
-      if (!rows[0].exists) {
+  try {
+    const { rows: colRows } = await db.query<{ table_name: string; column_name: string }>(
+      `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`,
+    );
+    const existingSet = new Set(colRows.map((r) => `${r.table_name}.${r.column_name}`));
+
+    for (const m of migrations) {
+      if (!existingSet.has(`${m.table}.${m.column}`)) {
         const sql = m.default
           ? `ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.type} NOT NULL DEFAULT ${m.default}`
           : `ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.type}`;
-        await db.exec(sql);
+        try {
+          await db.exec(sql);
+        } catch {
+          // Column might already exist or table doesn't exist yet — skip
+        }
       }
-    } catch {
-      // Column might already exist or table doesn't exist yet — skip
     }
+  } catch (err) {
+    console.error('Error during schema column migration:', err);
   }
 }
 

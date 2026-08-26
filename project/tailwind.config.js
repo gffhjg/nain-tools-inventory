@@ -48,6 +48,7 @@ export default {
         },
       },
       boxShadow: {
+        xs: '0 1px 2px 0 rgba(15, 23, 42, 0.05)',
         soft: '0 1px 2px 0 rgba(15,23,42,0.04), 0 1px 3px 0 rgba(15,23,42,0.06)',
         card: '0 4px 24px -8px rgba(15,23,42,0.10), 0 2px 6px -2px rgba(15,23,42,0.05)',
       },

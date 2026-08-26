@@ -12,7 +12,7 @@ import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeDiscountAmount, computeGrandTotal, productCategories } from '@/lib/constants';
 import { downloadCSV, toCSV, money } from '@/utils/analytics';
-import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType, Product, ChequeStatus } from '@/lib/types';
+import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType, Product, ChequeStatus, Supplier } from '@/lib/types';
 
 const paymentTone: Record<PurchasePaymentMethod, string> = {
   Cash: 'bg-accent-50 text-accent-600',
@@ -64,10 +64,10 @@ function nextDebitNote(existingSales: SaleRecord[]): string {
 type DraftLine = PurchaseLineItem;
 
 export default function Purchase() {
-  const { purchases, products, suppliers, sales, addPurchase, addSale, deleteSale, updatePurchasePayment, companySettings } = useStore();
+  const { purchases, products, suppliers, sales, addPurchase, addSale, addProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'orders' | 'bills' | 'credit-notes' | 'suggestions'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'orders' | 'bills' | 'credit-notes' | 'suggestions' | 'pending-payments'>('all');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [supplier, setSupplier] = useState('');
@@ -109,6 +109,22 @@ export default function Purchase() {
   const [newProdReorder, setNewProdReorder] = useState('100');
   const [newProdHsn, setNewProdHsn] = useState('7318150');
   const [newProdQty, setNewProdQty] = useState('1000');
+
+  // New Product Creator State in Purchase Bill (auto-adds to Main Inventory)
+  const [isAddingPbNewProduct, setIsAddingPbNewProduct] = useState(false);
+  const [pbNewProdName, setPbNewProdName] = useState('');
+  const [pbNewProdCategory, setPbNewProdCategory] = useState('Bolts');
+  const [pbNewProdRack, setPbNewProdRack] = useState('');
+  const [pbNewProdSize, setPbNewProdSize] = useState('');
+  const [pbNewProdCost, setPbNewProdCost] = useState('');
+  const [pbNewProdPrice, setPbNewProdPrice] = useState('');
+  const [pbNewProdBoxCap, setPbNewProdBoxCap] = useState('1000');
+  const [pbNewProdReorder, setPbNewProdReorder] = useState('100');
+  const [pbNewProdHsn, setPbNewProdHsn] = useState('7318150');
+
+  // Supplier Combobox Autocomplete Dropdown state
+  const [showPbSupplierDropdown, setShowPbSupplierDropdown] = useState(false);
+  const [showPoSupplierDropdown, setShowPoSupplierDropdown] = useState(false);
 
   // Purchase Bill Modal State (rich Tax Invoice features for Purchase Bill)
   const [pbModalOpen, setPbModalOpen] = useState(false);
@@ -166,6 +182,32 @@ export default function Purchase() {
   const pbNumber = pbCustomBillNumber.trim() || autoPbNumber;
 
   const poNumber = useMemo(() => nextPONumber(purchases), [purchases]);
+
+  const filteredPbSuppliers = useMemo(() => {
+    const q = pbSupplier.trim().toLowerCase();
+    if (!q) return suppliers.slice(0, 8);
+    return suppliers
+      .filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          (s.phone && s.phone.includes(q)) ||
+          (s.gstin && s.gstin.toLowerCase().includes(q))
+      )
+      .slice(0, 8);
+  }, [suppliers, pbSupplier]);
+
+  const filteredPoSuppliers = useMemo(() => {
+    const q = supplier.trim().toLowerCase();
+    if (!q) return suppliers.slice(0, 8);
+    return suppliers
+      .filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          (s.phone && s.phone.includes(q)) ||
+          (s.gstin && s.gstin.toLowerCase().includes(q))
+      )
+      .slice(0, 8);
+  }, [suppliers, supplier]);
 
   const combinedRecords = useMemo(() => {
     type CombinedRecord =
@@ -233,6 +275,7 @@ export default function Purchase() {
       if (activeTab === 'orders' && rec.kind !== 'po') return false;
       if (activeTab === 'bills' && rec.typeLabel !== 'PURCHASE BILL') return false;
       if (activeTab === 'credit-notes' && rec.typeLabel !== 'CREDIT NOTE') return false;
+      if (activeTab === 'pending-payments' && (rec.kind !== 'po' || rec.paymentStatus !== 'Pending')) return false;
 
       if (!q) return true;
       return (
@@ -278,6 +321,8 @@ export default function Purchase() {
       .filter((p) => p.name.toLowerCase().includes(q))
       .slice(0, 6);
   }, [productSearch, products]);
+
+
 
   const resetNewProductForm = () => {
     setNewProdName('');
@@ -395,6 +440,12 @@ export default function Purchase() {
   const setCost = (productId: string, cost: number) => {
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, cost: Math.max(0, cost) } : l)),
+    );
+  };
+
+  const updatePoLineName = (productId: string, name: string) => {
+    setLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, name } : l)),
     );
   };
 
@@ -578,14 +629,91 @@ export default function Purchase() {
     );
   };
 
+  const updatePbLineName = (productId: string, name: string) => {
+    setPbLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, name } : l)),
+    );
+  };
+
   const removePbLine = (productId: string) => {
     setPbLines((prev) => prev.filter((l) => l.productId !== productId));
   };
 
+  const handleCreatePbNewProduct = async () => {
+    if (!pbNewProdName.trim()) {
+      alert('Please enter a product name');
+      return;
+    }
+    const cost = parseFloat(pbNewProdCost) || 0;
+    const price = parseFloat(pbNewProdPrice) || (cost > 0 ? cost * 1.25 : 0);
+    const boxCapacity = parseInt(pbNewProdBoxCap, 10) || 1000;
+    const reorderLevel = parseInt(pbNewProdReorder, 10) || 100;
+    const newId = `prod_${Date.now()}`;
+
+    // 1. Create product in Main Inventory Master
+    await addProduct({
+      name: pbNewProdName.trim(),
+      category: pbNewProdCategory,
+      supplier: pbSupplier.trim() || 'General Supplier',
+      rackNumber: pbNewProdRack.trim() || 'General',
+      size: pbNewProdSize.trim() || 'Standard',
+      cost,
+      price,
+      boxCapacity,
+      reorderLevel,
+      notes: 'Auto-created via Purchase Bill Entry',
+      image: '',
+      hsnCode: pbNewProdHsn.trim() || '7318150',
+    });
+
+    // 2. Add line item directly to active Purchase Bill
+    setPbLines((prev) => [
+      ...prev,
+      {
+        productId: newId,
+        name: pbNewProdName.trim(),
+        price,
+        qty: 1,
+        hsnCode: pbNewProdHsn.trim() || '7318150',
+      },
+    ]);
+
+    // 3. Reset creator form state
+    setPbNewProdName('');
+    setPbNewProdRack('');
+    setPbNewProdSize('');
+    setPbNewProdCost('');
+    setPbNewProdPrice('');
+    setIsAddingPbNewProduct(false);
+    setPbProductSearch('');
+  };
+
   const pbCanSubmit = pbSupplier.trim() !== '' && pbLines.length > 0;
 
-  const handleSavePurchaseBill = () => {
+  const handleSavePurchaseBill = async () => {
     if (!pbCanSubmit) return;
+
+    // Auto-save new supplier to Master Suppliers list if not already saved
+    const cleanSupplierName = pbSupplier.trim();
+    if (cleanSupplierName) {
+      const existingSup = suppliers.find((s) => s.name.trim().toLowerCase() === cleanSupplierName.toLowerCase());
+      if (!existingSup) {
+        const newSup: Supplier = {
+          id: `sup_${Date.now()}`,
+          name: cleanSupplierName,
+          contactPerson: cleanSupplierName,
+          phone: pbPhone.trim(),
+          email: '',
+          address: pbAddress.trim(),
+          state: 'HARYANA',
+          stateCode: '06',
+          gstin: pbGstin.trim().toUpperCase(),
+          notes: 'Auto-added from Purchase Bill',
+        };
+        await addSupplier(newSup);
+      }
+    }
+
     const newBill: SaleRecord = {
       id: `pb-${Date.now()}`,
       invoice: pbNumber,
@@ -628,14 +756,36 @@ export default function Purchase() {
       freightCharges: pbFreightVal,
     };
 
-    addSale(newBill);
+    await addSale(newBill);
     setPbModalOpen(false);
     setPbViewing(newBill);
     resetPbForm();
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!canSubmit) return;
+
+    // Auto-save new supplier to Master Suppliers list if not already saved
+    const cleanSupplierName = supplier.trim();
+    if (cleanSupplierName) {
+      const existingSup = suppliers.find((s) => s.name.trim().toLowerCase() === cleanSupplierName.toLowerCase());
+      if (!existingSup) {
+        const newSup: Supplier = {
+          id: `sup_${Date.now()}`,
+          name: cleanSupplierName,
+          contactPerson: cleanSupplierName,
+          phone: phone.trim(),
+          email: '',
+          address: '',
+          state: 'HARYANA',
+          stateCode: '06',
+          gstin: '',
+          notes: 'Auto-added from Purchase Order',
+        };
+        await addSupplier(newSup);
+      }
+    }
+
     const po: PurchaseRecord = {
       id: `po${Date.now()}`,
       poNumber,
@@ -662,7 +812,7 @@ export default function Purchase() {
       chequeDate: paymentMethod === 'Cheque' ? poChequeDate : '',
       chequeStatus: paymentMethod === 'Cheque' ? poChequeStatus : undefined,
     };
-    addPurchase(po);
+    await addPurchase(po);
     setModalOpen(false);
     resetForm();
   };
@@ -740,19 +890,93 @@ export default function Purchase() {
         }
       />
 
+      {/* Metric Cards - Interactive Filter Shortcuts */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        {statCards.map((s) => {
-          const Icon = s.icon;
-          return (
-            <div key={s.label} className="card p-5">
-              <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${s.tone}`}>
-                <Icon className="h-5 w-5" />
-              </div>
-              <p className="mt-4 text-2xl font-bold text-slate-900">{s.value}</p>
-              <p className="mt-1 text-sm text-slate-500">{s.label}</p>
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            activeTab === 'all'
+              ? 'ring-2 ring-brand-500/80 bg-brand-50/20 border-brand-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setActiveTab('all')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold">
+              <Truck className="h-5 w-5" />
             </div>
-          );
-        })}
+            <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
+              All Purchases
+            </span>
+          </div>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
+            ₹{summary.totalPO.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">Total Purchase Value</p>
+        </div>
+
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            activeTab === 'credit-notes'
+              ? 'ring-2 ring-rose-500/80 bg-rose-50/20 border-rose-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setActiveTab('credit-notes')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-600 font-bold">
+              <FileText className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md">
+              Credit Notes
+            </span>
+          </div>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
+            {summary.countCN} (₹{summary.totalCN.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+          </p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">Credit Notes Issued</p>
+        </div>
+
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            activeTab === 'orders'
+              ? 'ring-2 ring-accent-500/80 bg-accent-50/20 border-accent-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setActiveTab('orders')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-50 text-accent-600 font-bold">
+              <PackageCheck className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-accent-700 bg-accent-50 px-2 py-0.5 rounded-md">
+              PO Records
+            </span>
+          </div>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{summary.countPO}</p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">Purchase Orders</p>
+        </div>
+
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            activeTab === 'pending-payments'
+              ? 'ring-2 ring-amber-500/80 bg-amber-50/20 border-amber-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setActiveTab('pending-payments')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 font-bold">
+              <Clock className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md">
+              Unpaid POs
+            </span>
+          </div>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
+            ₹{summary.pendingPayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </p>
+          <p className="mt-1 text-xs text-amber-600 font-semibold">Pending Payments</p>
+        </div>
       </div>
 
       <div className="sticky top-[8.5rem] z-10 mt-4 -mx-4 px-4 py-3 bg-slate-50/90 backdrop-blur-md rounded-lg lg:-mx-8 lg:px-8">
@@ -774,6 +998,7 @@ export default function Purchase() {
               { id: 'credit-notes', label: `Credit Notes (${summary.countCN})` },
               { id: 'bills', label: `Purchase Bills (${summary.countPB})` },
               { id: 'orders', label: `Purchase Orders (${summary.countPO})` },
+              { id: 'pending-payments', label: `Pending Payments (${purchases.filter((p) => p.paymentStatus === 'Pending').length})` },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -781,8 +1006,8 @@ export default function Purchase() {
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
                   activeTab === tab.id
                     ? tab.id === 'suggestions'
-                      ? 'bg-amber-600 text-white shadow-xs'
-                      : 'bg-white text-slate-900 shadow-xs'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-white text-slate-900 shadow-sm'
                     : tab.highlight
                     ? 'text-amber-700 bg-amber-100/70 hover:bg-amber-100 font-extrabold'
                     : 'text-slate-600 hover:bg-slate-200/60'
@@ -1091,21 +1316,51 @@ export default function Purchase() {
         <div className="space-y-5">
           {/* Supplier section */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div>
+            <div className="relative">
               <label className="mb-1.5 block text-sm font-medium text-slate-700">Supplier Name</label>
               <input
                 type="text"
-                list="supplier-list"
                 value={supplier}
-                onChange={(e) => onSupplierSelect(e.target.value)}
-                placeholder="Select or type supplier"
+                onFocus={() => setShowPoSupplierDropdown(true)}
+                onChange={(e) => {
+                  onSupplierSelect(e.target.value);
+                  setShowPoSupplierDropdown(true);
+                }}
+                placeholder="Type or search supplier..."
                 className="input"
               />
-              <datalist id="supplier-list">
-                {suppliers.map((s) => (
-                  <option key={s.id} value={s.name} />
-                ))}
-              </datalist>
+              {showPoSupplierDropdown && filteredPoSuppliers.length > 0 && (
+                <>
+                  <div className="fixed inset-0 z-20" onClick={() => setShowPoSupplierDropdown(false)} />
+                  <div className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg divide-y divide-slate-100">
+                    {filteredPoSuppliers.map((s) => (
+                      <div
+                        key={s.id}
+                        onMouseDown={() => {
+                          setSupplier(s.name);
+                          if (s.phone) setPhone(s.phone);
+                          setShowPoSupplierDropdown(false);
+                        }}
+                        className="p-2 hover:bg-indigo-50 cursor-pointer transition rounded-lg text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">{s.name}</span>
+                          {s.gstin && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
+                              {s.gstin}
+                            </span>
+                          )}
+                        </div>
+                        {(s.phone || s.address) && (
+                          <p className="text-[10.5px] text-slate-500 mt-0.5 truncate">
+                            {s.phone && `📞 ${s.phone}`} {s.phone && s.address && '·'} {s.address && `📍 ${s.address}`}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-700">Supplier Invoice #</label>
@@ -1212,9 +1467,8 @@ export default function Purchase() {
                     <X className="w-4 h-4" />
                   </button>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="md:col-span-2">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div className="sm:col-span-2">
                     <label className="block text-[11px] font-bold text-slate-700 mb-1">Product Name *</label>
                     <input
                       type="text"
@@ -1225,54 +1479,13 @@ export default function Purchase() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Category</label>
-                    <select
-                      value={newProdCategory}
-                      onChange={(e) => setNewProdCategory(e.target.value)}
-                      className="input bg-white text-xs py-1.5"
-                    >
-                      {productCategories.map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Size / Spec</label>
-                    <input
-                      type="text"
-                      value={newProdSize}
-                      onChange={(e) => setNewProdSize(e.target.value)}
-                      placeholder="e.g. M12x50"
-                      className="input bg-white text-xs py-1.5"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Rack #</label>
-                    <input
-                      type="text"
-                      value={newProdRack}
-                      onChange={(e) => setNewProdRack(e.target.value)}
-                      placeholder="e.g. B-05"
-                      className="input bg-white text-xs py-1.5 font-medium"
-                    />
-                  </div>
-                  <div>
                     <label className="block text-[11px] font-bold text-slate-700 mb-1">Purchase Cost (₹) *</label>
                     <input
                       type="number"
                       min="0"
                       step="0.01"
                       value={newProdCost}
-                      onChange={(e) => {
-                        setNewProdCost(e.target.value);
-                        if (!newProdPrice) {
-                          const c = parseFloat(e.target.value) || 0;
-                          setNewProdPrice((c * 1.3).toFixed(2));
-                        }
-                      }}
+                      onChange={(e) => setNewProdCost(e.target.value)}
                       placeholder="0.00"
                       className="input bg-white text-xs py-1.5 font-bold text-emerald-700"
                     />
@@ -1289,39 +1502,6 @@ export default function Purchase() {
                       className="input bg-white text-xs py-1.5 font-bold text-brand-600"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Qty to Order</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={newProdQty}
-                      onChange={(e) => setNewProdQty(e.target.value)}
-                      placeholder="1000"
-                      className="input bg-white text-xs py-1.5 text-center font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Box Capacity</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={newProdBoxCap}
-                      onChange={(e) => setNewProdBoxCap(e.target.value)}
-                      placeholder="1000"
-                      className="input bg-white text-xs py-1.5 text-center"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Reorder Level</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={newProdReorder}
-                      onChange={(e) => setNewProdReorder(e.target.value)}
-                      placeholder="100"
-                      className="input bg-white text-xs py-1.5 text-center"
-                    />
-                  </div>
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-1">
@@ -1336,63 +1516,41 @@ export default function Purchase() {
                     type="button"
                     onClick={addNewProductLine}
                     disabled={!newProdName.trim() || !newProdCost}
-                    className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition disabled:opacity-50"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add to Order</span>
+                    Save & Add Item
                   </button>
                 </div>
               </div>
             )}
 
+            {/* Existing Product Search Selector */}
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
                 value={productSearch}
                 onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Search by product name…"
-                className="input pl-10"
+                placeholder="Search catalog products by name..."
+                className="input pl-9 text-xs"
               />
-              {productSearch && searchResults.length > 0 && (
-                <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card">
+              {searchResults.length > 0 && (
+                <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-card divide-y divide-slate-100">
                   {searchResults.map((p) => (
                     <button
                       key={p.id}
+                      type="button"
                       onClick={() => addLine(p.id)}
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-brand-50"
+                      className="flex w-full items-center justify-between p-2 text-left transition hover:bg-slate-50 rounded-lg"
                     >
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100">
-                        {p.image ? (
-                          <img src={p.image} alt={p.name} className="h-full w-full object-cover" />
-                        ) : (
-                          <Package className="h-4 w-4 text-slate-300" />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-slate-800">{p.name}</p>
-                        <p className="text-xs text-slate-400">Est. Stock: {p.stock} · {p.category}</p>
+                      <div>
+                        <p className="text-xs font-semibold text-slate-800">{p.name}</p>
+                        <p className="text-xs text-slate-400">Est. Stock: {p.stock}</p>
                       </div>
                       <span className="text-sm font-semibold text-slate-700">₹{p.cost.toFixed(2)}</span>
                       <Plus className="h-4 w-4 text-brand-500" />
                     </button>
                   ))}
-                </div>
-              )}
-              {productSearch && searchResults.length === 0 && (
-                <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 shadow-card flex items-center justify-between gap-2">
-                  <span className="text-xs text-slate-600">No existing product match for &quot;{productSearch}&quot;.</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewProdName(productSearch.trim());
-                      setIsAddingNewProduct(true);
-                      setProductSearch('');
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs"
-                  >
-                    + Add as New Product
-                  </button>
                 </div>
               )}
             </div>
@@ -1403,7 +1561,7 @@ export default function Purchase() {
               <table className="w-full">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="table-th">Product</th>
+                    <th className="table-th">Product Name</th>
                     <th className="table-th text-center">Qty (Pieces)</th>
                     <th className="table-th text-right">Cost / Piece</th>
                     <th className="table-th text-right">GST</th>
@@ -1416,18 +1574,19 @@ export default function Purchase() {
                     <tr key={l.productId} className={l.isNewProduct ? 'bg-emerald-50/20' : ''}>
                       <td className="table-td">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="font-medium text-slate-800">{l.name}</p>
+                          <input
+                            type="text"
+                            value={l.name}
+                            onChange={(e) => updatePoLineName(l.productId, e.target.value)}
+                            className="input py-1 px-2 text-xs font-semibold text-slate-800 bg-white"
+                            placeholder="Product Name"
+                          />
                           {l.isNewProduct && (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 border border-emerald-200">
                               + Auto-Adds to Main Inventory
                             </span>
                           )}
                         </div>
-                        {l.isNewProduct && (
-                          <p className="text-[10px] text-emerald-700 mt-0.5">
-                            Category: {l.category || 'Fasteners'} · Rack: {l.rackNumber || 'General'} · Sell: ₹{l.sellingPrice?.toFixed(2) || '0.00'}
-                          </p>
-                        )}
                       </td>
                       <td className="table-td">
                         <div className="flex items-center justify-center gap-1.5">
@@ -1729,63 +1888,108 @@ export default function Purchase() {
                 ))}
               </div>
             </div>
-            {/* Supplier Selector / Input */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Select Supplier</label>
-                <select
-                  value={pbSupplierId}
-                  onChange={(e) => handlePbSupplierSelect(e.target.value)}
-                  className="input"
-                >
-                  <option value="">-- Select Saved Supplier --</option>
-                  <option value="new">+ Enter New Supplier</option>
-                  {suppliers.map((s) => {
-                    const extra = [s.phone, s.gstin ? `GST: ${s.gstin}` : '', s.address].filter(Boolean).join(' · ');
-                    return (
-                      <option key={s.id} value={s.id}>
-                        {s.name} {extra ? `(${extra})` : ''}
-                      </option>
-                    );
-                  })}
-                </select>
+            {/* Refined Autocomplete Supplier Selector */}
+            <div className="border border-slate-200 rounded-xl p-3.5 bg-slate-50/70 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-800">Supplier &amp; Billing Details</label>
+                {pbSupplier.trim() && !suppliers.some((s) => s.name.trim().toLowerCase() === pbSupplier.trim().toLowerCase()) && (
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    ✨ New Supplier (Auto-saves to Master List)
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Autocomplete Input for Supplier Name */}
+                <div className="relative">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Supplier / Firm Name *</label>
+                  <input
+                    type="text"
+                    value={pbSupplier}
+                    onFocus={() => setShowPbSupplierDropdown(true)}
+                    onChange={(e) => {
+                      setPbSupplier(e.target.value);
+                      setShowPbSupplierDropdown(true);
+                      if (pbSupplierId !== 'new') setPbSupplierId('new');
+                    }}
+                    placeholder="Type or search supplier..."
+                    className="input bg-white text-xs font-medium"
+                  />
+
+                  {/* Floating Autocomplete List */}
+                  {showPbSupplierDropdown && filteredPbSuppliers.length > 0 && (
+                    <>
+                      <div className="fixed inset-0 z-20" onClick={() => setShowPbSupplierDropdown(false)} />
+                      <div className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg divide-y divide-slate-100">
+                        {filteredPbSuppliers.map((s) => (
+                          <div
+                            key={s.id}
+                            onMouseDown={() => {
+                              setPbSupplierId(s.id);
+                              setPbSupplier(s.name);
+                              setPbPhone(s.phone || '');
+                              setPbAddress(s.address || '');
+                              setPbGstin(s.gstin || '');
+                              setShowPbSupplierDropdown(false);
+                            }}
+                            className="p-2 hover:bg-indigo-50 cursor-pointer transition rounded-lg text-xs"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-900">{s.name}</span>
+                              {s.gstin && (
+                                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">
+                                  {s.gstin}
+                                </span>
+                              )}
+                            </div>
+                            {(s.phone || s.address) && (
+                              <p className="text-[10.5px] text-slate-500 mt-0.5 truncate">
+                                {s.phone && `📞 ${s.phone}`} {s.phone && s.address && '·'} {s.address && `📍 ${s.address}`}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Phone Number</label>
+                  <input
+                    type="text"
+                    value={pbPhone}
+                    onChange={(e) => setPbPhone(e.target.value)}
+                    placeholder="Mobile / Office Phone"
+                    className="input bg-white text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">Supplier GSTIN</label>
+                  <input
+                    type="text"
+                    value={pbGstin}
+                    onChange={(e) => setPbGstin(e.target.value.toUpperCase())}
+                    placeholder="e.g. 07AAAAA0000A1Z5"
+                    className="input bg-white text-xs font-mono uppercase"
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Supplier Name *</label>
-                <input
-                  type="text"
-                  value={pbSupplier}
-                  onChange={(e) => setPbSupplier(e.target.value)}
-                  placeholder="Supplier / Firm Name"
-                  className="input"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number</label>
-                <input
-                  type="text"
-                  value={pbPhone}
-                  onChange={(e) => setPbPhone(e.target.value)}
-                  placeholder="Mobile number"
-                  className="input"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Supplier Address</label>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Billing / Delivery Address</label>
                 <input
                   type="text"
                   value={pbAddress}
                   onChange={(e) => setPbAddress(e.target.value)}
-                  placeholder="Billing / Delivery Address"
-                  className="input"
+                  placeholder="Address details..."
+                  className="input bg-white text-xs"
                 />
               </div>
+            </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Purchase Bill Number *</label>
                 <input
@@ -1806,17 +2010,17 @@ export default function Purchase() {
                   className="input"
                 />
               </div>
-            </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Supplier GSTIN</label>
-              <input
-                type="text"
-                value={pbGstin}
-                onChange={(e) => setPbGstin(e.target.value)}
-                placeholder="E.G. 07AAAAA0000A1Z5"
-                className="input font-mono uppercase"
-              />
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Supplier GSTIN</label>
+                <input
+                  type="text"
+                  value={pbGstin}
+                  onChange={(e) => setPbGstin(e.target.value)}
+                  placeholder="E.G. 07AAAAA0000A1Z5"
+                  className="input font-mono uppercase"
+                />
+              </div>
             </div>
 
             {/* Transport & Tax Details */}
@@ -1890,7 +2094,89 @@ export default function Purchase() {
 
             {/* Product Selector */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Add Products to Purchase Bill</label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold text-slate-700">Add Products to Purchase Bill</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isAddingPbNewProduct) setPbNewProdName(pbProductSearch.trim());
+                    setIsAddingPbNewProduct(!isAddingPbNewProduct);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold transition flex items-center gap-1 shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add New Product Master</span>
+                </button>
+              </div>
+
+              {/* Inline New Product Form for Purchase Bill */}
+              {isAddingPbNewProduct && (
+                <div className="mb-3 p-3 bg-emerald-50/60 rounded-xl border-2 border-emerald-300 space-y-2.5 animate-fade-in shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-emerald-900 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-emerald-600" />
+                      Add Brand New Product Master (Auto-saves to Inventory)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingPbNewProduct(false)}
+                      className="text-slate-400 hover:text-slate-600 text-xs font-bold"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Product Name *</label>
+                      <input
+                        type="text"
+                        value={pbNewProdName}
+                        onChange={(e) => setPbNewProdName(e.target.value)}
+                        placeholder="e.g. Hex Bolt M12 x 50mm SS 304"
+                        className="input text-xs bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Cost Price (₹)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={pbNewProdCost}
+                        onChange={(e) => setPbNewProdCost(e.target.value)}
+                        placeholder="0.00"
+                        className="input text-xs bg-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Selling Price (₹)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={pbNewProdPrice}
+                        onChange={(e) => setPbNewProdPrice(e.target.value)}
+                        placeholder="0.00"
+                        className="input text-xs bg-white font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10.5px] text-emerald-800 font-medium">
+                      ✓ Auto-creates product master in Inventory catalog &amp; appends line item to this bill.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCreatePbNewProduct}
+                      className="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 flex items-center gap-1.5 shadow-sm"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Save &amp; Add to Bill</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
@@ -1922,11 +2208,31 @@ export default function Purchase() {
                     >
                       <div>
                         <p className="font-bold text-slate-900">{p.name}</p>
-                        <p className="text-[11px] text-slate-500 font-mono">Size: {p.size || 'N/A'} | Stock: {p.stock}</p>
+                        <p className="text-[11px] text-slate-500 font-mono">Stock: {p.stock}</p>
                       </div>
                       <span className="font-bold text-indigo-600">₹{p.price.toFixed(2)}</span>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {pbProductSearch && pbSearchResults.length === 0 && !isAddingPbNewProduct && (
+                <div className="mt-1.5 p-3 rounded-xl border border-amber-200 bg-amber-50/70 flex items-center justify-between gap-2">
+                  <span className="text-xs text-amber-900 font-medium">
+                    No existing product match for &quot;{pbProductSearch}&quot;.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPbNewProdName(pbProductSearch.trim());
+                      setIsAddingPbNewProduct(true);
+                      setPbProductSearch('');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs shrink-0 flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add &quot;{pbProductSearch}&quot; as New Product</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -1937,7 +2243,7 @@ export default function Purchase() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 font-bold text-slate-700">
                     <tr>
-                      <th className="p-2">Item</th>
+                      <th className="p-2">Item Name</th>
                       <th className="p-2 w-28">HSN Code</th>
                       <th className="p-2 w-24 text-center">Qty</th>
                       <th className="p-2 w-24 text-right">Price (₹)</th>
@@ -1948,7 +2254,15 @@ export default function Purchase() {
                   <tbody className="divide-y divide-slate-100">
                     {pbLines.map((l) => (
                       <tr key={l.productId}>
-                        <td className="p-2 font-medium">{l.name}</td>
+                        <td className="p-2">
+                          <input
+                            type="text"
+                            value={l.name}
+                            onChange={(e) => updatePbLineName(l.productId, e.target.value)}
+                            className="input p-1.5 text-xs font-semibold text-slate-900 bg-white"
+                            placeholder="Item Name"
+                          />
+                        </td>
                         <td className="p-2">
                           <input
                             type="text"

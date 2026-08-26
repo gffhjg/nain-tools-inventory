@@ -5,7 +5,7 @@ export type BoxStatusMode = 'auto' | 'manual';
 export type Product = {
   id: string;
   name: string;
-  category: string;
+  category?: string;
   supplier: string;
   rackNumber: string;
   size: string;
@@ -117,6 +117,10 @@ export type SaleRecord = {
   chequeStatus?: ChequeStatus;
   chequeBounceReason?: string;
   chequeBounceDate?: string;
+  piExpirationDate?: string;
+  convertedFromPiNumber?: string;
+  convertedToInvoice?: string;
+  convertedAt?: string;
 };
 
 export type PurchaseLineItem = {
