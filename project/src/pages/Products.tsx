@@ -144,10 +144,6 @@ export default function Products() {
         subtitle="Manage your catalog, stock levels, and supplier information."
         actions={
           <>
-            <button className="btn-secondary" onClick={() => navigate('/import-products')}>
-              <Upload className="h-4 w-4 text-emerald-600" />
-              <span className="hidden sm:inline">Import Excel/CSV</span>
-            </button>
             <button className="btn-secondary" onClick={handleExport}>
               <Download className="h-4 w-4" />
               <span className="hidden sm:inline">Export</span>

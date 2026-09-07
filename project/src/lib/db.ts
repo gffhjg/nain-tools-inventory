@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { populateRealInventory } from './inventorySeedData';
 
 let dbInstance: PGlite | null = null;
 let initPromise: Promise<PGlite> | null = null;
@@ -296,7 +297,7 @@ INSERT INTO sale_items (sale_id, product_id, name, price, qty, sort_order) VALUE
 ('s3', 'p2', 'HB 4x20', 2.50, 200, 1),
 ('s4', 'p1', 'HB 3x10', 1.50, 1000, 0),
 ('s4', 'p4', 'M8 Nut', 1.00, 1000, 1),
-('s4', 'p7', 'M8 Washer', 1000, 2),
+('s4', 'p7', 'M8 Washer', 0.75, 1000, 2),
 ('s5', 'p10', 'CSK Screw M8x25', 1.75, 50, 0),
 ('s6', 'p16', 'Rivet Nut M6', 3.00, 100, 0),
 ('s6', 'p8', 'M10 Washer', 1.00, 200, 1),
@@ -399,6 +400,8 @@ async function migrateSchema(db: PGlite): Promise<void> {
     { table: 'sales', column: 'cheque_bounce_date', type: 'text', default: "''" },
     { table: 'sales', column: 'pi_expiration_date', type: 'text', default: "''" },
     { table: 'sales', column: 'converted_from_pi_number', type: 'text', default: "''" },
+    { table: 'sales', column: 'converted_from_po_number', type: 'text', default: "''" },
+    { table: 'sales', column: 'expected_delivery_date', type: 'text', default: "''" },
     { table: 'sales', column: 'converted_to_invoice', type: 'text', default: "''" },
     { table: 'sales', column: 'converted_at', type: 'text', default: "''" },
     { table: 'purchases', column: 'due_date', type: 'text', default: "''" },
@@ -465,10 +468,14 @@ export async function getDb(): Promise<PGlite> {
 
     await migrateSchema(db);
 
-    const { rows } = await db.query<{ count: string }>('SELECT COUNT(*)::text as count FROM products');
-    const count = parseInt(rows[0].count, 10);
-    if (count === 0) {
-      await db.exec(SEED_SQL);
+    try {
+      await populateRealInventory(db);
+    } catch (err) {
+      console.error('Error in populateRealInventory:', err);
+      const { rows } = await db.query<{ count: string }>('SELECT COUNT(*)::text as count FROM products');
+      if (parseInt(rows[0]?.count || '0', 10) === 0) {
+        await db.exec(SEED_SQL);
+      }
     }
 
     dbInstance = db;

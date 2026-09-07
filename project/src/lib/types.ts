@@ -108,7 +108,7 @@ export type SaleRecord = {
   bankIfsc?: string;
   sellerGstin?: string;
   sellerPan?: string;
-  documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE';
+  documentType?: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER';
   freightCharges?: number;
   notes?: string;
   chequeNo?: string;
@@ -119,6 +119,8 @@ export type SaleRecord = {
   chequeBounceDate?: string;
   piExpirationDate?: string;
   convertedFromPiNumber?: string;
+  convertedFromPoNumber?: string;
+  expectedDeliveryDate?: string;
   convertedToInvoice?: string;
   convertedAt?: string;
 };

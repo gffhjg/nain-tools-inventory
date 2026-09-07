@@ -22,15 +22,15 @@ type StoreContextValue = {
   loading: boolean;
   error: string | null;
   addProduct: (data: ProductFormData) => Promise<void>;
+  importProducts: (items: Array<ProductFormData & { initialStock?: number; stock?: number }>) => Promise<number>;
   updateProduct: (id: string, data: ProductFormData & { stock?: number }) => Promise<void>;
   deleteProduct: (id: string) => Promise<void>;
   addSale: (sale: SaleRecord) => Promise<void>;
   updateSale: (sale: SaleRecord) => Promise<void>;
   deleteSale: (id: string) => Promise<void>;
   updateSaleStatus: (id: string, status: SaleStatus, amountPaid: number) => Promise<void>;
-  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string, convertedFromPiNumber?: string) => Promise<void>;
+  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER', invoice: string, convertedFromNumber?: string, isPoConversion?: boolean) => Promise<void>;
   addPurchase: (po: PurchaseRecord) => Promise<void>;
-  updatePurchase: (po: PurchaseRecord) => Promise<void>;
   deletePurchase: (id: string) => Promise<void>;
   updatePurchasePayment: (id: string, paymentStatus: 'Paid' | 'Pending', amountPaid: number, paymentMethod: import('@/lib/types').PurchasePaymentMethod, chequeNo?: string, chequeBank?: string, chequeDate?: string, chequeStatus?: ChequeStatus) => Promise<void>;
   markPurchaseReceived: (id: string) => Promise<void>;
@@ -49,9 +49,18 @@ type StoreContextValue = {
   confirmChequeBounce: (chequeId: string, reason: string, bounceDate?: string) => Promise<void>;
   deleteCheque: (id: string) => Promise<void>;
   updateCompanySettings: (s: CompanySettings) => Promise<void>;
+  refreshData: (forcePopulate?: boolean) => Promise<void>;
 };
 
 const StoreContext = createContext<StoreContextValue | null>(null);
+
+export function getSaleStockMultiplier(docType?: string, status?: string): number {
+  if (status === 'draft' || status === 'cancelled') return 0;
+  if (docType === 'PURCHASE BILL' || docType === 'CREDIT NOTE') return +1;
+  if (docType === 'PURCHASE ORDER' || docType === 'PROFORMA INVOICE') return 0;
+  if (!docType || docType === 'TAX INVOICE' || docType === 'DEBIT NOTE') return -1;
+  return -1;
+}
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [products, setProducts] = useState<Product[]>([]);
@@ -68,12 +77,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const notifiedStockRef = useRef<Set<string>>(new Set());
   const notifiedChequesRef = useRef<Set<string>>(new Set());
 
+  const refreshData = useCallback(async (forcePopulate = false) => {
+    try {
+      setLoading(true);
+      if (forcePopulate) {
+        await api.forceRepopulateInventory();
+      }
+      let p = await api.getProducts();
+      if (p.length < 900) {
+        await api.forceRepopulateInventory();
+        p = await api.getProducts();
+      }
+      const [s, po, v, c, sup, chqs, cs] = await Promise.all([
+        api.getSales(),
+        api.getPurchases(),
+        api.getVerifications(),
+        api.getCustomers(),
+        api.getSuppliers(),
+        api.getCheques().catch(() => []),
+        api.getCompanySettings().catch(() => null),
+      ]);
+      setProducts(p);
+      setSales(s);
+      setPurchases(po);
+      setVerifications(v);
+      setCustomers(c);
+      setSuppliers(sup);
+      setCheques(chqs);
+      if (cs) setCompanySettings(cs);
+      setError(null);
+      console.log(`[AppStore] refreshData complete: ${p.length} products, ${po.length} purchases, ${s.length} sales`);
+    } catch (err) {
+      console.error('[AppStore] refreshData error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [p, s, po, v, c, sup, chqs, cs] = await Promise.all([
-          api.getProducts(),
+        let p = await api.getProducts();
+        if (p.length < 900) {
+          console.log('[AppStore] Products count < 900, populating full Excel inventory...');
+          await api.forceRepopulateInventory();
+          p = await api.getProducts();
+        }
+        const [s, po, v, c, sup, chqs, cs] = await Promise.all([
           api.getSales(),
           api.getPurchases(),
           api.getVerifications(),
@@ -92,8 +144,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setCheques(chqs);
         if (cs) setCompanySettings(cs);
         setLoading(false);
+        console.log(`[AppStore] Initial load complete: ${p.length} products, ${po.length} purchases, ${s.length} sales`);
       } catch (err) {
         if (cancelled) return;
+        console.error('[AppStore] Initial load error:', err);
         setError(err instanceof Error ? err.message : 'Failed to load data');
         setLoading(false);
       }
@@ -144,10 +198,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [products, loading, addNotification]);
 
   const addProduct = useCallback(async (data: ProductFormData) => {
-    const id = `p${Date.now()}`;
+    const id = `p${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const product = await api.createProduct(id, data);
     setProducts((prev) => [product, ...prev]);
     addNotification('success', 'Product Created', `${product.name} has been added to inventory.`);
+  }, [addNotification]);
+
+  const importProducts = useCallback(async (
+    items: Array<ProductFormData & { initialStock?: number; stock?: number }>
+  ): Promise<number> => {
+    const created = await api.createProductsBatch(items);
+    if (created.length > 0) {
+      setProducts((prev) => [...[...created].reverse(), ...prev]);
+      addNotification(
+        'success',
+        'Products Imported',
+        `Successfully imported ${created.length} product${created.length > 1 ? 's' : ''} into inventory.`,
+      );
+    }
+    return created.length;
   }, [addNotification]);
 
   const updateProduct = useCallback(async (id: string, data: ProductFormData & { stock?: number }) => {
@@ -176,7 +245,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const addSale = useCallback(async (sale: SaleRecord) => {
     await api.createSale(sale);
     setSales((prev) => [sale, ...prev]);
-    addNotification('success', 'Sale Recorded', `Invoice ${sale.invoice} for ${sale.customer} has been recorded.`);
+
+    const docType = sale.documentType || 'TAX INVOICE';
+    if (docType === 'PURCHASE BILL') {
+      addNotification('success', 'Purchase Bill Recorded', `Bill ${sale.invoice} recorded. Items have been added to inventory stock.`);
+    } else if (docType === 'CREDIT NOTE') {
+      addNotification('success', 'Credit Note Recorded', `Credit Note ${sale.invoice} recorded. Items added back to inventory stock.`);
+    } else if (docType === 'PURCHASE ORDER') {
+      addNotification('success', 'Company Purchase Order Recorded', `Purchase Order ${sale.invoice} recorded from ${sale.customer}. (Stock unchanged until Tax Invoice is generated).`);
+    } else if (docType === 'PROFORMA INVOICE') {
+      addNotification('success', 'Proforma Invoice Generated', `Proforma Invoice ${sale.invoice} generated for ${sale.customer}.`);
+    } else {
+      addNotification('success', 'Sale Recorded', `Invoice ${sale.invoice} for ${sale.customer} recorded. Items deducted from inventory.`);
+    }
 
     if (sale.paymentMethod === 'Cheque' && sale.chequeNo) {
       const chequeRec: ChequeRecord = {
@@ -198,15 +279,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCheques((prev) => [chequeRec, ...prev]);
     }
 
-    if (sale.status !== 'draft' && sale.status !== 'cancelled') {
+    const mult = getSaleStockMultiplier(sale.documentType, sale.status);
+    if (mult !== 0) {
       const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
       setProducts((prev) =>
         prev.map((p) => {
-          const soldQty = sale.items
+          const itemQty = sale.items
             .filter((item) => !item.isCustom && item.productId === p.id)
             .reduce((sum, item) => sum + item.qty, 0);
-          if (soldQty === 0) return p;
-          const stock = Math.max(0, p.stock - soldQty);
+          if (itemQty === 0) return p;
+          const stock = Math.max(0, p.stock + (itemQty * mult));
           stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
           const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
           const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -222,10 +304,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const updateSaleStatus = useCallback(async (id: string, status: SaleStatus, amountPaid: number) => {
     const oldSale = sales.find((s) => s.id === id);
     if (oldSale && oldSale.status !== status) {
-      const wasActive = oldSale.status !== 'draft' && oldSale.status !== 'cancelled';
-      const isNowActive = status !== 'draft' && status !== 'cancelled';
+      const oldMult = getSaleStockMultiplier(oldSale.documentType, oldSale.status);
+      const newMult = getSaleStockMultiplier(oldSale.documentType, status);
+      const multDiff = newMult - oldMult;
 
-      if (wasActive && !isNowActive) {
+      if (multDiff !== 0) {
         const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
         setProducts((prev) =>
           prev.map((p) => {
@@ -233,25 +316,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               .filter((i) => !i.isCustom && i.productId === p.id)
               .reduce((sum, i) => sum + i.qty, 0);
             if (qty === 0) return p;
-            const stock = p.stock + qty;
-            stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
-            const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
-            const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
-            return { ...p, stock, boxStatus, status: computed.status };
-          }),
-        );
-        for (const u of stockUpdates) {
-          await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
-        }
-      } else if (!wasActive && isNowActive) {
-        const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
-        setProducts((prev) =>
-          prev.map((p) => {
-            const qty = oldSale.items
-              .filter((i) => !i.isCustom && i.productId === p.id)
-              .reduce((sum, i) => sum + i.qty, 0);
-            if (qty === 0) return p;
-            const stock = Math.max(0, p.stock - qty);
+            const stock = Math.max(0, p.stock + (qty * multDiff));
             stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
             const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
             const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -272,15 +337,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const sale = sales.find((s) => s.id === id);
     if (!sale) return;
 
-    if (sale.status !== 'draft' && sale.status !== 'cancelled') {
+    const mult = getSaleStockMultiplier(sale.documentType, sale.status);
+    if (mult !== 0) {
+      const reverseMult = -mult;
       const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
       setProducts((prev) =>
         prev.map((p) => {
-          const soldQty = sale.items
+          const itemQty = sale.items
             .filter((item) => !item.isCustom && item.productId === p.id)
             .reduce((sum, item) => sum + item.qty, 0);
-          if (soldQty === 0) return p;
-          const stock = p.stock + soldQty;
+          if (itemQty === 0) return p;
+          const stock = Math.max(0, p.stock + (itemQty * reverseMult));
           stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
           const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
           const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -295,24 +362,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await api.deleteSale(id);
     setSales((prev) => prev.filter((s) => s.id !== id));
     setCheques((prev) => prev.filter((c) => c.saleId !== id));
-    addNotification('info', 'Invoice Deleted', `Invoice ${sale.invoice} deleted. Item quantities returned to inventory stock.`);
+    addNotification('info', 'Record Deleted', `${sale.documentType || 'Invoice'} ${sale.invoice} deleted. Inventory stock adjusted.`);
   }, [sales, addNotification]);
 
   const updateSale = useCallback(async (updatedSale: SaleRecord) => {
     const oldSale = sales.find((s) => s.id === updatedSale.id);
     if (!oldSale) return;
 
-    const oldActive = oldSale.status !== 'draft' && oldSale.status !== 'cancelled';
-    const newActive = updatedSale.status !== 'draft' && updatedSale.status !== 'cancelled';
+    const oldMult = getSaleStockMultiplier(oldSale.documentType, oldSale.status);
+    const newMult = getSaleStockMultiplier(updatedSale.documentType, updatedSale.status);
 
     const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
     setProducts((prev) =>
       prev.map((p) => {
-        const oldQty = oldActive ? oldSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
-        const newQty = newActive ? updatedSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
-        const diff = newQty - oldQty;
-        if (diff === 0) return p;
-        const stock = Math.max(0, p.stock - diff);
+        const oldQty = oldMult !== 0 ? oldSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
+        const newQty = newMult !== 0 ? updatedSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
+        const netChange = (newQty * newMult) - (oldQty * oldMult);
+        if (netChange === 0) return p;
+        const stock = Math.max(0, p.stock + netChange);
         stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
         const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
         const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -356,15 +423,62 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCheques((prev) => prev.filter((c) => c.saleId !== updatedSale.id));
     }
 
-    addNotification('success', 'Invoice Updated', `Invoice ${updatedSale.invoice} updated and inventory stock adjusted.`);
+    addNotification('success', 'Record Updated', `${updatedSale.documentType || 'Invoice'} ${updatedSale.invoice} updated and inventory stock adjusted.`);
   }, [sales, addNotification]);
 
-  const updateSaleDocumentType = useCallback(async (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE', invoice: string, convertedFromPiNumber: string = '') => {
-    await api.updateSaleDocument(id, documentType, invoice, convertedFromPiNumber);
-    const today = new Date().toISOString().slice(0, 10);
-    setSales((prev) => prev.map((s) => (s.id === id ? { ...s, documentType, invoice, convertedFromPiNumber: convertedFromPiNumber || s.convertedFromPiNumber, convertedAt: convertedFromPiNumber ? today : s.convertedAt } : s)));
-    addNotification('success', 'Document Converted', `Converted to ${documentType} (${invoice}).`);
-  }, [addNotification]);
+  const updateSaleDocumentType = useCallback(async (
+    id: string,
+    documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER',
+    invoice: string,
+    convertedFromNumber: string = '',
+    isPoConversion: boolean = false
+  ) => {
+    const oldSale = sales.find((s) => s.id === id);
+    if (oldSale) {
+      const oldMult = getSaleStockMultiplier(oldSale.documentType, oldSale.status);
+      const newStatus: SaleStatus = documentType === 'TAX INVOICE' && (oldSale.status === 'draft' || oldSale.documentType === 'PURCHASE ORDER') ? 'pending' : oldSale.status;
+      const newMult = getSaleStockMultiplier(documentType, newStatus);
+      const multDiff = newMult - oldMult;
+
+      if (multDiff !== 0) {
+        const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
+        setProducts((prev) =>
+          prev.map((p) => {
+            const qty = oldSale.items
+              .filter((i) => !i.isCustom && i.productId === p.id)
+              .reduce((sum, i) => sum + i.qty, 0);
+            if (qty === 0) return p;
+            const stock = Math.max(0, p.stock + (qty * multDiff));
+            stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
+            const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
+            const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
+            return { ...p, stock, boxStatus, status: computed.status };
+          }),
+        );
+        for (const u of stockUpdates) {
+          await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
+        }
+      }
+
+      await api.updateSaleDocument(id, documentType, invoice, convertedFromNumber, isPoConversion);
+      const today = new Date().toISOString().slice(0, 10);
+      setSales((prev) =>
+        prev.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                documentType,
+                invoice,
+                status: newStatus,
+                ...(isPoConversion ? { convertedFromPoNumber: convertedFromNumber } : { convertedFromPiNumber: convertedFromNumber }),
+                convertedAt: convertedFromNumber ? today : s.convertedAt,
+              }
+            : s,
+        ),
+      );
+      addNotification('success', 'Document Converted', `Successfully converted to ${documentType} (${invoice}). Inventory stock updated.`);
+    }
+  }, [sales, addNotification]);
 
   const applyReceivedStock = useCallback(async (po: PurchaseRecord) => {
     const existingProducts = await api.getProducts();
@@ -727,8 +841,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     <StoreContext.Provider
       value={{
         products, sales, purchases, verifications, customers, suppliers, cheques, companySettings,
-        loading, error,
-        addProduct, updateProduct, deleteProduct,
+        loading, error, refreshData,
+        addProduct, importProducts, updateProduct, deleteProduct,
         addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
         addPurchase, updatePurchase, deletePurchase, updatePurchasePayment, markPurchaseReceived, updatePurchaseStatus,
         addVerification, updateBoxStatusMode,

@@ -22,7 +22,7 @@ const navItems: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/products', label: 'Products', icon: Package },
   { to: '/sales', label: 'Sales', icon: ShoppingCart },
-  { to: '/purchase', label: 'Purchase Bills', icon: Truck },
+  { to: '/purchase', label: 'Purchases', icon: Truck },
   { to: '/customers', label: 'Customers', icon: Users },
   { to: '/suppliers', label: 'Suppliers', icon: Building2 },
   { to: '/reports', label: 'Reports', icon: BarChart3 },

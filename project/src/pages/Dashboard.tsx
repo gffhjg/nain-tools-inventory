@@ -3,8 +3,8 @@ import { useState, useMemo } from 'react';
 import {
   ShoppingCart, Package, TrendingUp, AlertTriangle, Download, Truck,
   IndianRupee, XCircle, FileText, ClipboardCheck, ArrowRight, Clock,
-  PackageCheck, Boxes, Plus, FileSpreadsheet, Users, Building2, CheckCircle2, Wallet,
-  MessageCircle, Eye, Printer, ExternalLink, Landmark
+  PackageCheck, Boxes, Plus, Users, Building2, CheckCircle2, Wallet,
+  MessageCircle, Eye, Printer, ExternalLink, Landmark, RefreshCw
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -15,7 +15,7 @@ import { printInvoice } from '@/components/PrintableInvoice';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { products, sales, purchases, verifications, customers, suppliers, cheques } = useStore();
+  const { products, sales, purchases, verifications, customers, suppliers, cheques, loading, refreshData } = useStore();
 
   const [activeModal, setActiveModal] = useState<
     'todaySales' | 'todayPurchases' | 'todayCollections' | 'receivables' | 'supplierPayables' | 'lowStock' | 'outOfStock' | null
@@ -153,6 +153,15 @@ export default function Dashboard() {
           subtitle="Real-time overview of daily sales, inventory levels, collections, and pending balances."
         />
         <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => refreshData(true)}
+            disabled={loading}
+            className="btn-secondary"
+            title="Sync / Reload Inventory Data"
+          >
+            <RefreshCw className={`h-4 w-4 text-slate-600 ${loading ? 'animate-spin text-brand-600' : ''}`} />
+            <span className="hidden sm:inline">Refresh Data</span>
+          </button>
           <Link to="/sales" className="btn-primary">
             <Plus className="h-4 w-4" />
             New Invoice
@@ -161,12 +170,30 @@ export default function Dashboard() {
             <Truck className="h-4 w-4 text-brand-600" />
             New Purchase PO
           </Link>
-          <Link to="/import-products" className="btn-secondary">
-            <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
-            Import Products
-          </Link>
         </div>
       </div>
+
+      {/* Sync / Empty State Banner */}
+      {!loading && products.length === 0 && (
+        <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-fade-in shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black">
+              <Boxes className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-amber-950 text-base">Excel Fastener Inventory Ready to Load</h3>
+              <p className="text-sm text-amber-800">Your 997 items, 2,085 purchases, and 44 sales from Excel are ready to populate.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => refreshData(true)}
+            className="btn-primary bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-2 whitespace-nowrap"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Sync All Data Now
+          </button>
+        </div>
+      )}
 
       {/* Cheque Deposit & Claimable Alert Banner */}
       {claimableCheques.length > 0 && (

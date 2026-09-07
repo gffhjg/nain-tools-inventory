@@ -3,7 +3,7 @@ import {
   Plus, Search, Download, Eye, ShoppingCart, TrendingUp, Clock, CheckCircle2,
   Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3, X,
   CreditCard, Calendar, Landmark, AlertOctagon, CheckSquare, XCircle, ArrowUpRight,
-  ShieldCheck, RefreshCw, FileText
+  ShieldCheck, RefreshCw, FileText, Building2, PackageCheck, ShoppingBag
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -64,6 +64,15 @@ function nextProformaInvoice(existing: SaleRecord[]): string {
   return `PI-${max + 1}`;
 }
 
+function nextCompanyPoNumber(existing: SaleRecord[]): string {
+  const nums = existing
+    .filter((s) => s.documentType === 'PURCHASE ORDER' || s.invoice.startsWith('CPO-') || s.invoice.startsWith('PO-'))
+    .map((s) => parseInt(s.invoice.replace(/^(CPO|PO)-/, ''), 10))
+    .filter((n) => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 5000;
+  return `CPO-${max + 1}`;
+}
+
 type DraftLine = InvoiceLineItem;
 
 export default function Sales() {
@@ -74,9 +83,14 @@ export default function Sales() {
     companySettings
   } = useStore();
 
-  const [activeSalesSubTab, setActiveSalesSubTab] = useState<'invoices' | 'cheques'>('invoices');
+  const [activeSalesSubTab, setActiveSalesSubTab] = useState<'invoices' | 'orders' | 'cheques'>('invoices');
   const [search, setSearch] = useState('');
-  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'paid' | 'pending' | 'partially-paid' | 'proforma' | 'debit-note'>('all');
+  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'paid' | 'pending' | 'partially-paid' | 'debit-note' | 'credit-note'>('all');
+
+  // Pre-Sales: Orders & Estimates (PO & PI) Filter State
+  const [orderQuoteFilterTab, setOrderQuoteFilterTab] = useState<'all' | 'po' | 'pi' | 'pending' | 'converted'>('all');
+  const [orderQuoteSearch, setOrderQuoteSearch] = useState('');
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
 
   // Cheque Realisation Tracker Filter State
   const [chequeFilter, setChequeFilter] = useState<'all' | 'claimable' | 'pending' | 'cleared' | 'bounced'>('all');
@@ -146,6 +160,7 @@ export default function Sales() {
   const [saleStatus, setSaleStatus] = useState<SaleStatus>('paid');
   const [amountPaid, setAmountPaid] = useState(0);
   const [productSearch, setProductSearch] = useState('');
+  const [salesCategory, setSalesCategory] = useState('All');
 
   // Custom / Direct Sourced Item State (Not saved in permanent inventory)
   const [isAddingCustom, setIsAddingCustom] = useState(false);
@@ -209,7 +224,7 @@ export default function Sales() {
 
   const [sellerGstin, setSellerGstin] = useState(companySettings?.gstin || '06CCCPK0841B1ZA');
   const [sellerPan, setSellerPan] = useState(companySettings?.pan || 'CCCPK0841B');
-  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PROFORMA INVOICE' | 'PURCHASE BILL'>('TAX INVOICE');
+  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PROFORMA INVOICE' | 'PURCHASE BILL' | 'PURCHASE ORDER'>('TAX INVOICE');
 
   useEffect(() => {
     if (companySettings) {
@@ -220,6 +235,128 @@ export default function Sales() {
       setSellerPan(companySettings.pan || 'CCCPK0841B');
     }
   }, [companySettings]);
+
+  // Unified Pre-Sales Pipeline: Company Purchase Orders (PO) & Proforma Invoices (PI)
+  // Zero Stock Deduction (stock multiplier = 0) until converted into a Tax Invoice
+  const orderQuoteList = useMemo(
+    () =>
+      sales.filter(
+        (s) =>
+          s.documentType === 'PURCHASE ORDER' ||
+          s.documentType === 'PROFORMA INVOICE' ||
+          !!s.convertedFromPoNumber ||
+          !!s.convertedFromPiNumber ||
+          s.invoice.startsWith('PI-') ||
+          s.invoice.startsWith('PO-')
+      ),
+    [sales]
+  );
+
+  const poOnlyList = useMemo(
+    () =>
+      orderQuoteList.filter(
+        (s) => s.documentType === 'PURCHASE ORDER' || !!s.convertedFromPoNumber || s.invoice.startsWith('PO-')
+      ),
+    [orderQuoteList]
+  );
+
+  const piOnlyList = useMemo(
+    () =>
+      orderQuoteList.filter(
+        (s) => s.documentType === 'PROFORMA INVOICE' || !!s.convertedFromPiNumber || s.invoice.startsWith('PI-')
+      ),
+    [orderQuoteList]
+  );
+
+  const orderQuotePendingList = useMemo(
+    () =>
+      orderQuoteList.filter(
+        (s) =>
+          !s.convertedFromPoNumber &&
+          !s.convertedFromPiNumber &&
+          (s.documentType === 'PURCHASE ORDER' || s.documentType === 'PROFORMA INVOICE')
+      ),
+    [orderQuoteList]
+  );
+
+  const orderQuoteConvertedList = useMemo(
+    () => orderQuoteList.filter((s) => !!s.convertedFromPoNumber || !!s.convertedFromPiNumber),
+    [orderQuoteList]
+  );
+
+  const poPendingList = useMemo(
+    () => poOnlyList.filter((s) => s.documentType === 'PURCHASE ORDER' && !s.convertedFromPoNumber),
+    [poOnlyList]
+  );
+
+  const piPendingList = useMemo(
+    () => piOnlyList.filter((s) => s.documentType === 'PROFORMA INVOICE' && !s.convertedFromPiNumber),
+    [piOnlyList]
+  );
+
+  const orderQuoteTotalValue = useMemo(
+    () => orderQuoteList.reduce((sum, s) => sum + s.grandTotal, 0),
+    [orderQuoteList]
+  );
+
+  const orderQuotePendingValue = useMemo(
+    () => orderQuotePendingList.reduce((sum, s) => sum + s.grandTotal, 0),
+    [orderQuotePendingList]
+  );
+
+  const orderQuoteConvertedValue = useMemo(
+    () => orderQuoteConvertedList.reduce((sum, s) => sum + s.grandTotal, 0),
+    [orderQuoteConvertedList]
+  );
+
+  const poTotalValue = useMemo(
+    () => poOnlyList.reduce((sum, s) => sum + s.grandTotal, 0),
+    [poOnlyList]
+  );
+
+  const piTotalValue = useMemo(
+    () => piOnlyList.reduce((sum, s) => sum + s.grandTotal, 0),
+    [piOnlyList]
+  );
+
+  const orderQuoteUniqueClients = useMemo(
+    () => new Set(orderQuoteList.map((s) => s.customer.toLowerCase().trim())).size,
+    [orderQuoteList]
+  );
+
+  const filteredOrderQuoteList = useMemo(() => {
+    let list = orderQuoteList;
+    if (orderQuoteFilterTab === 'po') {
+      list = poOnlyList;
+    } else if (orderQuoteFilterTab === 'pi') {
+      list = piOnlyList;
+    } else if (orderQuoteFilterTab === 'pending') {
+      list = orderQuotePendingList;
+    } else if (orderQuoteFilterTab === 'converted') {
+      list = orderQuoteConvertedList;
+    }
+
+    const q = orderQuoteSearch.toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(
+      (s) =>
+        s.invoice.toLowerCase().includes(q) ||
+        s.customer.toLowerCase().includes(q) ||
+        s.phone.toLowerCase().includes(q) ||
+        (s.poNumber && s.poNumber.toLowerCase().includes(q)) ||
+        (s.convertedFromPoNumber && s.convertedFromPoNumber.toLowerCase().includes(q)) ||
+        (s.convertedFromPiNumber && s.convertedFromPiNumber.toLowerCase().includes(q)) ||
+        (s.items && s.items.some((i) => i.name.toLowerCase().includes(q)))
+    );
+  }, [
+    orderQuoteList,
+    poOnlyList,
+    piOnlyList,
+    orderQuotePendingList,
+    orderQuoteConvertedList,
+    orderQuoteFilterTab,
+    orderQuoteSearch,
+  ]);
 
   const [previewCopyTag, setPreviewCopyTag] = useState('Original For Recipient');
   const [exportCopies, setExportCopies] = useState<Record<string, boolean>>({
@@ -246,17 +383,17 @@ export default function Sales() {
   }, []);
 
   const filtered = useMemo(() => {
-    let list = sales;
+    let list = sales.filter((s) => s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'PROFORMA INVOICE');
     if (activeFilterTab === 'paid') {
-      list = list.filter((s) => s.status === 'paid' && s.documentType !== 'PROFORMA INVOICE');
+      list = list.filter((s) => s.status === 'paid');
     } else if (activeFilterTab === 'pending') {
-      list = list.filter((s) => s.status === 'pending' && s.documentType !== 'PROFORMA INVOICE');
+      list = list.filter((s) => s.status === 'pending');
     } else if (activeFilterTab === 'partially-paid') {
-      list = list.filter((s) => s.status === 'partially-paid' && s.documentType !== 'PROFORMA INVOICE');
-    } else if (activeFilterTab === 'proforma') {
-      list = list.filter((s) => s.documentType === 'PROFORMA INVOICE' && !s.convertedFromPiNumber);
+      list = list.filter((s) => s.status === 'partially-paid');
     } else if (activeFilterTab === 'debit-note') {
       list = list.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'));
+    } else if (activeFilterTab === 'credit-note') {
+      list = list.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'));
     }
 
     const q = search.toLowerCase().trim();
@@ -271,30 +408,32 @@ export default function Sales() {
   }, [sales, search, activeFilterTab]);
 
   const statusCounts = useMemo(() => {
-    const paid = sales.filter((s) => s.status === 'paid' && s.documentType !== 'PROFORMA INVOICE').length;
-    const pending = sales.filter((s) => s.status === 'pending' && s.documentType !== 'PROFORMA INVOICE').length;
-    const partial = sales.filter((s) => s.status === 'partially-paid' && s.documentType !== 'PROFORMA INVOICE').length;
-    const proforma = sales.filter((s) => s.documentType === 'PROFORMA INVOICE' && !s.convertedFromPiNumber).length;
-    const debitNote = sales.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-')).length;
-    return { paid, pending, partial, proforma, debitNote, all: sales.length };
+    const activeInvoices = sales.filter((s) => s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'PROFORMA INVOICE');
+    const paid = activeInvoices.filter((s) => s.status === 'paid').length;
+    const pending = activeInvoices.filter((s) => s.status === 'pending').length;
+    const partial = activeInvoices.filter((s) => s.status === 'partially-paid').length;
+    const debitNote = activeInvoices.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-')).length;
+    const creditNote = activeInvoices.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-')).length;
+    return { paid, pending, partial, debitNote, creditNote, all: activeInvoices.length };
   }, [sales]);
 
   const summary = useMemo(() => {
-    const total = sales.filter((s) => s.documentType !== 'PROFORMA INVOICE').reduce((s, r) => s + r.grandTotal, 0);
-    const paid = sales.filter((s) => s.status === 'paid' && s.documentType !== 'PROFORMA INVOICE').reduce((s, r) => s + r.grandTotal, 0);
-    const outstanding = sales
-      .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft' && s.documentType !== 'PROFORMA INVOICE')
+    const activeInvoices = sales.filter((s) => s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'PURCHASE ORDER');
+    const total = activeInvoices.reduce((s, r) => s + r.grandTotal, 0);
+    const paid = activeInvoices.filter((s) => s.status === 'paid').reduce((s, r) => s + r.grandTotal, 0);
+    const outstanding = activeInvoices
+      .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
       .reduce((s, r) => s + (r.grandTotal - (r.amountPaid || 0)), 0);
-
-    const piList = sales.filter((s) => s.documentType === 'PROFORMA INVOICE' && !s.convertedFromPiNumber);
-    const piCount = piList.length;
-    const piTotal = piList.reduce((s, r) => s + r.grandTotal, 0);
 
     const dnList = sales.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'));
     const dnCount = dnList.length;
     const dnTotal = dnList.reduce((s, r) => s + r.grandTotal, 0);
 
-    return { total, paid, outstanding, count: sales.length, piCount, piTotal, piList, dnCount, dnTotal, dnList };
+    const cnList = sales.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'));
+    const cnCount = cnList.length;
+    const cnTotal = cnList.reduce((s, r) => s + r.grandTotal, 0);
+
+    return { total, paid, outstanding, count: activeInvoices.length, dnCount, dnTotal, dnList, cnCount, cnTotal, cnList };
   }, [sales]);
 
   const [freightCharges, setFreightCharges] = useState('0');
@@ -302,9 +441,9 @@ export default function Sales() {
 
   const subtotal = useMemo(
     () => lines.reduce((s, l) => {
-      const gross = l.price * l.qty;
-      const discVal = l.discount ? gross * (l.discount / 100) : 0;
-      return s + (gross - discVal);
+      const gross = +(l.price * l.qty).toFixed(2);
+      const discVal = l.discount ? +(gross * (l.discount / 100)).toFixed(2) : 0;
+      return +(s + (gross - discVal)).toFixed(2);
     }, 0),
     [lines]
   );
@@ -319,22 +458,38 @@ export default function Sales() {
     freightVal
   );
 
-  // Delhi GST Formulas with dynamic rate:
-  // Local (Intra-state): CGST @ (Rate/2)% + SGST @ (Rate/2)%
+  // Delhi GST Formulas with dynamic rate & exact paisa balance:
+  // Local (Intra-state): CGST @ (Rate/2)% + SGST @ balance of GST (guarantees cgst + sgst === gstAmount exactly)
   // Central (Inter-state): IGST @ Rate%
   const cgstAmount = applyGst && gstTaxType === 'local' ? +(gstAmount / 2).toFixed(2) : 0;
-  const sgstAmount = applyGst && gstTaxType === 'local' ? +(gstAmount / 2).toFixed(2) : 0;
+  const sgstAmount = applyGst && gstTaxType === 'local' ? +(gstAmount - cgstAmount).toFixed(2) : 0;
   const igstAmount = applyGst && gstTaxType === 'central' ? +gstAmount.toFixed(2) : 0;
+
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>();
+    products.forEach((p) => {
+      if (p.category && p.category.trim()) cats.add(p.category.trim());
+    });
+    return ['All', ...Array.from(cats).sort()];
+  }, [products]);
 
   const searchResults = useMemo(() => {
     const q = productSearch.toLowerCase().trim();
-    if (!q) return [];
-    return products.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.rackNumber.toLowerCase().includes(q)
-    );
-  }, [products, productSearch]);
+    let list = products;
+    if (salesCategory !== 'All') {
+      list = list.filter((p) => (p.category || '').toLowerCase() === salesCategory.toLowerCase());
+    }
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.rackNumber && p.rackNumber.toLowerCase().includes(q)) ||
+          (p.size && p.size.toLowerCase().includes(q)) ||
+          (p.category && p.category.toLowerCase().includes(q))
+      );
+    }
+    return list.slice(0, 100);
+  }, [products, productSearch, salesCategory]);
 
   const [customerGstin, setCustomerGstin] = useState('');
 
@@ -401,6 +556,7 @@ export default function Sales() {
     setSaleStatus('paid');
     setAmountPaid(0);
     setProductSearch('');
+    setSalesCategory('All');
     setApplyGst(true);
     setGstRate(18);
     setGstTaxType('local');
@@ -412,6 +568,7 @@ export default function Sales() {
     setCustomHsn('7318150');
     setCustomDiscount('');
     setIsAddingCustom(false);
+    setExpectedDeliveryDate('');
     setEditingSaleId(null);
   };
 
@@ -419,6 +576,16 @@ export default function Sales() {
     resetForm();
     setDocumentType('TAX INVOICE');
     setCustomInvoiceNumber(nextInvoice(sales));
+    setModalOpen(true);
+  };
+
+  const openNewCompanyPO = () => {
+    resetForm();
+    setDocumentType('PURCHASE ORDER');
+    setCustomInvoiceNumber(nextCompanyPoNumber(sales));
+    setPaymentStatusType('pay-later');
+    setPaymentMethod('Credit / Pay Later');
+    setExpectedDeliveryDate(addDaysToDate(todayISO(), 15));
     setModalOpen(true);
   };
 
@@ -431,6 +598,7 @@ export default function Sales() {
     setAddress(sale.customerAddress || '');
     setCustomerGstin(sale.customerGstin || '');
     setDate(sale.date);
+    setExpectedDeliveryDate(sale.expectedDeliveryDate || '');
     setPiExpirationDate(sale.piExpirationDate || addMonthsToDate(sale.date || todayISO(), 1));
     setLines(sale.items.map((i) => ({ ...i })));
     setDiscount(sale.discount);
@@ -471,7 +639,20 @@ export default function Sales() {
   };
 
   const handleDeleteSale = async (sale: SaleRecord) => {
-    if (window.confirm(`Are you sure you want to delete invoice ${sale.invoice}? All items will be returned to inventory stock.`)) {
+    const isPo = sale.documentType === 'PURCHASE ORDER';
+    const isPi = sale.documentType === 'PROFORMA INVOICE';
+    const isPb = sale.documentType === 'PURCHASE BILL';
+    const isCn = sale.documentType === 'CREDIT NOTE';
+    const msg = isPo
+      ? `Are you sure you want to delete Company Purchase Order ${sale.invoice}?`
+      : isPi
+      ? `Are you sure you want to delete Proforma Invoice ${sale.invoice}?`
+      : isPb
+      ? `Are you sure you want to delete Purchase Bill ${sale.invoice}? Added items will be deducted from inventory stock.`
+      : isCn
+      ? `Are you sure you want to delete Credit Note ${sale.invoice}? Added items will be deducted from inventory stock.`
+      : `Are you sure you want to delete ${sale.documentType || 'Invoice'} ${sale.invoice}? Deducted items will be returned to inventory stock.`;
+    if (window.confirm(msg)) {
       await deleteSale(sale.id);
       if (viewing?.id === sale.id) {
         setViewing(null);
@@ -685,6 +866,14 @@ export default function Sales() {
   const canSubmit = customer.trim() !== '' && invoiceNumber.trim() !== '' && lines.length > 0 && lines.every((l) => l.qty > 0);
 
   const stockCheck = useMemo(() => {
+    if (
+      documentType === 'PURCHASE ORDER' ||
+      documentType === 'PROFORMA INVOICE' ||
+      documentType === 'PURCHASE BILL' ||
+      documentType === 'CREDIT NOTE'
+    ) {
+      return { ok: true };
+    }
     for (const l of lines) {
       if (l.qty <= 0 || l.isCustom || l.productId.startsWith('custom_')) continue;
       const product = products.find((p) => p.id === l.productId);
@@ -693,7 +882,7 @@ export default function Sales() {
       }
     }
     return { ok: true };
-  }, [lines, products]);
+  }, [lines, products, documentType]);
 
   useEffect(() => {
     if (!stockCheck.ok) {
@@ -717,6 +906,10 @@ export default function Sales() {
     if (documentType === 'PROFORMA INVOICE') {
       finalStatus = 'draft';
       finalAmountPaid = 0;
+    } else if (documentType === 'PURCHASE ORDER') {
+      finalStatus = 'pending';
+      finalAmountPaid = 0;
+      finalPaymentMethod = 'Credit / Pay Later';
     } else if (paymentStatusType === 'pay-later') {
       finalStatus = 'pending';
       finalAmountPaid = 0;
@@ -851,12 +1044,16 @@ export default function Sales() {
       chequeDate: finalPaymentMethod === 'Cheque' ? (chequeDate || date) : '',
       chequeStatus: finalPaymentMethod === 'Cheque' ? chequeStatus : undefined,
       piExpirationDate: documentType === 'PROFORMA INVOICE' ? (piExpirationDate || addMonthsToDate(date, 1)) : '',
+      expectedDeliveryDate: documentType === 'PURCHASE ORDER' ? (expectedDeliveryDate || addDaysToDate(date, 15)) : undefined,
     };
 
     if (editingSaleId) {
+      const existingSale = sales.find((s) => s.id === editingSaleId);
       const updatedSale: SaleRecord = {
         ...newSale,
         id: editingSaleId,
+        convertedFromPoNumber: existingSale?.convertedFromPoNumber,
+        convertedFromPiNumber: existingSale?.convertedFromPiNumber,
       };
       await updateSale(updatedSale);
       if (viewing?.id === editingSaleId) {
@@ -940,17 +1137,37 @@ export default function Sales() {
   const handleConfirmConvert = async () => {
     if (!convertTargetSale || !convertInvoiceNumber.trim()) return;
     const newInvoiceNo = convertInvoiceNumber.trim();
-    const origPiNo = convertTargetSale.invoice;
-    await updateSaleDocumentType(convertTargetSale.id, 'TAX INVOICE', newInvoiceNo, origPiNo);
-    setViewing((prev) => (prev && prev.id === convertTargetSale.id ? { ...prev, documentType: 'TAX INVOICE', invoice: newInvoiceNo, convertedFromPiNumber: origPiNo } : prev));
+    const origDocNo = convertTargetSale.invoice;
+    const isPo = convertTargetSale.documentType === 'PURCHASE ORDER';
+    await updateSaleDocumentType(convertTargetSale.id, 'TAX INVOICE', newInvoiceNo, origDocNo, isPo);
+    setViewing((prev) =>
+      prev && prev.id === convertTargetSale.id
+        ? {
+            ...prev,
+            documentType: 'TAX INVOICE',
+            invoice: newInvoiceNo,
+            status: 'pending',
+            ...(isPo ? { convertedFromPoNumber: origDocNo } : { convertedFromPiNumber: origDocNo }),
+          }
+        : prev,
+    );
     setConvertTargetSale(null);
   };
 
   const getWhatsAppInvoiceLink = (s: SaleRecord) => {
     const cleanPhone = s.phone.replace(/[^0-9]/g, '');
     const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    const dueInfo = s.status !== 'paid' ? ` | Unpaid Balance: ${money(s.grandTotal - (s.amountPaid || 0))}` : ' | Paid in Full';
-    const msg = `Hello ${s.customer}, thank you for your business! Your Invoice #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}${dueInfo} is confirmed. Nain Tools & Bolt Co.`;
+    const isPo = s.documentType === 'PURCHASE ORDER' || !!s.convertedFromPoNumber;
+    const isPi = s.documentType === 'PROFORMA INVOICE' || !!s.convertedFromPiNumber;
+    let msg = '';
+    if (isPo) {
+      msg = `Hello ${s.customer}, thank you for your Purchase Order #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}. We have scheduled your order. Nain Tools & Bolt Co.`;
+    } else if (isPi) {
+      msg = `Hello ${s.customer}, please find your Proforma Quote #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}. Valid for 1 month. Nain Tools & Bolt Co.`;
+    } else {
+      const dueInfo = s.status !== 'paid' ? ` | Unpaid Balance: ${money(s.grandTotal - (s.amountPaid || 0))}` : ' | Paid in Full';
+      msg = `Hello ${s.customer}, thank you for your business! Your Invoice #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}${dueInfo} is confirmed. Nain Tools & Bolt Co.`;
+    }
     return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
   };
 
@@ -1064,6 +1281,13 @@ export default function Sales() {
         actions={
           <div className="flex flex-wrap gap-2">
             <button
+              className="btn-secondary bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold"
+              onClick={openNewCompanyPO}
+            >
+              <Building2 className="h-4 w-4 text-blue-600" />
+              <span>New Company PO</span>
+            </button>
+            <button
               className="btn-secondary bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100 font-bold"
               onClick={openNewProformaInvoice}
             >
@@ -1085,7 +1309,7 @@ export default function Sales() {
         }
       />
 
-      {/* Main Sub-Navigation Tabs: Invoices vs Cheques Tracker */}
+      {/* Main Sub-Navigation Tabs: Invoices vs Orders vs Cheques Tracker */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
         <button
           type="button"
@@ -1097,10 +1321,32 @@ export default function Sales() {
           }`}
         >
           <FileText className="w-4 h-4" />
-          <span>Invoices & Bills</span>
+          <span>Invoices &amp; Bills</span>
           <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${activeSalesSubTab === 'invoices' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'}`}>
-            {sales.length}
+            {statusCounts.all}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSalesSubTab('orders')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition ${
+            activeSalesSubTab === 'orders'
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100 bg-white border border-slate-200'
+          }`}
+        >
+          <ShoppingBag className="w-4 h-4" />
+          <span>Orders &amp; Estimates (PO &amp; PI)</span>
+          {orderQuotePendingList.length > 0 ? (
+            <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-black animate-pulse flex items-center gap-1">
+              ⚡ {orderQuotePendingList.length} Pending
+            </span>
+          ) : (
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${activeSalesSubTab === 'orders' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'}`}>
+              {orderQuoteList.length}
+            </span>
+          )}
         </button>
 
         <button
@@ -1113,7 +1359,7 @@ export default function Sales() {
           }`}
         >
           <Landmark className="w-4 h-4" />
-          <span>Cheques & Realisation Tracker</span>
+          <span>Cheques &amp; Realisation Tracker</span>
           {claimableCheques.length > 0 ? (
             <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-black animate-pulse flex items-center gap-1">
               🔔 {claimableCheques.length} Claimable Today
@@ -1191,23 +1437,25 @@ export default function Sales() {
             </div>
 
             <div
-              className={`card p-5 cursor-pointer transition-all duration-200 ${
-                activeFilterTab === 'proforma'
-                  ? 'ring-2 ring-purple-500/80 bg-purple-50/20 border-purple-300 shadow-md'
-                  : 'hover:border-slate-300 hover:shadow-md'
-              }`}
-              onClick={() => setActiveFilterTab('proforma')}
+              className="card p-5 cursor-pointer transition-all duration-200 hover:border-blue-300 hover:shadow-md bg-gradient-to-br from-white to-blue-50/20"
+              onClick={() => setActiveSalesSubTab('orders')}
+              title="Click to view and manage Pre-Sales: Company POs and Proforma Quotes"
             >
               <div className="flex items-center justify-between">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-50 text-purple-600 font-bold">
-                  <FileText className="h-5 w-5" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 font-bold">
+                  <ShoppingBag className="h-5 w-5" />
                 </div>
-                <span className="text-[10.5px] font-extrabold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md">
-                  1 Mo Expiration
+                <span className="text-[10px] font-black text-amber-800 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-md flex items-center gap-1">
+                  ⚡ 0 Stock Impact
                 </span>
               </div>
-              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{summary.piCount} PIs ({money(summary.piTotal)})</p>
-              <p className="mt-1 text-xs text-purple-600 font-semibold">Proforma Quotes</p>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(orderQuoteTotalValue)}</p>
+              <div className="mt-1 flex items-center justify-between">
+                <p className="text-xs text-blue-700 font-bold">Orders &amp; Quotes ({orderQuoteList.length})</p>
+                <span className="text-[10px] text-slate-500 font-semibold">
+                  {orderQuotePendingList.length} Pending
+                </span>
+              </div>
             </div>
 
             <div
@@ -1278,17 +1526,6 @@ export default function Sales() {
                 >
                   <TrendingUp className="w-3.5 h-3.5" />
                   Partially Paid ({statusCounts.partial})
-                </button>
-                <button
-                  onClick={() => setActiveFilterTab('proforma')}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 ${
-                    activeFilterTab === 'proforma'
-                      ? 'bg-purple-600 text-white shadow-sm'
-                      : 'text-purple-700 hover:bg-purple-50 font-extrabold'
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  Proforma Invoices ({statusCounts.proforma})
                 </button>
                 <button
                   onClick={() => setActiveFilterTab('debit-note')}
@@ -1484,6 +1721,457 @@ export default function Sales() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Orders & Estimates (PO & PI) Pipeline View */}
+      {activeSalesSubTab === 'orders' && (
+        <div className="space-y-6">
+          {/* Top KPI Metric Cards (4 Cards) */}
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+            {/* Card 1: Total Pre-Sales Pipeline */}
+            <div className="card p-5 border-l-4 border-l-blue-600 bg-white">
+              <div className="flex items-center justify-between">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                  <ShoppingBag className="h-5 w-5" />
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-200">
+                  Pre-Sales Total
+                </span>
+              </div>
+              <p className="mt-4 text-2xl font-black text-slate-900">{money(orderQuoteTotalValue)}</p>
+              <div className="mt-1 flex items-center justify-between text-xs text-slate-500 font-medium">
+                <span>{orderQuoteList.length} Total Orders &amp; Quotes</span>
+                <span className="text-blue-700 font-bold">{orderQuoteUniqueClients} Clients</span>
+              </div>
+            </div>
+
+            {/* Card 2: Company Purchase Orders (PO) */}
+            <div className="card p-5 border-l-4 border-l-indigo-600 bg-indigo-50/20">
+              <div className="flex items-center justify-between">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
+                  <Building2 className="h-5 w-5" />
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-200">
+                  Client POs
+                </span>
+              </div>
+              <p className="mt-4 text-2xl font-black text-indigo-950">{money(poTotalValue)}</p>
+              <div className="mt-1 flex items-center justify-between text-xs font-semibold">
+                <span className="text-indigo-800">{poOnlyList.length} Purchase Orders</span>
+                <span className="text-amber-700 font-bold">{poPendingList.length} Pending</span>
+              </div>
+            </div>
+
+            {/* Card 3: Proforma Invoices (PI) */}
+            <div className="card p-5 border-l-4 border-l-purple-600 bg-purple-50/20">
+              <div className="flex items-center justify-between">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-100 text-purple-800 border border-purple-200">
+                  Quotes / Estimates
+                </span>
+              </div>
+              <p className="mt-4 text-2xl font-black text-purple-950">{money(piTotalValue)}</p>
+              <div className="mt-1 flex items-center justify-between text-xs font-semibold">
+                <span className="text-purple-800">{piOnlyList.length} Proforma Quotes</span>
+                <span className="text-amber-700 font-bold">{piPendingList.length} Active</span>
+              </div>
+            </div>
+
+            {/* Card 4: Pending Conversion (0 Stock Impact) */}
+            <div className="card p-5 border-l-4 border-l-amber-500 bg-amber-50/25">
+              <div className="flex items-center justify-between">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white animate-pulse">
+                  ⚡ 0 Stock Impact
+                </span>
+              </div>
+              <p className="mt-4 text-2xl font-black text-amber-950">{money(orderQuotePendingValue)}</p>
+              <div className="mt-1 flex items-center justify-between text-xs font-bold text-amber-800">
+                <span>{orderQuotePendingList.length} Waiting for Conversion</span>
+                <span className="text-emerald-700 font-semibold">{orderQuoteConvertedList.length} Converted</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Banner Explaining Pre-Sales Non-Impact Guarantee + Quick Action Buttons */}
+          <div className="p-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 rounded-2xl border border-indigo-200/80 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 shadow-xs">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-xs shrink-0 mt-0.5">
+                <PackageCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm text-indigo-950 flex items-center gap-2">
+                  <span>Pre-Sales Pipeline: Company POs &amp; Proforma Quotes</span>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    ✓ Stock Protected
+                  </span>
+                </h4>
+                <p className="text-xs text-indigo-900/80 mt-1 max-w-3xl leading-relaxed">
+                  Both <strong>Company Purchase Orders (PO)</strong> and <strong>Proforma Invoices (PI)</strong> are pre-sale commitments that have <strong>Zero Stock Deduction (0 multiplier)</strong>. Your inventory levels and GST sales ledger remain completely unaffected until you click <strong>&ldquo;⚡ Convert to Tax Invoice&rdquo;</strong> upon dispatch.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-end lg:self-center">
+              <button
+                type="button"
+                onClick={openNewCompanyPO}
+                className="btn-primary bg-blue-600 hover:bg-blue-700 border-blue-700 text-xs font-bold flex items-center gap-1.5"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>New Company PO</span>
+              </button>
+              <button
+                type="button"
+                onClick={openNewProformaInvoice}
+                className="btn-secondary bg-purple-600 text-white hover:bg-purple-700 border-purple-700 text-xs font-bold flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>New Proforma Invoice</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Chips & Search Bar */}
+          <div className="card p-4 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setOrderQuoteFilterTab('all')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition ${
+                    orderQuoteFilterTab === 'all'
+                      ? 'bg-white text-indigo-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  All ({orderQuoteList.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderQuoteFilterTab('po')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 ${
+                    orderQuoteFilterTab === 'po'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-blue-700 hover:bg-blue-50'
+                  }`}
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>Company POs ({poOnlyList.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderQuoteFilterTab('pi')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 ${
+                    orderQuoteFilterTab === 'pi'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-purple-700 hover:bg-purple-50'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Proforma Quotes ({piOnlyList.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderQuoteFilterTab('pending')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 ${
+                    orderQuoteFilterTab === 'pending'
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'text-amber-800 hover:bg-amber-50'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Pending Conversion ({orderQuotePendingList.length})</span>
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/30 text-white font-black">
+                    ⚡ 0 Stock
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderQuoteFilterTab('converted')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 ${
+                    orderQuoteFilterTab === 'converted'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-emerald-800 hover:bg-emerald-50'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Converted to Tax Invoice ({orderQuoteConvertedList.length})</span>
+                </button>
+              </div>
+
+              <div className="relative w-full md:w-80">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={orderQuoteSearch}
+                  onChange={(e) => setOrderQuoteSearch(e.target.value)}
+                  placeholder="Search PO#, PI#, Tax Inv#, client, phone..."
+                  className="input pl-9 text-xs w-full"
+                />
+                {orderQuoteSearch && (
+                  <button
+                    onClick={() => setOrderQuoteSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Table of Orders & Quotes */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-left text-xs min-w-[960px]">
+                <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-3 font-bold">Document Type &amp; Ref</th>
+                    <th className="px-4 py-3 font-bold">Client / Customer</th>
+                    <th className="px-4 py-3 font-bold">Dates &amp; Validity</th>
+                    <th className="px-4 py-3 font-bold">Items Ordered / Quoted</th>
+                    <th className="px-4 py-3 font-bold text-right">Value (₹)</th>
+                    <th className="px-4 py-3 font-bold text-center">Status &amp; Stock Impact</th>
+                    <th className="px-4 py-3 font-bold text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredOrderQuoteList.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <ShoppingBag className="w-10 h-10 text-slate-300" />
+                          <p className="font-semibold text-slate-600">No Orders or Estimates Found</p>
+                          <p className="text-xs text-slate-400">
+                            {orderQuoteSearch ? 'Try a different search term or clear filters.' : 'Create a new Company PO or Proforma Invoice to get started.'}
+                          </p>
+                          {!orderQuoteSearch && (
+                            <div className="flex items-center gap-2 mt-2">
+                              <button
+                                type="button"
+                                onClick={openNewCompanyPO}
+                                className="btn-primary bg-blue-600 hover:bg-blue-700 border-blue-700 text-xs"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Create Company PO</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={openNewProformaInvoice}
+                                className="btn-secondary bg-purple-50 text-purple-700 border-purple-300 hover:bg-purple-100 text-xs font-bold"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Create Proforma Quote</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredOrderQuoteList.map((record) => {
+                      const isPo = record.documentType === 'PURCHASE ORDER' || !!record.convertedFromPoNumber || record.invoice.startsWith('PO-');
+                      const isPi = record.documentType === 'PROFORMA INVOICE' || !!record.convertedFromPiNumber || record.invoice.startsWith('PI-');
+                      const isConverted = !!record.convertedFromPoNumber || !!record.convertedFromPiNumber;
+                      const origDocNo = record.convertedFromPoNumber || record.convertedFromPiNumber || record.invoice;
+
+                      return (
+                        <tr key={record.id} className={`hover:bg-slate-50/80 transition ${isConverted ? 'bg-emerald-50/15' : ''}`}>
+                          <td className="px-4 py-3 font-semibold">
+                            <div className="flex flex-col gap-1 items-start">
+                              <div className="flex items-center gap-1.5">
+                                {isPo ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200">
+                                    <Building2 className="w-3 h-3 text-blue-600" />
+                                    Company PO
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-100 text-purple-800 border border-purple-200">
+                                    <FileText className="w-3 h-3 text-purple-600" />
+                                    Proforma Invoice
+                                  </span>
+                                )}
+                              </div>
+                              <span className="font-mono font-bold text-slate-800 text-xs">
+                                {origDocNo}
+                              </span>
+                              {isConverted ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 w-fit">
+                                  <ArrowUpRight className="w-3 h-3" />
+                                  Tax Inv: {record.invoice}
+                                </span>
+                              ) : isPo && record.poNumber ? (
+                                <span className="text-[10px] text-slate-500 font-medium">
+                                  Client Ref: {record.poNumber}
+                                </span>
+                              ) : !isConverted && isPi ? (
+                                <span className="text-[10px] text-purple-600 font-medium">
+                                  Price Estimate
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div>
+                              <div className="font-bold text-slate-900">{record.customer}</div>
+                              <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
+                                {record.phone && <span>📞 {record.phone}</span>}
+                                {record.customerGstin && <span className="font-mono text-[10px] text-slate-600">{record.customerGstin}</span>}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-0.5 text-[11px]">
+                              <span className="text-slate-700 font-medium">
+                                Date: <strong>{record.date}</strong>
+                              </span>
+                              {isPo ? (
+                                record.expectedDeliveryDate ? (
+                                  <span className="text-blue-700 font-bold flex items-center gap-1">
+                                    <Calendar className="w-3 h-3 text-blue-600" />
+                                    Delivery: {record.expectedDeliveryDate}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-[10px]">No delivery date set</span>
+                                )
+                              ) : (
+                                (() => {
+                                  const expDate = record.piExpirationDate || addMonthsToDate(record.date, 1);
+                                  const isExpired = expDate <= todayISO();
+                                  return (
+                                    <span className={`flex items-center gap-1 font-bold ${isExpired && !isConverted ? 'text-rose-700' : 'text-purple-700'}`}>
+                                      <Clock className="w-3 h-3" />
+                                      {isExpired && !isConverted ? `Expired (${expDate})` : `Valid: ${expDate}`}
+                                    </span>
+                                  );
+                                })()
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="max-w-xs">
+                              <span className="font-bold text-slate-800">
+                                {record.items?.length || 0} items ({record.items?.reduce((s, i) => s + i.qty, 0) || 0} pcs)
+                              </span>
+                              <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                                {record.items?.map((i) => `${i.name} (x${i.qty})`).join(', ') || 'No line items'}
+                              </p>
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3 text-right">
+                            <div className="font-mono font-bold text-slate-900 text-sm">
+                              {money(record.grandTotal)}
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-medium">
+                              Sub: {money(record.subtotal)}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3 text-center">
+                            <div className="flex flex-col items-center justify-center gap-1.5">
+                              {isConverted ? (
+                                <div className="flex flex-col items-center">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    Converted &amp; Stock Deducted
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 mt-0.5">
+                                    Tax Invoice #{record.invoice}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center gap-1">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                                    <Clock className="w-3 h-3 text-amber-600" />
+                                    Pending Conversion
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 font-semibold">
+                                    0 Stock Deducted (Reserved)
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => openConvertModal(record)}
+                                    className="mt-0.5 px-2.5 py-1 rounded-lg text-[10.5px] font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition flex items-center gap-1"
+                                    title="Convert this record into an official Tax Invoice and deduct items from inventory stock"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                    <span>⚡ Convert to Tax Invoice</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {!isConverted && (
+                                <button
+                                  type="button"
+                                  onClick={() => openConvertModal(record)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                  title="Convert to Tax Invoice"
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                </button>
+                              )}
+                              {record.phone && (
+                                <a
+                                  href={getWhatsAppInvoiceLink(record)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                                  title="Share via WhatsApp"
+                                >
+                                  <MessageCircle className="h-4 w-4" />
+                                </a>
+                              )}
+                              <button
+                                onClick={() => setViewing(record)}
+                                className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                                title="View Details"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                              {!isConverted && (
+                                <button
+                                  onClick={() => handleEditSale(record)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                  title="Edit Order/Quote"
+                                >
+                                  <Edit3 className="h-4 w-4" />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => printInvoice(record, undefined, companySettings)}
+                                className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
+                                title="Print / PDF"
+                              >
+                                <Printer className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteSale(record)}
+                                className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"
+                                title="Delete"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Cheques & Realisation Tracker View */}
@@ -1799,7 +2487,7 @@ export default function Sales() {
       {/* New Invoice / Edit Invoice Modal */}
       {modalOpen && (
         <Modal
-          title={`${editingSaleId ? 'Edit Invoice' : documentType === 'DEBIT NOTE' ? 'Create Debit Note' : documentType === 'PROFORMA INVOICE' ? 'Create Proforma Invoice' : 'Create Tax Invoice'} (${invoiceNumber})`}
+          title={`${editingSaleId ? 'Edit Record' : documentType === 'DEBIT NOTE' ? 'Create Debit Note' : documentType === 'PROFORMA INVOICE' ? 'Create Proforma Invoice' : documentType === 'PURCHASE ORDER' ? 'Create Company Purchase Order' : 'Create Tax Invoice'} (${invoiceNumber})`}
           size="xl"
           onClose={() => setModalOpen(false)}
         >
@@ -1908,19 +2596,21 @@ export default function Sales() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {documentType === 'DEBIT NOTE' ? 'Debit Note Number *' : documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice Number *' : 'Invoice Number *'}
+                  {documentType === 'DEBIT NOTE' ? 'Debit Note Number *' : documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice Number *' : documentType === 'PURCHASE ORDER' ? 'Company Purchase Order Number *' : 'Invoice Number *'}
                 </label>
                 <input
                   type="text"
                   value={customInvoiceNumber}
                   onChange={(e) => setCustomInvoiceNumber(e.target.value)}
-                  placeholder={documentType === 'DEBIT NOTE' ? 'e.g. DN-1001' : documentType === 'PROFORMA INVOICE' ? 'e.g. PI-1001' : 'e.g. INV-2046 or 00744'}
+                  placeholder={documentType === 'DEBIT NOTE' ? 'e.g. DN-1001' : documentType === 'PROFORMA INVOICE' ? 'e.g. PI-1001' : documentType === 'PURCHASE ORDER' ? 'e.g. CPO-5001 or PO/2026/09' : 'e.g. INV-2046 or 00744'}
                   className="input font-mono font-bold text-brand-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Invoice Date</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {documentType === 'PURCHASE ORDER' ? 'PO Received Date' : 'Invoice Date'}
+                </label>
                 <input
                   type="date"
                   value={date}
@@ -1935,6 +2625,49 @@ export default function Sales() {
                 />
               </div>
             </div>
+
+            {documentType === 'PURCHASE ORDER' && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                    <ShoppingBag className="w-4 h-4 text-blue-600" />
+                    Incoming Company PO &amp; Delivery Schedule
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-200 text-blue-800">
+                    Client Order (Stock Intact)
+                  </span>
+                </div>
+                <p className="text-[11px] text-blue-700">
+                  This incoming order will be registered in your sales orders pipeline. Stock will <strong>NOT</strong> be minused until converted to an official Tax Invoice upon dispatch.
+                </p>
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <label className="text-[11px] font-bold text-blue-900">Expected Delivery Date:</label>
+                  <input
+                    type="date"
+                    value={expectedDeliveryDate}
+                    onChange={(e) => setExpectedDeliveryDate(e.target.value)}
+                    className="input text-xs font-bold w-44 text-blue-900 border-blue-300 focus:border-blue-500 bg-white"
+                  />
+                  <div className="flex flex-wrap items-center gap-1">
+                    {[
+                      { label: '7 Days', days: 7 },
+                      { label: '15 Days (Std)', days: 15 },
+                      { label: '30 Days', days: 30 },
+                      { label: '45 Days', days: 45 },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => setExpectedDeliveryDate(addDaysToDate(date, opt.days))}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold border border-blue-200 bg-white text-blue-800 hover:bg-blue-100 transition"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {documentType === 'PROFORMA INVOICE' && (
               <div className="rounded-xl border border-purple-200 bg-purple-50/70 p-3 space-y-2">
@@ -2168,262 +2901,346 @@ export default function Sales() {
                 </div>
               )}
 
-              <div className="relative">
-                <input
-                  type="text"
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                  placeholder="Search products by name or rack..."
-                  className="input bg-white pr-9"
-                />
-                {productSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setProductSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition"
-                    title="Clear search"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+              {/* Product Catalog Picker with Search, Category Filter, and Smooth Scroller */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2.5">
+                {/* Search input with Cross (X) button */}
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    placeholder="Search 990+ products by name, size, rack..."
+                    className="input pl-9 pr-9 text-xs bg-white"
+                  />
+                  {productSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setProductSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded-full transition"
+                      title="Clear search"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Category Filter Chips */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+                  <span className="text-[11px] font-bold text-slate-500 shrink-0">Category:</span>
+                  {availableCategories.slice(0, 9).map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setSalesCategory(cat)}
+                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition shrink-0 ${
+                        salesCategory === cat
+                          ? 'bg-brand-600 text-white shadow-xs'
+                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Scrollable Catalog Product List (Inline) */}
+                <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-xs">
+                  <div className="bg-slate-100/70 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
+                    <span>
+                      Catalog List ({searchResults.length} {searchResults.length === 1 ? 'item' : 'items'} displayed
+                      {productSearch ? ` for "${productSearch}"` : ''})
+                    </span>
+                    <span className="text-slate-400 text-[10.5px]">Scroll to browse &middot; Click &quot;+ Add&quot; to include</span>
+                  </div>
+
+                  {productSearch.trim() && searchResults.length === 0 ? (
+                    <div className="p-4 flex flex-col sm:flex-row items-center justify-between border-t border-purple-200 bg-purple-50/50 gap-2">
+                      <div className="text-xs text-purple-900">
+                        <span className="font-semibold">No catalog match for &quot;{productSearch}&quot;.</span>
+                        <span className="text-purple-600 block text-[11px]">You can add this as a custom or direct-sourced product.</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomName(productSearch.trim());
+                          setIsAddingCustom(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs"
+                      >
+                        + Add as Custom Item
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                      {searchResults.map((p) => {
+                        const addedLine = lines.find((l) => l.productId === p.id);
+                        return (
+                          <div
+                            key={p.id}
+                            className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
+                              addedLine ? 'bg-indigo-50/40 hover:bg-indigo-50/70' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex-1 pr-3">
+                              <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
+                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
+                                {p.size && <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">{p.size}</span>}
+                                {p.rackNumber && <span>Rack: <strong className="text-slate-700">{p.rackNumber}</strong></span>}
+                                <span>Avail. Stock: <strong className="text-emerald-700">{p.stock}</strong></span>
+                                {p.category && <span className="text-slate-400 font-medium">({p.category})</span>}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-xs font-bold text-brand-600 font-mono">{money(p.price)}</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setQuickEditProduct(p);
+                                  setQuickEditFormData({
+                                    name: p.name,
+                                    category: p.category || 'Bolts',
+                                    supplier: p.supplier || '',
+                                    rackNumber: p.rackNumber || '',
+                                    size: p.size || '',
+                                    cost: p.cost || 0,
+                                    price: p.price || 0,
+                                    stock: p.stock || 0,
+                                    boxCapacity: p.boxCapacity || 1000,
+                                    reorderLevel: p.reorderLevel || 100,
+                                    hsnCode: p.hsnCode || '7318150',
+                                    notes: p.notes || '',
+                                  });
+                                  setQuickEditProductModalOpen(true);
+                                }}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                                title="Quick Edit Product Master"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+
+                              {addedLine ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-300 flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3 text-indigo-600" />
+                                    <span>Added ({addedLine.qty})</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => addLine(p.id)}
+                                    className="p-1 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition"
+                                    title="Add one more"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeLine(p.id)}
+                                    className="p-1 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition"
+                                    title="Remove from invoice"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => addLine(p.id)}
+                                  className="px-2.5 py-1 bg-brand-600 hover:bg-brand-700 text-white text-[11px] font-bold rounded-lg transition flex items-center gap-1 shadow-xs"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Add</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Items Added to Invoice */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                  <ShoppingCart className="w-4 h-4 text-brand-600" />
+                  <span>Items Added to Invoice</span>
+                  <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-extrabold bg-brand-100 text-brand-800 border border-brand-200">
+                    {lines.length} {lines.length === 1 ? 'item' : 'items'}
+                  </span>
+                </label>
+                {lines.length > 0 && (
+                  <span className="text-xs font-bold text-slate-600">
+                    Subtotal: <strong className="text-brand-700 font-mono">{money(subtotal)}</strong>
+                  </span>
                 )}
               </div>
 
-              {/* Search results or prompt to add custom item */}
-              {productSearch.trim() && searchResults.length === 0 ? (
-                <div className="flex flex-col sm:flex-row items-center justify-between p-3 rounded-lg border border-purple-200 bg-purple-50/50 gap-2">
-                  <div className="text-xs text-purple-900">
-                    <span className="font-semibold">No catalog match for &quot;{productSearch}&quot;.</span>
-                    <span className="text-purple-600 block text-[11px]">You can add this as a custom or direct-sourced product.</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCustomName(productSearch.trim());
-                      setIsAddingCustom(true);
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs"
-                  >
-                    + Add as Custom Item
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[420px] overflow-y-auto pr-1">
-                  {searchResults.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-white hover:border-indigo-300 text-left transition group"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => addLine(p.id)}
-                        className="flex-1 text-left cursor-pointer"
-                      >
-                        <p className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 transition">{p.name}</p>
-                        <p className="text-[11px] text-slate-500">Rack {p.rackNumber} · Stock: <span className="font-bold text-emerald-700">{p.stock}</span></p>
-                      </button>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-brand-600">{money(p.price)}</span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setQuickEditProduct(p);
-                            setQuickEditFormData({
-                              name: p.name,
-                              category: p.category || 'Bolts',
-                              supplier: p.supplier || '',
-                              rackNumber: p.rackNumber || '',
-                              size: p.size || '',
-                              cost: p.cost || 0,
-                              price: p.price || 0,
-                              stock: p.stock || 0,
-                              boxCapacity: p.boxCapacity || 1000,
-                              reorderLevel: p.reorderLevel || 100,
-                              hsnCode: p.hsnCode || '7318150',
-                              notes: p.notes || '',
-                            });
-                            setQuickEditProductModalOpen(true);
-                          }}
-                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
-                          title="Quick Edit Product Master"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addLine(p.id)}
-                          className="px-2 py-1 bg-brand-600 hover:bg-brand-700 text-white text-[11px] font-bold rounded transition"
-                        >
-                          + Add
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Line Items Table */}
-            {lines.length > 0 && (
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full text-left text-xs min-w-[700px]">
-                  <thead className="bg-slate-100">
-                    <tr>
-                      <th className="px-3 py-2.5 font-bold text-slate-600">Product</th>
-                      <th className="px-3 py-2.5 font-bold text-slate-600 text-center w-24">Avail. Stock</th>
-                      <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-center">Qty</th>
-                      <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Rate (₹)</th>
-                      <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-right">Disc %</th>
-                      <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Net Rate (₹)</th>
-                      <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Total (₹)</th>
-                      <th className="px-3 py-2.5 text-right w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {lines.map((l) => {
-                      const prod = products.find((p) => p.id === l.productId);
-                      const availStock = prod ? prod.stock : 0;
-                      const discPct = l.discount || 0;
-                      const netRate = l.price * (1 - discPct / 100);
-                      const lineNet = l.qty * netRate;
-                      const isOverStock = !l.isCustom && l.qty > availStock;
-                      return (
-                        <tr key={l.productId} className={l.isCustom ? 'bg-purple-50/20' : ''}>
-                          <td className="px-3 py-2.5">
-                            <div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
+              {lines.length > 0 ? (
+                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
+                  <table className="w-full text-left text-xs min-w-[700px]">
+                    <thead className="bg-slate-100">
+                      <tr>
+                        <th className="px-3 py-2.5 font-bold text-slate-600">Product</th>
+                        <th className="px-3 py-2.5 font-bold text-slate-600 text-center w-24">Avail. Stock</th>
+                        <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-center">Qty</th>
+                        <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Rate (₹)</th>
+                        <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-right">Disc %</th>
+                        <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Net Rate (₹)</th>
+                        <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Total (₹)</th>
+                        <th className="px-3 py-2.5 text-right w-24">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {lines.map((l) => {
+                        const prod = products.find((p) => p.id === l.productId);
+                        const availStock = prod ? prod.stock : 0;
+                        const discPct = l.discount || 0;
+                        const netRate = l.price * (1 - discPct / 100);
+                        const lineNet = l.qty * netRate;
+                        const isOverStock = !l.isCustom && l.qty > availStock;
+                        return (
+                          <tr key={l.productId} className={l.isCustom ? 'bg-purple-50/20' : ''}>
+                            <td className="px-3 py-2.5">
+                              <div>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenQuickEdit(l)}
+                                    className="font-bold text-slate-800 hover:text-indigo-600 hover:underline text-left inline-flex items-center gap-1 group transition cursor-pointer"
+                                    title="Click to edit product master stock, price, rack, or details"
+                                  >
+                                    <span>{l.name}</span>
+                                    <Edit3 className="w-3 h-3 text-indigo-500 opacity-0 group-hover:opacity-100 transition" />
+                                  </button>
+                                  {l.isCustom && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 text-purple-700 border border-purple-200">
+                                      Custom / Direct
+                                    </span>
+                                  )}
+                                </div>
+                                {prod?.rackNumber && (
+                                  <p className="text-[10px] text-slate-400 font-normal">Rack: {prod.rackNumber}</p>
+                                )}
+                                {l.isCustom && l.cost !== undefined && l.cost > 0 && (
+                                  <p className="text-[10px] text-purple-600 font-medium">
+                                    Cost: {money(l.cost)} · Profit: {money(Math.max(0, netRate - l.cost))}/pc
+                                  </p>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              {l.isCustom ? (
+                                <span className="text-[11px] font-bold text-slate-400 italic">Custom</span>
+                              ) : (
                                 <button
                                   type="button"
                                   onClick={() => handleOpenQuickEdit(l)}
-                                  className="font-bold text-slate-800 hover:text-indigo-600 hover:underline text-left inline-flex items-center gap-1 group transition cursor-pointer"
-                                  title="Click to edit product master stock, price, rack, or details"
+                                  title="Click to edit product master stock or details"
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold transition hover:scale-105 cursor-pointer ${
+                                    isOverStock
+                                      ? 'bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200'
+                                      : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                  }`}
                                 >
-                                  <span>{l.name}</span>
-                                  <Edit3 className="w-3 h-3 text-indigo-500 opacity-0 group-hover:opacity-100 transition" />
+                                  <span>{availStock}</span>
+                                  <Edit3 className="w-2.5 h-2.5 opacity-70" />
                                 </button>
-                                {l.isCustom && (
-                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 text-purple-700 border border-purple-200">
-                                    Custom / Direct
-                                  </span>
-                                )}
-                              </div>
-                              {prod?.rackNumber && (
-                                <p className="text-[10px] text-slate-400 font-normal">Rack: {prod.rackNumber}</p>
                               )}
-                              {l.isCustom && l.cost !== undefined && l.cost > 0 && (
-                                <p className="text-[10px] text-purple-600 font-medium">
-                                  Cost: {money(l.cost)} · Profit: {money(Math.max(0, netRate - l.cost))}/pc
-                                </p>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            {l.isCustom ? (
-                              <button
-                                type="button"
-                                onClick={() => handleOpenQuickEdit(l)}
-                                title="Click to edit custom item details"
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-700 border border-purple-200 hover:bg-purple-200 transition"
-                              >
-                                <span>Direct</span>
-                                <Edit3 className="w-2.5 h-2.5" />
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleOpenQuickEdit(l)}
-                                title="Click to edit product master stock or details"
-                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold transition hover:scale-105 cursor-pointer ${
+                            </td>
+                            <td className="px-3 py-2.5 text-center">
+                              <input
+                                type="number"
+                                value={l.qty || ''}
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => setQty(l.productId, e.target.value)}
+                                className={`w-20 rounded-lg border px-2.5 py-1.5 text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
                                   isOverStock
-                                    ? 'bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200'
-                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                    ? 'border-rose-400 bg-rose-50/50 text-rose-900 focus:ring-rose-500'
+                                    : 'border-slate-200 focus:border-indigo-500'
                                 }`}
-                              >
-                                <span>{availStock}</span>
-                                <Edit3 className="w-2.5 h-2.5 opacity-70" />
-                              </button>
-                            )}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            <input
-                              type="number"
-                              value={l.qty || ''}
-                              onFocus={(e) => e.target.select()}
-                              onChange={(e) => setQty(l.productId, e.target.value)}
-                              className={`w-20 rounded-lg border px-2.5 py-1.5 text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
-                                isOverStock
-                                  ? 'border-rose-400 bg-rose-50/50 text-rose-900 focus:ring-rose-500'
-                                  : 'border-slate-200 focus:border-indigo-500'
-                              }`}
-                            />
-                          </td>
-                          <td className="px-3 py-2.5 text-right">
-                            <input
-                              type="number"
-                              value={l.price || ''}
-                              onFocus={(e) => e.target.select()}
-                              onChange={(e) => {
-                                const cleaned = e.target.value.replace(/^0+(?=\d)/, '');
-                                setPrice(l.productId, parseFloat(cleaned) || 0);
-                              }}
-                              className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-right font-medium focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                            />
-                          </td>
-                          <td className="px-3 py-2.5 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.01"
-                              value={l.discount ? l.discount : ''}
-                              placeholder="NIL"
-                              onFocus={(e) => e.target.select()}
-                              onChange={(e) => setLineDiscount(l.productId, e.target.value)}
-                              className="w-20 rounded-lg border border-slate-200 bg-amber-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-amber-700 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 placeholder:text-slate-400 placeholder:font-semibold"
-                            />
-                          </td>
-                          <td className="px-3 py-2.5 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={netRate && netRate !== l.price ? +netRate.toFixed(2) : ''}
-                              placeholder={l.price > 0 ? l.price.toFixed(2) : '0.00'}
-                              onFocus={(e) => e.target.select()}
-                              onChange={(e) => setLineNetRate(l.productId, e.target.value)}
-                              className="w-24 rounded-lg border border-slate-200 bg-indigo-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-indigo-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-400"
-                            />
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-bold text-slate-900 font-mono">
-                            {money(lineNet)}
-                          </td>
-                          <td className="px-3 py-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenQuickEdit(l)}
-                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
-                                title="Edit Product Master (Stock, Price, Rack, Details)"
-                              >
-                                <Edit3 className="h-4 w-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => removeLine(l.productId)}
-                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
-                                title="Remove item"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                              />
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              <input
+                                type="number"
+                                value={l.price || ''}
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => {
+                                  const cleaned = e.target.value.replace(/^0+(?=\d)/, '');
+                                  setPrice(l.productId, parseFloat(cleaned) || 0);
+                                }}
+                                className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-right font-medium focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono"
+                              />
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.01"
+                                value={l.discount ? l.discount : ''}
+                                placeholder="NIL"
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => setLineDiscount(l.productId, e.target.value)}
+                                className="w-20 rounded-lg border border-slate-200 bg-amber-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-amber-700 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 placeholder:text-slate-400 placeholder:font-semibold font-mono"
+                              />
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={netRate && netRate !== l.price ? +netRate.toFixed(2) : ''}
+                                placeholder={l.price > 0 ? l.price.toFixed(2) : '0.00'}
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => setLineNetRate(l.productId, e.target.value)}
+                                className="w-24 rounded-lg border border-slate-200 bg-indigo-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-indigo-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-400 font-mono"
+                              />
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-bold text-slate-900 font-mono">
+                              {money(lineNet)}
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenQuickEdit(l)}
+                                  className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                                  title="Edit Product Master (Stock, Price, Rack, Details)"
+                                >
+                                  <Edit3 className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeLine(l.productId)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition shadow-xs"
+                                  title="Remove item"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                  <span>Remove</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 py-8 text-center">
+                  <Package className="mx-auto h-8 w-8 text-slate-300" />
+                  <p className="mt-2 text-xs font-bold text-slate-600">No products added yet</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;+ Add&quot; on any product in the catalog above to add it to this invoice.</p>
+                </div>
+              )}
+            </div>
 
             {/* Calculations & GST */}
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3 text-xs">
@@ -2982,10 +3799,10 @@ export default function Sales() {
         </Modal>
       )}
 
-      {/* Invoice / Debit Note View Modal */}
+      {/* Invoice / Debit Note / PO View Modal */}
       {viewing && (
         <Modal
-          title={`${viewing.documentType === 'DEBIT NOTE' ? 'Debit Note Details' : viewing.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice Details' : 'Invoice Details'} — ${viewing.invoice}`}
+          title={`${viewing.documentType === 'DEBIT NOTE' ? 'Debit Note Details' : viewing.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice Details' : viewing.documentType === 'PURCHASE ORDER' ? 'Company Purchase Order Details' : 'Invoice Details'} — ${viewing.invoice}`}
           size="xl"
           onClose={() => setViewing(null)}
         >
@@ -3015,14 +3832,36 @@ export default function Sales() {
               </div>
             </div>
 
-            {viewing.documentType === 'PROFORMA INVOICE' && (
-              <div className="flex justify-end">
+            {(viewing.documentType === 'PROFORMA INVOICE' || viewing.documentType === 'PURCHASE ORDER') && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 shadow-xs">
+                <div>
+                  <span className="font-bold text-xs text-blue-950 flex items-center gap-1.5">
+                    <PackageCheck className="w-4 h-4 text-blue-600" />
+                    {viewing.documentType === 'PURCHASE ORDER' ? 'Ready to Dispatch Goods?' : 'Ready to Bill Client?'}
+                  </span>
+                  <p className="text-[11px] text-blue-800 mt-0.5">
+                    Click &ldquo;Convert to Tax Invoice&rdquo; to deduct items from inventory stock and generate the official GST Tax Invoice.
+                  </p>
+                </div>
                 <button
                   onClick={() => openConvertModal(viewing)}
-                  className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700 text-xs px-3 py-1.5"
+                  className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700 text-xs px-3.5 py-2 flex items-center gap-1.5 font-bold shadow-xs shrink-0"
                 >
-                  Convert to Tax Invoice
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Convert to Tax Invoice</span>
                 </button>
+              </div>
+            )}
+
+            {viewing.convertedFromPoNumber && (
+              <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center justify-between font-bold shadow-xs">
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  Converted from Company PO #{viewing.convertedFromPoNumber}
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-200/80 text-emerald-900 font-extrabold">
+                  Stock Deducted
+                </span>
               </div>
             )}
 
@@ -3052,9 +3891,14 @@ export default function Sales() {
               <div className="grid grid-cols-2 border-b border-black divide-x divide-black text-[10px]">
                 <div className="p-2 space-y-1">
                   <div className="flex justify-between">
-                    <span>{viewing.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : viewing.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : 'Invoice No. :'} &nbsp;&nbsp; <strong>{viewing.invoice}</strong></span>
+                    <span>{viewing.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : viewing.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : viewing.documentType === 'PURCHASE ORDER' ? 'Company PO No. :' : 'Invoice No. :'} &nbsp;&nbsp; <strong>{viewing.invoice}</strong></span>
                     <span>Date : &nbsp;&nbsp; <strong>{viewing.date}</strong></span>
                   </div>
+                  {viewing.expectedDeliveryDate && (
+                    <div className="flex justify-between text-blue-900 font-bold">
+                      <span>Exp. Delivery Date :</span> <strong>{viewing.expectedDeliveryDate}</strong>
+                    </div>
+                  )}
                   <div className="flex justify-between"><span>P.O. No. :</span> <strong>{viewing.poNumber || '—'}</strong></div>
                   <div className="flex justify-between"><span>P.O. Date :</span> <strong>{viewing.poDate || '—'}</strong></div>
                 </div>
@@ -3392,15 +4236,17 @@ export default function Sales() {
                   <span>Collect Payment ({money(viewing.grandTotal - (viewing.amountPaid || 0))} Due)</span>
                 </button>
               )}
-              {viewing.documentType === 'PROFORMA INVOICE' && (
-                <button
-                  className="btn-secondary bg-purple-50 border-purple-300 text-purple-700 hover:bg-purple-100 font-bold"
-                  onClick={() => openConvertModal(viewing)}
-                >
-                  <CheckCircle2 className="h-4 w-4 text-purple-600" />
-                  <span>Convert to Tax Invoice</span>
-                </button>
-              )}
+              {(viewing.documentType === 'PURCHASE ORDER' || viewing.documentType === 'PROFORMA INVOICE') &&
+                !viewing.convertedFromPoNumber &&
+                !viewing.convertedFromPiNumber && (
+                  <button
+                    className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700 font-bold flex items-center gap-1.5"
+                    onClick={() => openConvertModal(viewing)}
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>⚡ Convert to Tax Invoice</span>
+                  </button>
+                )}
               <button
                 className="btn-secondary text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 font-bold"
                 onClick={() => {
@@ -3580,17 +4426,43 @@ export default function Sales() {
         </Modal>
       )}
 
-      {/* Convert Proforma to Tax Invoice Modal */}
+      {/* Convert Proforma or Company PO to Tax Invoice Modal */}
       {convertTargetSale && (
         <Modal
-          title="Convert Proforma Invoice to Tax Invoice"
+          title={convertTargetSale.documentType === 'PURCHASE ORDER' ? 'Convert Company PO to Tax Invoice' : 'Convert Proforma Invoice to Tax Invoice'}
           size="md"
           onClose={() => setConvertTargetSale(null)}
         >
           <div className="space-y-4 text-xs font-sans">
             <p className="text-slate-600">
-              You are converting Proforma Invoice <strong className="text-purple-700 font-mono">{convertTargetSale.invoice}</strong> for <strong>{convertTargetSale.customer}</strong> into an official Tax Invoice.
+              You are converting {convertTargetSale.documentType === 'PURCHASE ORDER' ? 'Company Purchase Order' : 'Proforma Invoice'}{' '}
+              <strong className={convertTargetSale.documentType === 'PURCHASE ORDER' ? 'text-blue-700 font-mono' : 'text-purple-700 font-mono'}>
+                {convertTargetSale.invoice}
+              </strong>{' '}
+              for <strong>{convertTargetSale.customer}</strong> into an official Tax Invoice.
             </p>
+
+            {convertTargetSale.documentType === 'PURCHASE ORDER' ? (
+              <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-blue-900 text-xs">
+                <span className="font-bold flex items-center gap-1.5 mb-1">
+                  <PackageCheck className="w-4 h-4 text-blue-600" />
+                  Inventory Stock Movement
+                </span>
+                <p>
+                  Upon conversion to Tax Invoice, items on this Purchase Order will be <strong>deducted from inventory stock</strong>, and this order will be recorded under Tax Invoices.
+                </p>
+              </div>
+            ) : (
+              <div className="p-3 bg-purple-50/80 rounded-xl border border-purple-200 text-purple-900 text-xs">
+                <span className="font-bold flex items-center gap-1.5 mb-1">
+                  <PackageCheck className="w-4 h-4 text-purple-600" />
+                  Inventory Stock Movement
+                </span>
+                <p>
+                  Upon conversion to Tax Invoice, items on this Proforma Quote will be <strong>deducted from inventory stock</strong>.
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">

@@ -36,6 +36,7 @@ function App() {
             <Route path="/customers/:id" element={<CustomerDetail />} />
             <Route path="/suppliers/:id" element={<SupplierDetail />} />
             <Route path="/import" element={<ImportProducts />} />
+            <Route path="/import-products" element={<ImportProducts />} />
 
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<NotFound />} />

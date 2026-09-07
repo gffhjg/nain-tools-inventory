@@ -22,10 +22,10 @@ export default function PurchaseDetails() {
   if (!po) {
     return (
       <div className="animate-fade-in">
-        <PageHeader title="Purchase Order Not Found" subtitle="This order may have been deleted." />
+        <PageHeader title="Purchase Bill Not Found" subtitle="This bill may have been deleted." />
         <div className="card flex flex-col items-center py-16">
           <FileText className="h-10 w-10 text-slate-300" />
-          <p className="mt-3 text-sm text-slate-500">The purchase order you're looking for doesn't exist.</p>
+          <p className="mt-3 text-sm text-slate-500">The purchase bill you're looking for doesn't exist.</p>
           <button className="btn-primary mt-4" onClick={() => navigate('/purchase')}>
             <ArrowLeft className="h-4 w-4" />
             Back to Purchases
@@ -35,10 +35,12 @@ export default function PurchaseDetails() {
     );
   }
 
+  const billNumber = po.poNumber.startsWith('PO-') ? 'PB-' + po.poNumber.slice(3) : po.poNumber;
+
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title={`Purchase Order ${po.poNumber}`}
+        title={`Purchase Bill ${billNumber}`}
         subtitle={`${po.supplier} · ${po.date}`}
         actions={
           <>
@@ -61,9 +63,9 @@ export default function PurchaseDetails() {
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* PO metadata */}
+        {/* Bill metadata */}
         <div className="card p-5 lg:col-span-1">
-          <h3 className="mb-4 text-base font-semibold text-slate-900">Order Details</h3>
+          <h3 className="mb-4 text-base font-semibold text-slate-900">Bill Details</h3>
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-sm text-slate-500">Supplier Invoice #</span>

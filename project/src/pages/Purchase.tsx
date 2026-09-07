@@ -67,7 +67,7 @@ export default function Purchase() {
   const { purchases, products, suppliers, sales, addPurchase, addSale, addProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'orders' | 'bills' | 'credit-notes' | 'suggestions' | 'pending-payments'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'bills' | 'credit-notes' | 'suggestions'>('all');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [supplier, setSupplier] = useState('');
@@ -96,6 +96,7 @@ export default function Purchase() {
   const [recordPayChequeDate, setRecordPayChequeDate] = useState(todayISO());
 
   const [productSearch, setProductSearch] = useState('');
+  const [poCategory, setPoCategory] = useState('All');
 
   // New Product Creator State in Purchase Order (auto-adds to Main Inventory)
   const [isAddingNewProduct, setIsAddingNewProduct] = useState(false);
@@ -164,6 +165,7 @@ export default function Purchase() {
   const [pbFreightCharges, setPbFreightCharges] = useState<string>('');
   const [pbLines, setPbLines] = useState<InvoiceLineItem[]>([]);
   const [pbProductSearch, setPbProductSearch] = useState('');
+  const [pbCategory, setPbCategory] = useState('All');
   const [pbViewing, setPbViewing] = useState<SaleRecord | null>(null);
   const [pbDocumentType, setPbDocumentType] = useState<'PURCHASE BILL' | 'CREDIT NOTE' | 'DEBIT NOTE'>('PURCHASE BILL');
   const [pbPreviewCopyTag, setPbPreviewCopyTag] = useState('Original For Recipient');
@@ -209,24 +211,33 @@ export default function Purchase() {
       .slice(0, 8);
   }, [suppliers, supplier]);
 
+  // Inventory restock low-stock suggestions calculation
+  const lowStockItems = useMemo(() => {
+    return products.filter((p) => p.status === 'low-stock' || p.status === 'out-of-stock' || p.stock <= p.reorderLevel);
+  }, [products]);
+
   const combinedRecords = useMemo(() => {
     type CombinedRecord =
-      | { kind: 'po'; id: string; docNumber: string; typeLabel: 'PO'; supplier: string; date: string; items: PurchaseLineItem[]; grandTotal: number; status: string; paymentMethod: string; paymentStatus: string; raw: PurchaseRecord }
+      | { kind: 'po'; id: string; docNumber: string; typeLabel: 'PURCHASE BILL'; supplier: string; date: string; items: PurchaseLineItem[]; grandTotal: number; status: string; paymentMethod: string; paymentStatus: string; raw: PurchaseRecord }
       | { kind: 'bill'; id: string; docNumber: string; typeLabel: 'PURCHASE BILL' | 'CREDIT NOTE' | 'DEBIT NOTE'; supplier: string; date: string; items: InvoiceLineItem[]; grandTotal: number; status: string; paymentMethod: string; paymentStatus: string; raw: SaleRecord };
 
     const list: CombinedRecord[] = [];
 
     for (const p of purchases) {
+      const docNumber = p.poNumber.startsWith('PO-')
+        ? 'PB-' + p.poNumber.slice(3)
+        : (p.poNumber || `PB-${p.id}`);
+
       list.push({
         kind: 'po',
         id: p.id,
-        docNumber: p.poNumber,
-        typeLabel: 'PO',
+        docNumber,
+        typeLabel: 'PURCHASE BILL',
         supplier: p.supplier,
         date: p.date,
         items: p.items,
         grandTotal: p.grandTotal,
-        status: p.status,
+        status: p.status === 'received' ? 'completed' : p.status,
         paymentMethod: p.paymentMethod,
         paymentStatus: p.paymentStatus,
         raw: p,
@@ -272,10 +283,8 @@ export default function Purchase() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
     return combinedRecords.filter((rec) => {
-      if (activeTab === 'orders' && rec.kind !== 'po') return false;
       if (activeTab === 'bills' && rec.typeLabel !== 'PURCHASE BILL') return false;
       if (activeTab === 'credit-notes' && rec.typeLabel !== 'CREDIT NOTE') return false;
-      if (activeTab === 'pending-payments' && (rec.kind !== 'po' || rec.paymentStatus !== 'Pending')) return false;
 
       if (!q) return true;
       return (
@@ -287,24 +296,23 @@ export default function Purchase() {
   }, [combinedRecords, search, activeTab]);
 
   const summary = useMemo(() => {
-    const totalPO = purchases.reduce((s, p) => s + p.grandTotal, 0);
-    const totalCN = sales
-      .filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'))
+    const totalInward = combinedRecords.reduce((s, r) => s + r.grandTotal, 0);
+    const totalPB = combinedRecords
+      .filter((r) => r.typeLabel === 'PURCHASE BILL')
       .reduce((s, r) => s + r.grandTotal, 0);
-    const countCN = sales.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-')).length;
-    const countPO = purchases.length;
-    const countPB = sales.filter((s) => s.documentType === 'PURCHASE BILL' || s.invoice.startsWith('PI-') || s.invoice.startsWith('PB-')).length;
-    const pendingPayment = purchases
-      .filter((p) => p.paymentStatus === 'Pending')
-      .reduce((s, p) => s + p.grandTotal, 0);
-    return { totalPO, totalCN, countCN, countPO, countPB, pendingPayment };
-  }, [purchases, sales]);
+    const countPB = combinedRecords.filter((r) => r.typeLabel === 'PURCHASE BILL').length;
+    const totalCN = combinedRecords
+      .filter((r) => r.typeLabel === 'CREDIT NOTE')
+      .reduce((s, r) => s + r.grandTotal, 0);
+    const countCN = combinedRecords.filter((r) => r.typeLabel === 'CREDIT NOTE').length;
+    return { totalInward, totalPB, countPB, totalCN, countCN };
+  }, [combinedRecords]);
 
   const statCards = [
-    { label: 'Total Purchase Value', value: `₹${summary.totalPO.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Truck, tone: 'bg-brand-50 text-brand-600' },
+    { label: 'Total Purchase Value', value: `₹${summary.totalInward.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Truck, tone: 'bg-brand-50 text-brand-600' },
+    { label: 'Purchase Bills', value: `${summary.countPB} (₹${summary.totalPB.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, icon: PackageCheck, tone: 'bg-indigo-50 text-indigo-600' },
     { label: 'Credit Notes Issued', value: `${summary.countCN} (₹${summary.totalCN.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`, icon: FileText, tone: 'bg-rose-50 text-rose-600' },
-    { label: 'Purchase Orders', value: String(summary.countPO), icon: PackageCheck, tone: 'bg-accent-50 text-accent-600' },
-    { label: 'Pending Payments', value: `₹${summary.pendingPayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Clock, tone: 'bg-amber-50 text-amber-600' },
+    { label: 'Restock Suggestions', value: `${lowStockItems.length} items`, icon: Sparkles, tone: 'bg-amber-50 text-amber-600' },
   ];
 
   const subtotal = useMemo(
@@ -314,13 +322,31 @@ export default function Purchase() {
   const gstAmount = +(subtotal * (GST_RATE / 100)).toFixed(2);
   const grandTotal = +(subtotal + gstAmount).toFixed(2);
 
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>();
+    products.forEach((p) => {
+      if (p.category && p.category.trim()) cats.add(p.category.trim());
+    });
+    return ['All', ...Array.from(cats).sort()];
+  }, [products]);
+
   const searchResults = useMemo(() => {
     const q = productSearch.toLowerCase().trim();
-    if (!q) return [];
-    return products
-      .filter((p) => p.name.toLowerCase().includes(q))
-      .slice(0, 6);
-  }, [productSearch, products]);
+    let list = products;
+    if (poCategory !== 'All') {
+      list = list.filter((p) => (p.category || '').toLowerCase() === poCategory.toLowerCase());
+    }
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.size && p.size.toLowerCase().includes(q)) ||
+          (p.category && p.category.toLowerCase().includes(q)) ||
+          (p.rackNumber && p.rackNumber.toLowerCase().includes(q))
+      );
+    }
+    return list.slice(0, 100);
+  }, [productSearch, products, poCategory]);
 
 
 
@@ -356,6 +382,7 @@ export default function Purchase() {
     setPoChequeDate(todayISO());
     setPoChequeStatus('pending_clearance');
     setProductSearch('');
+    setPoCategory('All');
     resetNewProductForm();
   };
 
@@ -453,34 +480,57 @@ export default function Purchase() {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
   };
 
-  // Inventory restock low-stock suggestions calculation
-  const lowStockItems = useMemo(() => {
-    return products.filter((p) => p.status === 'low-stock' || p.status === 'out-of-stock' || p.stock <= p.reorderLevel);
-  }, [products]);
-
-  const createPOFromSuggestions = (selectedItems?: Product[]) => {
+  const createBillFromSuggestions = (selectedItems?: Product[]) => {
     const itemsToOrder = selectedItems || lowStockItems;
     if (itemsToOrder.length === 0) return;
-    resetForm();
-    const commonSupplier = itemsToOrder[0]?.supplier || '';
-    if (commonSupplier) {
-      setSupplier(commonSupplier);
-      const s = suppliers.find((x) => x.name === commonSupplier);
-      if (s && s.phone) setPhone(s.phone);
+    resetPbForm();
+    setPbDocumentType('PURCHASE BILL');
+    setPbCustomBillNumber(nextPurchaseBill(sales));
+
+    const commonSupplierName = itemsToOrder[0]?.supplier || '';
+    if (commonSupplierName) {
+      setPbSupplier(commonSupplierName);
+      const s = suppliers.find((x) => x.name.toLowerCase() === commonSupplierName.toLowerCase());
+      if (s) {
+        setPbSupplierId(s.id);
+        setPbPhone(s.phone || '');
+        setPbAddress(s.address || '');
+        setPbGstin(s.gstin || '');
+      }
     }
-    const newLines: DraftLine[] = itemsToOrder.map((p) => {
+
+    const newPbLines: InvoiceLineItem[] = itemsToOrder.map((p) => {
       const neededQty = Math.max(p.reorderLevel * 2, p.boxCapacity - p.stock, 500);
+      const taxable = +(neededQty * p.cost).toFixed(2);
+      const halfRate = pbEffectiveGstRate / 2;
+      const cgstAmt = pbGstTaxType === 'central' ? 0 : +(taxable * (halfRate / 100)).toFixed(2);
+      const sgstAmt = pbGstTaxType === 'central' ? 0 : +(taxable * (halfRate / 100)).toFixed(2);
+      const igstAmt = pbGstTaxType === 'central' ? +(taxable * (pbEffectiveGstRate / 100)).toFixed(2) : 0;
+      const totalAmt = +(taxable + cgstAmt + sgstAmt + igstAmt).toFixed(2);
+
       return {
         productId: p.id,
         name: p.name,
-        cost: p.cost,
+        hsn: p.hsn || '7318150',
+        size: p.size || '',
+        rack: p.rack || '',
         qty: neededQty,
-        gstRate: GST_RATE,
+        price: p.cost,
+        discountPercent: 0,
+        taxableAmount: taxable,
+        cgstPercent: pbGstTaxType === 'central' ? 0 : halfRate,
+        sgstPercent: pbGstTaxType === 'central' ? 0 : halfRate,
+        igstPercent: pbGstTaxType === 'central' ? pbEffectiveGstRate : 0,
+        cgstAmount: cgstAmt,
+        sgstAmount: sgstAmt,
+        igstAmount: igstAmt,
+        total: totalAmt,
       };
     });
-    setLines(newLines);
-    setNotes(`Auto-generated from Inventory Restock Suggestions (${itemsToOrder.length} items)`);
-    setModalOpen(true);
+
+    setPbLines(newPbLines);
+    setPbNotes(`Auto-generated from Inventory Restock Suggestions (${itemsToOrder.length} items)`);
+    setPbModalOpen(true);
   };
 
   const canSubmit = supplier.trim() !== '' && lines.length > 0;
@@ -508,9 +558,21 @@ export default function Purchase() {
 
   const pbSearchResults = useMemo(() => {
     const q = pbProductSearch.toLowerCase().trim();
-    if (!q) return [];
-    return products.filter((p) => p.name.toLowerCase().includes(q) || (p.size && p.size.toLowerCase().includes(q)));
-  }, [pbProductSearch, products]);
+    let list = products;
+    if (pbCategory !== 'All') {
+      list = list.filter((p) => (p.category || '').toLowerCase() === pbCategory.toLowerCase());
+    }
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.size && p.size.toLowerCase().includes(q)) ||
+          (p.category && p.category.toLowerCase().includes(q)) ||
+          (p.rackNumber && p.rackNumber.toLowerCase().includes(q))
+      );
+    }
+    return list.slice(0, 100);
+  }, [pbProductSearch, products, pbCategory]);
 
   const resetPbForm = () => {
     setPbSupplierId('');
@@ -539,6 +601,7 @@ export default function Purchase() {
     setPbFreightCharges('');
     setPbLines([]);
     setPbProductSearch('');
+    setPbCategory('All');
     setPbDocumentType('PURCHASE BILL');
   };
 
@@ -860,8 +923,8 @@ export default function Purchase() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Purchase & Supplier Credit Notes"
-        subtitle="Manage purchase bills, supplier credit notes, debit notes, and purchase orders."
+        title="Purchases & Supplier Inward"
+        subtitle="Manage supplier purchase bills and credit notes. All inward items automatically add to inventory stock."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button className="btn-secondary" onClick={handleExport}>
@@ -869,22 +932,18 @@ export default function Purchase() {
               <span className="hidden sm:inline">Export</span>
             </button>
             <button
-              className="btn-secondary bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 font-bold flex items-center gap-1.5"
+              className="btn-secondary bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 font-bold flex items-center gap-1.5 shadow-sm"
               onClick={openNewCreditNote}
             >
               <Plus className="h-4 w-4 text-rose-600" />
-              <span>+ Credit Note</span>
+              <span>Credit Note</span>
             </button>
             <button
-              className="btn-secondary bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold flex items-center gap-1.5"
+              className="btn-primary flex items-center gap-1.5 shadow-sm"
               onClick={openNewPurchaseBill}
             >
-              <Plus className="h-4 w-4 text-indigo-600" />
-              <span>+ Purchase Bill</span>
-            </button>
-            <button className="btn-primary" onClick={openNewPurchase}>
               <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">New Purchase Order</span>
+              <span>New Purchase Bill</span>
             </button>
           </div>
         }
@@ -905,13 +964,37 @@ export default function Purchase() {
               <Truck className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
-              All Purchases
+              All Inward
             </span>
           </div>
           <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
-            ₹{summary.totalPO.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            ₹{summary.totalInward.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <p className="mt-1 text-xs text-slate-500 font-semibold">Total Purchase Value</p>
+        </div>
+
+        <div
+          className={`card p-5 cursor-pointer transition-all duration-200 ${
+            activeTab === 'bills'
+              ? 'ring-2 ring-indigo-500/80 bg-indigo-50/20 border-indigo-300 shadow-md'
+              : 'hover:border-slate-300 hover:shadow-md'
+          }`}
+          onClick={() => setActiveTab('bills')}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 font-bold">
+              <PackageCheck className="h-5 w-5" />
+            </div>
+            <span className="text-[10.5px] font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
+              Purchase Bills
+            </span>
+          </div>
+          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
+            {summary.countPB}
+          </p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">
+            ₹{summary.totalPB.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Inward
+          </p>
         </div>
 
         <div
@@ -931,51 +1014,33 @@ export default function Purchase() {
             </span>
           </div>
           <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
-            {summary.countCN} (₹{summary.totalCN.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+            {summary.countCN}
           </p>
-          <p className="mt-1 text-xs text-slate-500 font-semibold">Credit Notes Issued</p>
+          <p className="mt-1 text-xs text-slate-500 font-semibold">
+            ₹{summary.totalCN.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Adjustments
+          </p>
         </div>
 
         <div
           className={`card p-5 cursor-pointer transition-all duration-200 ${
-            activeTab === 'orders'
-              ? 'ring-2 ring-accent-500/80 bg-accent-50/20 border-accent-300 shadow-md'
-              : 'hover:border-slate-300 hover:shadow-md'
-          }`}
-          onClick={() => setActiveTab('orders')}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-50 text-accent-600 font-bold">
-              <PackageCheck className="h-5 w-5" />
-            </div>
-            <span className="text-[10.5px] font-extrabold text-accent-700 bg-accent-50 px-2 py-0.5 rounded-md">
-              PO Records
-            </span>
-          </div>
-          <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{summary.countPO}</p>
-          <p className="mt-1 text-xs text-slate-500 font-semibold">Purchase Orders</p>
-        </div>
-
-        <div
-          className={`card p-5 cursor-pointer transition-all duration-200 ${
-            activeTab === 'pending-payments'
+            activeTab === 'suggestions'
               ? 'ring-2 ring-amber-500/80 bg-amber-50/20 border-amber-300 shadow-md'
               : 'hover:border-slate-300 hover:shadow-md'
           }`}
-          onClick={() => setActiveTab('pending-payments')}
+          onClick={() => setActiveTab('suggestions')}
         >
           <div className="flex items-center justify-between">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 font-bold">
-              <Clock className="h-5 w-5" />
+              <Sparkles className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md">
-              Unpaid POs
+              Restock Alerts
             </span>
           </div>
           <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
-            ₹{summary.pendingPayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {lowStockItems.length}
           </p>
-          <p className="mt-1 text-xs text-amber-600 font-semibold">Pending Payments</p>
+          <p className="mt-1 text-xs text-amber-600 font-semibold">Low / Out of Stock Items</p>
         </div>
       </div>
 
@@ -987,18 +1052,16 @@ export default function Purchase() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by PO/Invoice #, supplier, or product…"
+              placeholder="Search by Bill #, supplier, or product…"
               className="input pl-10"
             />
           </div>
           <div className="flex items-center gap-1 overflow-x-auto bg-slate-100 p-1 rounded-xl border border-slate-200">
             {[
-              { id: 'all', label: `All (${combinedRecords.length})` },
-              { id: 'suggestions', label: `Restock Suggestions (${lowStockItems.length})`, highlight: lowStockItems.length > 0 },
-              { id: 'credit-notes', label: `Credit Notes (${summary.countCN})` },
+              { id: 'all', label: `All Inward (${combinedRecords.length})` },
               { id: 'bills', label: `Purchase Bills (${summary.countPB})` },
-              { id: 'orders', label: `Purchase Orders (${summary.countPO})` },
-              { id: 'pending-payments', label: `Pending Payments (${purchases.filter((p) => p.paymentStatus === 'Pending').length})` },
+              { id: 'credit-notes', label: `Credit Notes (${summary.countCN})` },
+              { id: 'suggestions', label: `Restock Suggestions (${lowStockItems.length})`, highlight: lowStockItems.length > 0 },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -1037,17 +1100,17 @@ export default function Purchase() {
                     </span>
                   </h3>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    These items are below their minimum reorder levels in main inventory. Generate purchase orders automatically with 1-click.
+                    These items are below their minimum reorder levels in main inventory. Generate inward purchase bills automatically with 1-click.
                   </p>
                 </div>
               </div>
               {lowStockItems.length > 0 && (
                 <button
-                  onClick={() => createPOFromSuggestions()}
+                  onClick={() => createBillFromSuggestions()}
                   className="btn-primary bg-amber-600 hover:bg-amber-700 text-white shadow-sm flex items-center gap-2 shrink-0"
                 >
                   <ShoppingCart className="h-4 w-4" />
-                  <span>Order All Suggested Items ({lowStockItems.length})</span>
+                  <span>Create Purchase Bill for All ({lowStockItems.length})</span>
                 </button>
               )}
             </div>
@@ -1118,11 +1181,11 @@ export default function Purchase() {
                           </td>
                           <td className="table-td text-right">
                             <button
-                              onClick={() => createPOFromSuggestions([p])}
+                              onClick={() => createBillFromSuggestions([p])}
                               className="px-3 py-1.5 rounded-lg bg-brand-50 hover:bg-brand-100 text-brand-700 font-bold text-xs transition border border-brand-200 inline-flex items-center gap-1.5"
                             >
                               <Plus className="h-3.5 w-3.5" />
-                              <span>Create PO</span>
+                              <span>+ Purchase Bill</span>
                             </button>
                           </td>
                         </tr>
@@ -1524,129 +1587,249 @@ export default function Purchase() {
               </div>
             )}
 
-            {/* Existing Product Search Selector */}
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Search catalog products by name..."
-                className="input pl-9 text-xs"
-              />
-              {searchResults.length > 0 && (
-                <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-card divide-y divide-slate-100">
-                  {searchResults.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => addLine(p.id)}
-                      className="flex w-full items-center justify-between p-2 text-left transition hover:bg-slate-50 rounded-lg"
-                    >
-                      <div>
-                        <p className="text-xs font-semibold text-slate-800">{p.name}</p>
-                        <p className="text-xs text-slate-400">Est. Stock: {p.stock}</p>
-                      </div>
-                      <span className="text-sm font-semibold text-slate-700">₹{p.cost.toFixed(2)}</span>
-                      <Plus className="h-4 w-4 text-brand-500" />
-                    </button>
-                  ))}
+            {/* Product Catalog Picker with Search, Category Filter, and Smooth Scroller */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2.5">
+              {/* Search input with Cross (X) button */}
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  placeholder="Search 990+ products by name, size, rack..."
+                  className="input pl-9 pr-9 text-xs bg-white"
+                />
+                {productSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setProductSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded-full transition"
+                    title="Clear search"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Category Filter Chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+                <span className="text-[11px] font-bold text-slate-500 shrink-0">Category:</span>
+                {availableCategories.slice(0, 9).map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setPoCategory(cat)}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition shrink-0 ${
+                      poCategory === cat
+                        ? 'bg-brand-600 text-white shadow-xs'
+                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              {/* Scrollable Catalog Product List (Inline, Never overlays or hides added items) */}
+              <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-xs">
+                <div className="bg-slate-100/70 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
+                  <span>
+                    Catalog List ({searchResults.length} {searchResults.length === 1 ? 'item' : 'items'} displayed
+                    {productSearch ? ` for "${productSearch}"` : ''})
+                  </span>
+                  <span className="text-slate-400 text-[10.5px]">Scroll to browse &middot; Click &quot;+ Add&quot; to order</span>
                 </div>
-              )}
+
+                <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                  {searchResults.length > 0 ? (
+                    searchResults.map((p) => {
+                      const addedLine = lines.find((l) => l.productId === p.id);
+                      return (
+                        <div
+                          key={p.id}
+                          className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
+                            addedLine ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex-1 pr-3">
+                            <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
+                            <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
+                              {p.size && <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">{p.size}</span>}
+                              {p.rackNumber && <span>Rack: <strong className="text-slate-700">{p.rackNumber}</strong></span>}
+                              <span>Est. Stock: <strong className="text-slate-700">{p.stock}</strong></span>
+                              {p.category && <span className="text-slate-400 font-medium">({p.category})</span>}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-xs font-bold text-slate-700 font-mono">
+                              ₹{p.cost.toFixed(2)}
+                            </span>
+
+                            {addedLine ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Added ({addedLine.qty})</span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => addLine(p.id)}
+                                  className="p-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition"
+                                  title="Add one more"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeLine(p.id)}
+                                  className="p-1 rounded-md bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition"
+                                  title="Remove from order"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => addLine(p.id)}
+                                className="px-3 py-1 rounded-lg bg-brand-50 hover:bg-brand-100 text-brand-700 border border-brand-200 font-bold text-xs transition flex items-center gap-1 shadow-xs"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Add</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-4 text-center text-xs text-slate-400">
+                      No products found matching &quot;{productSearch}&quot;.
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
-          {lines.length > 0 ? (
-            <div className="overflow-hidden rounded-xl border border-slate-200">
-              <table className="w-full">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="table-th">Product Name</th>
-                    <th className="table-th text-center">Qty (Pieces)</th>
-                    <th className="table-th text-right">Cost / Piece</th>
-                    <th className="table-th text-right">GST</th>
-                    <th className="table-th text-right">Total</th>
-                    <th className="table-th"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {lines.map((l) => (
-                    <tr key={l.productId} className={l.isNewProduct ? 'bg-emerald-50/20' : ''}>
-                      <td className="table-td">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <input
-                            type="text"
-                            value={l.name}
-                            onChange={(e) => updatePoLineName(l.productId, e.target.value)}
-                            className="input py-1 px-2 text-xs font-semibold text-slate-800 bg-white"
-                            placeholder="Product Name"
-                          />
-                          {l.isNewProduct && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 border border-emerald-200">
-                              + Auto-Adds to Main Inventory
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="table-td">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => updateQty(l.productId, -1)}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
-                          >
-                            <Minus className="h-3.5 w-3.5" />
-                          </button>
-                          <input
-                            type="number"
-                            min="1"
-                            value={l.qty === 0 ? '' : l.qty}
-                            onChange={(e) => setQty(l.productId, e.target.value)}
-                            className="w-12 rounded-lg border border-slate-200 py-1 text-center text-sm tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                          />
-                          <button
-                            onClick={() => updateQty(l.productId, 1)}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="table-td text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <span className="text-slate-400">₹</span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={l.cost || ''}
-                            onChange={(e) => setCost(l.productId, parseFloat(e.target.value) || 0)}
-                            className="w-20 rounded-lg border border-slate-200 py-1 text-right text-sm tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                          />
-                        </div>
-                      </td>
-                      <td className="table-td text-right tabular-nums text-slate-500">{l.gstRate}%</td>
-                      <td className="table-td text-right font-semibold tabular-nums text-slate-900">
-                        ₹{(l.cost * l.qty).toFixed(2)}
-                      </td>
-                      <td className="table-td text-right">
-                        <button
-                          onClick={() => removeLine(l.productId)}
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
+          {/* Items Added to Purchase Order */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <ShoppingCart className="w-4 h-4 text-brand-600" />
+                <span>Items Added to Purchase Order</span>
+                <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-extrabold bg-brand-100 text-brand-800 border border-brand-200">
+                  {lines.length} {lines.length === 1 ? 'item' : 'items'}
+                </span>
+              </label>
+              {lines.length > 0 && (
+                <span className="text-xs font-bold text-slate-600">
+                  Subtotal: <strong className="text-brand-700 font-mono">₹{subtotal.toFixed(2)}</strong>
+                </span>
+              )}
+            </div>
+
+            {lines.length > 0 ? (
+              <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 font-bold text-slate-700">
+                    <tr>
+                      <th className="p-2.5">Product Name</th>
+                      <th className="p-2.5 text-center w-36">Qty (Pieces)</th>
+                      <th className="p-2.5 text-right w-28">Cost / Piece</th>
+                      <th className="p-2.5 text-right w-20">GST</th>
+                      <th className="p-2.5 text-right w-28">Total</th>
+                      <th className="p-2.5 text-center w-24">Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 py-10 text-center">
-              <Package className="mx-auto h-8 w-8 text-slate-300" />
-              <p className="mt-2 text-sm text-slate-500">No products added yet. Search above to add items.</p>
-            </div>
-          )}
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {lines.map((l) => (
+                      <tr key={l.productId} className={l.isNewProduct ? 'bg-emerald-50/20' : 'hover:bg-slate-50/50'}>
+                        <td className="p-2.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <input
+                              type="text"
+                              value={l.name}
+                              onChange={(e) => updatePoLineName(l.productId, e.target.value)}
+                              className="input py-1 px-2 text-xs font-semibold text-slate-800 bg-white"
+                              placeholder="Product Name"
+                            />
+                            {l.isNewProduct && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 border border-emerald-200">
+                                + Auto-Adds to Main Inventory
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-2.5">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => updateQty(l.productId, -1)}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
+                              title="Decrease quantity"
+                            >
+                              <Minus className="h-3.5 w-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              min="1"
+                              value={l.qty === 0 ? '' : l.qty}
+                              onChange={(e) => setQty(l.productId, e.target.value)}
+                              className="w-16 rounded-lg border border-slate-200 py-1 text-center text-xs font-bold tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateQty(l.productId, 1)}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
+                              title="Increase quantity"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-2.5 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <span className="text-slate-400 font-mono">₹</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={l.cost || ''}
+                              onChange={(e) => setCost(l.productId, parseFloat(e.target.value) || 0)}
+                              className="w-20 rounded-lg border border-slate-200 py-1 text-right text-xs font-bold tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20 font-mono"
+                            />
+                          </div>
+                        </td>
+                        <td className="p-2.5 text-right tabular-nums text-slate-500 font-mono">{l.gstRate}%</td>
+                        <td className="p-2.5 text-right font-bold tabular-nums text-slate-900 font-mono">
+                          ₹{(l.cost * l.qty).toFixed(2)}
+                        </td>
+                        <td className="p-2.5 text-center">
+                          <button
+                            type="button"
+                            onClick={() => removeLine(l.productId)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition shadow-xs"
+                            title="Remove item"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            <span>Remove</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 py-8 text-center">
+                <Package className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-2 text-xs font-bold text-slate-600">No products added yet</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;+ Add&quot; on any product in the catalog above to add it to this purchase order.</p>
+              </div>
+            )}
+          </div>
 
           <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
             <div className="flex items-center justify-between">
@@ -2033,7 +2216,7 @@ export default function Purchase() {
                     type="text"
                     value={pbPoNumber}
                     onChange={(e) => setPbPoNumber(e.target.value)}
-                    placeholder="e.g. PO-1029"
+                    placeholder="e.g. PB-1029"
                     className="input text-xs"
                   />
                 </div>
@@ -2177,155 +2360,265 @@ export default function Purchase() {
                 </div>
               )}
 
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={pbProductSearch}
-                  onChange={(e) => setPbProductSearch(e.target.value)}
-                  placeholder="Search products by name or SKU..."
-                  className="input pl-9 pr-9 text-xs"
-                />
-                {pbProductSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setPbProductSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition"
-                    title="Clear search"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+              {/* Product Catalog Picker with Search, Category Filter, and Smooth Scroller */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2.5">
+                {/* Search input with Cross (X) button */}
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={pbProductSearch}
+                    onChange={(e) => setPbProductSearch(e.target.value)}
+                    placeholder="Search 990+ products by name, size, rack..."
+                    className="input pl-9 pr-9 text-xs bg-white"
+                  />
+                  {pbProductSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPbProductSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded-full transition"
+                      title="Clear search"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Category Filter Chips */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+                  <span className="text-[11px] font-bold text-slate-500 shrink-0">Category:</span>
+                  {availableCategories.slice(0, 9).map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setPbCategory(cat)}
+                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition shrink-0 ${
+                        pbCategory === cat
+                          ? 'bg-brand-600 text-white shadow-xs'
+                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Scrollable Catalog Product List (Inline) */}
+                <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-xs">
+                  <div className="bg-slate-100/70 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
+                    <span>
+                      Catalog List ({pbSearchResults.length} {pbSearchResults.length === 1 ? 'item' : 'items'} displayed
+                      {pbProductSearch ? ` for "${pbProductSearch}"` : ''})
+                    </span>
+                    <span className="text-slate-400 text-[10.5px]">Scroll to browse &middot; Click &quot;+ Add&quot; to include</span>
+                  </div>
+
+                  <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                    {pbSearchResults.length > 0 ? (
+                      pbSearchResults.map((p) => {
+                        const addedLine = pbLines.find((l) => l.productId === p.id);
+                        return (
+                          <div
+                            key={p.id}
+                            className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
+                              addedLine ? 'bg-indigo-50/40 hover:bg-indigo-50/70' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex-1 pr-3">
+                              <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
+                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
+                                {p.size && <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">{p.size}</span>}
+                                {p.rackNumber && <span>Rack: <strong className="text-slate-700">{p.rackNumber}</strong></span>}
+                                <span>Est. Stock: <strong className="text-slate-700">{p.stock}</strong></span>
+                                {p.category && <span className="text-slate-400 font-medium">({p.category})</span>}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3 shrink-0">
+                              <span className="text-xs font-bold text-slate-700 font-mono">
+                                ₹{p.price.toFixed(2)}
+                              </span>
+
+                              {addedLine ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-300 flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3 text-indigo-600" />
+                                    <span>Added ({addedLine.qty})</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => addPbLine(p.id)}
+                                    className="p-1 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition"
+                                    title="Add one more"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removePbLine(p.id)}
+                                    className="p-1 rounded-md bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition"
+                                    title="Remove from bill"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => addPbLine(p.id)}
+                                  className="px-3 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold text-xs transition flex items-center gap-1 shadow-xs"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Add</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="p-4 text-center text-xs text-slate-400">
+                        No products found matching &quot;{pbProductSearch}&quot;.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {pbProductSearch && pbSearchResults.length === 0 && !isAddingPbNewProduct && (
+                  <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/70 flex items-center justify-between gap-2">
+                    <span className="text-xs text-amber-900 font-medium">
+                      No existing product match for &quot;{pbProductSearch}&quot;.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPbNewProdName(pbProductSearch.trim());
+                        setIsAddingPbNewProduct(true);
+                        setPbProductSearch('');
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs shrink-0 flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Add &quot;{pbProductSearch}&quot; as New Product</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Items Added to Purchase Bill */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                  <ShoppingCart className="w-4 h-4 text-indigo-600" />
+                  <span>Items Added to Purchase Bill</span>
+                  <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    {pbLines.length} {pbLines.length === 1 ? 'item' : 'items'}
+                  </span>
+                </label>
+                {pbLines.length > 0 && (
+                  <span className="text-xs font-bold text-slate-600">
+                    Subtotal: <strong className="text-indigo-700 font-mono">₹{pbSubtotal.toFixed(2)}</strong>
+                  </span>
                 )}
               </div>
 
-              {pbSearchResults.length > 0 && (
-                <div className="mt-1 max-h-[420px] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-md divide-y divide-slate-100 pr-1">
-                  {pbSearchResults.map((p) => (
-                    <div
-                      key={p.id}
-                      onClick={() => addPbLine(p.id)}
-                      className="flex items-center justify-between p-2.5 hover:bg-indigo-50 cursor-pointer transition text-xs"
-                    >
-                      <div>
-                        <p className="font-bold text-slate-900">{p.name}</p>
-                        <p className="text-[11px] text-slate-500 font-mono">Stock: {p.stock}</p>
-                      </div>
-                      <span className="font-bold text-indigo-600">₹{p.price.toFixed(2)}</span>
-                    </div>
-                  ))}
+              {pbLines.length > 0 ? (
+                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 font-bold text-slate-700">
+                      <tr>
+                        <th className="p-2.5">Item Name</th>
+                        <th className="p-2.5 w-28">HSN Code</th>
+                        <th className="p-2.5 w-28 text-center">Qty</th>
+                        <th className="p-2.5 w-28 text-right">Price (₹)</th>
+                        <th className="p-2.5 w-28 text-right">Total (₹)</th>
+                        <th className="p-2.5 w-24 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {pbLines.map((l) => (
+                        <tr key={l.productId} className="hover:bg-slate-50/50">
+                          <td className="p-2.5">
+                            <input
+                              type="text"
+                              value={l.name}
+                              onChange={(e) => updatePbLineName(l.productId, e.target.value)}
+                              className="input p-1.5 text-xs font-semibold text-slate-900 bg-white"
+                              placeholder="Item Name"
+                            />
+                          </td>
+                          <td className="p-2.5">
+                            <input
+                              type="text"
+                              value={l.hsnCode || '7318150'}
+                              onChange={(e) => setPbLineHsn(l.productId, e.target.value)}
+                              className="input p-1 text-[11px] font-mono text-center bg-white"
+                            />
+                          </td>
+                          <td className="p-2.5">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => updatePbLineQty(l.productId, -1)}
+                                className="p-1 rounded hover:bg-slate-200 text-slate-500"
+                                title="Decrease quantity"
+                              >
+                                <Minus className="h-3 w-3" />
+                              </button>
+                              <input
+                                type="number"
+                                value={l.qty}
+                                onChange={(e) => setPbLineQty(l.productId, e.target.value)}
+                                className="w-14 text-center font-bold input p-1 bg-white"
+                                min={1}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => updatePbLineQty(l.productId, 1)}
+                                className="p-1 rounded hover:bg-slate-200 text-slate-500"
+                                title="Increase quantity"
+                              >
+                                <Plus className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </td>
+                          <td className="p-2.5 text-right">
+                            <input
+                              type="number"
+                              value={l.price}
+                              onChange={(e) => setPbLinePrice(l.productId, e.target.value)}
+                              className="w-20 text-right font-semibold input p-1 ml-auto bg-white font-mono"
+                              step="0.01"
+                            />
+                          </td>
+                          <td className="p-2.5 text-right font-bold text-slate-900 font-mono">
+                            ₹{(l.price * l.qty).toFixed(2)}
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => removePbLine(l.productId)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition shadow-xs"
+                              title="Remove item"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                              <span>Remove</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              )}
-
-              {pbProductSearch && pbSearchResults.length === 0 && !isAddingPbNewProduct && (
-                <div className="mt-1.5 p-3 rounded-xl border border-amber-200 bg-amber-50/70 flex items-center justify-between gap-2">
-                  <span className="text-xs text-amber-900 font-medium">
-                    No existing product match for &quot;{pbProductSearch}&quot;.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPbNewProdName(pbProductSearch.trim());
-                      setIsAddingPbNewProduct(true);
-                      setPbProductSearch('');
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs shrink-0 flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add &quot;{pbProductSearch}&quot; as New Product</span>
-                  </button>
+              ) : (
+                <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 py-8 text-center">
+                  <Package className="mx-auto h-8 w-8 text-slate-300" />
+                  <p className="mt-2 text-xs font-bold text-slate-600">No products added yet</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;+ Add&quot; on any product in the catalog above to add it to this purchase bill.</p>
                 </div>
               )}
             </div>
-
-            {/* Line Items Table */}
-            {pbLines.length > 0 ? (
-              <div className="overflow-x-auto rounded-lg border border-slate-200">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 font-bold text-slate-700">
-                    <tr>
-                      <th className="p-2">Item Name</th>
-                      <th className="p-2 w-28">HSN Code</th>
-                      <th className="p-2 w-24 text-center">Qty</th>
-                      <th className="p-2 w-24 text-right">Price (₹)</th>
-                      <th className="p-2 w-28 text-right">Total (₹)</th>
-                      <th className="p-2 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {pbLines.map((l) => (
-                      <tr key={l.productId}>
-                        <td className="p-2">
-                          <input
-                            type="text"
-                            value={l.name}
-                            onChange={(e) => updatePbLineName(l.productId, e.target.value)}
-                            className="input p-1.5 text-xs font-semibold text-slate-900 bg-white"
-                            placeholder="Item Name"
-                          />
-                        </td>
-                        <td className="p-2">
-                          <input
-                            type="text"
-                            value={l.hsnCode || '7318150'}
-                            onChange={(e) => setPbLineHsn(l.productId, e.target.value)}
-                            className="input p-1 text-[11px] font-mono text-center"
-                          />
-                        </td>
-                        <td className="p-2">
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => updatePbLineQty(l.productId, -1)}
-                              className="p-1 rounded hover:bg-slate-200"
-                            >
-                              <Minus className="h-3 w-3" />
-                            </button>
-                            <input
-                              type="number"
-                              value={l.qty}
-                              onChange={(e) => setPbLineQty(l.productId, e.target.value)}
-                              className="w-12 text-center font-bold input p-1"
-                              min={1}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updatePbLineQty(l.productId, 1)}
-                              className="p-1 rounded hover:bg-slate-200"
-                            >
-                              <Plus className="h-3 w-3" />
-                            </button>
-                          </div>
-                        </td>
-                        <td className="p-2 text-right">
-                          <input
-                            type="number"
-                            value={l.price}
-                            onChange={(e) => setPbLinePrice(l.productId, e.target.value)}
-                            className="w-20 text-right font-semibold input p-1 ml-auto"
-                            step="0.01"
-                          />
-                        </td>
-                        <td className="p-2 text-right font-bold text-slate-900">
-                          ₹{(l.price * l.qty).toFixed(2)}
-                        </td>
-                        <td className="p-2 text-center">
-                          <button
-                            onClick={() => removePbLine(l.productId)}
-                            className="text-red-500 hover:text-red-700"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="p-4 text-center text-slate-400 border border-dashed border-slate-300 rounded-lg">
-                No products added to this purchase bill yet. Search above to add items.
-              </div>
-            )}
 
             {/* Calculations Breakdown */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
@@ -2739,7 +3032,7 @@ export default function Purchase() {
           open={!!payTargetPO}
           onClose={() => setPayTargetPO(null)}
           title="Record Supplier Payment"
-          subtitle={`PO #${payTargetPO.poNumber} · Supplier: ${payTargetPO.supplier}`}
+          subtitle={`Bill #${payTargetPO.poNumber.startsWith('PO-') ? 'PB-' + payTargetPO.poNumber.slice(3) : payTargetPO.poNumber} · Supplier: ${payTargetPO.supplier}`}
           size="md"
           footer={
             <>
@@ -2757,7 +3050,7 @@ export default function Purchase() {
           <div className="space-y-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
               <div className="flex justify-between text-xs text-slate-600">
-                <span>Total PO Value:</span>
+                <span>Total Bill Value:</span>
                 <span className="font-bold tabular-nums text-slate-800">{money(payTargetPO.grandTotal)}</span>
               </div>
               <div className="flex justify-between text-xs text-slate-600">

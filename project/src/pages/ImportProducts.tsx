@@ -18,7 +18,7 @@ type ImportedRow = {
   boxCapacity: number;
   reorderLevel: number;
   notes: string;
-  initialStock?: number;
+  initialStock: number;
   status: 'valid' | 'warning' | 'error';
   issues: string[];
 };
@@ -30,6 +30,7 @@ const SAMPLE_TEMPLATE_DATA = [
     'Supplier': 'Nain Fasteners Ltd',
     'Rack Number': 'A-12',
     'Size': 'M8x25',
+    'Initial Stock': 250,
     'Purchase Price': 4.5,
     'Selling Price': 8.0,
     'Box Capacity': 500,
@@ -42,6 +43,7 @@ const SAMPLE_TEMPLATE_DATA = [
     'Supplier': 'Apex Hardware',
     'Rack Number': 'B-04',
     'Size': 'M10',
+    'Initial Stock': 500,
     'Purchase Price': 3.2,
     'Selling Price': 6.5,
     'Box Capacity': 1000,
@@ -51,7 +53,7 @@ const SAMPLE_TEMPLATE_DATA = [
 ];
 
 export default function ImportProducts() {
-  const { products, addProduct } = useStore();
+  const { products, importProducts } = useStore();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -74,12 +76,63 @@ export default function ImportProducts() {
         const buffer = e.target?.result;
         if (!buffer) return;
         const workbook = XLSX.read(buffer, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const rawJson = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { defval: '' });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          alert('The uploaded spreadsheet contains no sheets.');
+          return;
+        }
+
+        // Find first sheet that actually has content
+        let worksheet: XLSX.WorkSheet | null = null;
+        for (const name of workbook.SheetNames) {
+          const sheet = workbook.Sheets[name];
+          if (sheet && sheet['!ref']) {
+            worksheet = sheet;
+            break;
+          }
+        }
+        if (!worksheet) {
+          worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        }
+
+        if (!worksheet) {
+          alert('Could not locate any valid worksheet in the uploaded file.');
+          return;
+        }
+
+        // Check matrix to find actual header row
+        const matrix = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '' });
+        if (!matrix || matrix.length === 0) {
+          alert('The uploaded file is empty or contains no readable rows.');
+          return;
+        }
+
+        const headerKeywords = [
+          'product', 'name', 'item', 'particular', 'description',
+          'category', 'price', 'rate', 'cost', 'stock', 'qty', 'quantity', 'rack'
+        ];
+
+        let headerRowIndex = 0;
+        for (let r = 0; r < Math.min(matrix.length, 10); r++) {
+          const rowVals = matrix[r];
+          if (Array.isArray(rowVals)) {
+            const matches = rowVals.filter((cell) => {
+              const str = String(cell || '').trim().toLowerCase();
+              return headerKeywords.some((kw) => str.includes(kw));
+            });
+            if (matches.length >= 1) {
+              headerRowIndex = r;
+              break;
+            }
+          }
+        }
+
+        const rawJson = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, {
+          range: headerRowIndex,
+          defval: '',
+        });
 
         if (!rawJson.length) {
-          alert('The uploaded file is empty or contains no readable rows.');
+          alert('The uploaded file contains no readable data rows after the header.');
           return;
         }
 
@@ -101,17 +154,73 @@ export default function ImportProducts() {
             return '';
           };
 
-          const name = String(getValue('productname', 'product', 'name', 'itemname', 'item')).trim();
-          const category = String(getValue('category', 'cat', 'type')).trim() || 'General';
-          const supplier = String(getValue('supplier', 'vendor', 'suppliername')).trim() || 'Unassigned';
-          const rackNumber = String(getValue('racknumber', 'rack', 'location', 'bin')).trim() || 'A-01';
-          const size = String(getValue('size', 'dimensions', 'spec')).trim() || 'Standard';
-          const notes = String(getValue('notes', 'description', 'remarks')).trim();
+          const name = String(
+            getValue(
+              'productname', 'product', 'name', 'itemname', 'item', 'producttitle', 'title',
+              'description', 'itemdescription', 'particulars', 'goods', 'material', 'partname'
+            )
+          ).trim();
 
-          const costNum = parseFloat(String(getValue('purchaseprice', 'cost', 'costprice', 'buyprice', 'purchase')).replace(/[^0-9.]/g, '')) || 0;
-          const priceNum = parseFloat(String(getValue('sellingprice', 'price', 'sellprice', 'mrpi')).replace(/[^0-9.]/g, '')) || 0;
-          const boxCapNum = parseInt(String(getValue('boxcapacity', 'boxcap', 'capacity')).replace(/[^0-9]/g, ''), 10) || 500;
-          const reorderNum = parseInt(String(getValue('reorderlevel', 'reorder', 'minstock')).replace(/[^0-9]/g, ''), 10) || 50;
+          const category = String(
+            getValue('category', 'cat', 'type', 'itemgroup', 'group', 'classification', 'department')
+          ).trim() || 'Fasteners';
+
+          const supplier = String(
+            getValue('supplier', 'vendor', 'suppliername', 'party', 'source', 'manufacturer', 'brand', 'make')
+          ).trim() || 'General Supplier';
+
+          const rackNumber = String(
+            getValue('racknumber', 'rack', 'location', 'bin', 'shelf', 'rackno', 'binno', 'storage')
+          ).trim() || 'A-01';
+
+          const size = String(
+            getValue('size', 'dimensions', 'spec', 'dimension', 'specification', 'gauge', 'diameter', 'length')
+          ).trim() || 'Standard';
+
+          const notes = String(
+            getValue('notes', 'remarks', 'comment', 'detail', 'info')
+          ).trim();
+
+          // Cost / Purchase price
+          const costNum = parseFloat(
+            String(
+              getValue(
+                'purchaseprice', 'cost', 'costprice', 'buyprice', 'purchase',
+                'purchaserate', 'costrate', 'buyrate', 'basicrate', 'inwardrate', 'purrate'
+              )
+            ).replace(/[^0-9.]/g, '')
+          ) || 0;
+
+          // Selling price / MRP / Rate
+          const priceNum = parseFloat(
+            String(
+              getValue(
+                'sellingprice', 'price', 'sellprice', 'mrp', 'rate',
+                'salesrate', 'salerate', 'outwardrate', 'unitprice', 'saleprice'
+              )
+            ).replace(/[^0-9.]/g, '')
+          ) || 0;
+
+          // Box capacity
+          const boxCapNum = parseInt(
+            String(
+              getValue('boxcapacity', 'boxcap', 'capacity', 'boxqty', 'packing', 'packingsize', 'perbox', 'boxsize')
+            ).replace(/[^0-9]/g, ''), 10
+          ) || 500;
+
+          // Reorder level
+          const reorderNum = parseInt(
+            String(
+              getValue('reorderlevel', 'reorder', 'minstock', 'minimumstock', 'alertlevel', 'safetystock', 'minqty')
+            ).replace(/[^0-9]/g, ''), 10
+          ) || 50;
+
+          // Initial stock / Quantity
+          const initialStockNum = parseInt(
+            String(
+              getValue('initialstock', 'stock', 'quantity', 'qty', 'openingstock', 'currentstock', 'pieces', 'pcs', 'balance', 'closingstock')
+            ).replace(/[^0-9]/g, ''), 10
+          ) || 0;
 
           const issues: string[] = [];
           let status: 'valid' | 'warning' | 'error' = 'valid';
@@ -140,16 +249,19 @@ export default function ImportProducts() {
             price: priceNum,
             boxCapacity: boxCapNum,
             reorderLevel: reorderNum,
+            initialStock: initialStockNum,
             notes,
             status,
             issues,
           };
         });
 
-        setRows(parsedRows);
+        // Filter out completely blank rows
+        const validOrHasContent = parsedRows.filter((r) => r.name || r.cost > 0 || r.price > 0 || r.initialStock > 0);
+        setRows(validOrHasContent.length ? validOrHasContent : parsedRows);
       } catch (err) {
         console.error('Failed to parse spreadsheet file', err);
-        alert('Could not parse the file. Please ensure it is a valid .xlsx or .csv spreadsheet.');
+        alert(`Could not parse the file: ${err instanceof Error ? err.message : 'Invalid spreadsheet format'}. Please ensure it is a valid .xlsx or .csv file.`);
       }
     };
 
@@ -159,6 +271,7 @@ export default function ImportProducts() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) parseFile(file);
+    if (e.target) e.target.value = '';
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -199,35 +312,35 @@ export default function ImportProducts() {
     }
 
     setImporting(true);
-    setImportProgress(0);
-    let count = 0;
+    setImportProgress(10);
 
-    for (let i = 0; i < validRows.length; i++) {
-      const r = validRows[i];
-      const data: ProductFormData = {
-        name: r.name,
-        category: r.category,
-        supplier: r.supplier,
-        rackNumber: r.rackNumber,
-        size: r.size,
-        cost: r.cost,
-        price: r.price,
-        boxCapacity: r.boxCapacity,
-        reorderLevel: r.reorderLevel,
-        notes: r.notes,
-        image: '',
-      };
-      try {
-        await addProduct(data);
-        count++;
-        setImportProgress(Math.round(((i + 1) / validRows.length) * 100));
-      } catch (err) {
-        console.error('Failed to import row', r, err);
-      }
+    const itemsToImport = validRows.map((r) => ({
+      name: r.name,
+      category: r.category,
+      supplier: r.supplier,
+      rackNumber: r.rackNumber,
+      size: r.size,
+      cost: r.cost,
+      price: r.price,
+      boxCapacity: r.boxCapacity,
+      reorderLevel: r.reorderLevel,
+      notes: r.notes,
+      image: '',
+      stock: r.initialStock || 0,
+      initialStock: r.initialStock || 0,
+    }));
+
+    try {
+      setImportProgress(50);
+      const count = await importProducts(itemsToImport);
+      setImportProgress(100);
+      setImportedCount(count);
+    } catch (err) {
+      console.error('Failed to import products:', err);
+      alert(`Failed to import products: ${err instanceof Error ? err.message : 'Database error'}`);
+    } finally {
+      setImporting(false);
     }
-
-    setImporting(false);
-    setImportedCount(count);
   };
 
   const downloadXlsxTemplate = () => {
@@ -462,6 +575,7 @@ export default function ImportProducts() {
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Supplier</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Rack</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Size</th>
+                  <th className="px-3 py-2.5 font-semibold text-slate-600">Stock (Qty)</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Cost (₹)</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Price (₹)</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600 text-right">Action</th>
@@ -532,6 +646,15 @@ export default function ImportProducts() {
                         type="text"
                         value={r.size}
                         onChange={(e) => updateRowField(r.id, 'size', e.target.value)}
+                        className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
+                      />
+                    </td>
+                    <td className="px-3 py-2 w-20">
+                      <input
+                        type="number"
+                        min="0"
+                        value={r.initialStock}
+                        onChange={(e) => updateRowField(r.id, 'initialStock', parseInt(e.target.value, 10) || 0)}
                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
                       />
                     </td>

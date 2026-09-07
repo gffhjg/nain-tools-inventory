@@ -186,7 +186,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
       <div class="two-col-row">
         <div class="col-left">
           <div class="meta-line">
-            <span>${sale.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : sale.documentType === 'CREDIT NOTE' ? 'Credit Note No. :' : sale.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : sale.documentType === 'PURCHASE BILL' ? 'Purchase Bill No. :' : 'Invoice No. :'} &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
+            <span>${sale.documentType === 'DEBIT NOTE' ? 'Debit Note No. :' : sale.documentType === 'CREDIT NOTE' ? 'Credit Note No. :' : sale.documentType === 'PROFORMA INVOICE' ? 'Proforma Invoice No. :' : sale.documentType === 'PURCHASE BILL' ? 'Purchase Bill No. :' : sale.documentType === 'PURCHASE ORDER' ? 'Purchase Order No. :' : 'Invoice No. :'} &nbsp;&nbsp;&nbsp; <strong>${esc(sale.invoice)}</strong></span>
             <span>Date : &nbsp;&nbsp; <strong>${esc(sale.date)}</strong></span>
           </div>
           <div class="meta-line"><span>P.O. No. :</span> <strong>${esc(sale.poNumber || '—')}</strong></div>
@@ -545,8 +545,8 @@ function buildPurchaseHTML(po: PurchaseRecord, cs?: CompanySettings | null): str
         </div>
       </div>
       <div class="invoice-box">
-        <div class="invoice-title">PURCHASE ORDER</div>
-        <div class="invoice-no">PO No: ${po.poNumber}</div>
+        <div class="invoice-title">PURCHASE BILL</div>
+        <div class="invoice-no">Bill No: ${po.poNumber.startsWith('PO-') ? 'PB-' + po.poNumber.slice(3) : po.poNumber}</div>
         <div class="invoice-date">Date: ${po.date}</div>
         <div style="margin-top:6px;"><span class="badge ${po.paymentStatus === 'Paid' ? 'badge-paid' : 'badge-pending'}">${po.paymentStatus.toUpperCase()}</span></div>
       </div>

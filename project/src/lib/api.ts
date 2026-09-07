@@ -1,4 +1,5 @@
 import { getDb } from './db';
+import { populateRealInventory } from './inventorySeedData';
 import { computeBoxStatus, computeStockStatus, validateGstin } from './constants';
 import type {
   Product, Customer, Supplier, SaleRecord, PurchaseRecord,
@@ -61,6 +62,8 @@ type SaleRow = {
   cheque_status?: string; cheque_bounce_reason?: string; cheque_bounce_date?: string;
   pi_expiration_date?: string;
   converted_from_pi_number?: string;
+  converted_from_po_number?: string;
+  expected_delivery_date?: string;
   converted_to_invoice?: string;
   converted_at?: string;
 };
@@ -124,6 +127,8 @@ function mapSale(r: SaleRow, items: InvoiceLineItem[]): SaleRecord {
     chequeBounceDate: r.cheque_bounce_date || '',
     piExpirationDate: r.pi_expiration_date || '',
     convertedFromPiNumber: r.converted_from_pi_number || '',
+    convertedFromPoNumber: r.converted_from_po_number || '',
+    expectedDeliveryDate: r.expected_delivery_date || '',
     convertedToInvoice: r.converted_to_invoice || '',
     convertedAt: r.converted_at || '',
   };
@@ -302,6 +307,11 @@ function validateNonEmpty(value: string, field: string): void {
 // ============================================================
 
 export const api = {
+  async forceRepopulateInventory(): Promise<void> {
+    const db = await getDb();
+    await populateRealInventory(db, true);
+  },
+
   // ---- Products ----
   async getProducts(): Promise<Product[]> {
     const db = await getDb();
@@ -309,22 +319,69 @@ export const api = {
     return rows.map(mapProduct);
   },
 
-  async createProduct(id: string, data: Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>): Promise<Product> {
+  async createProduct(id: string, data: Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'> & { initialStock?: number; stock?: number }): Promise<Product> {
     validateNonEmpty(data.name, 'Product name');
     validateNonNegative(data.cost, 'Cost');
     validateNonNegative(data.price, 'Price');
     validateNonNegative(data.boxCapacity, 'Box capacity');
     validateNonNegative(data.reorderLevel, 'Reorder level');
     const db = await getDb();
-    const stock = 0;
+    const stock = Math.max(0, data.stock ?? data.initialStock ?? 0);
     const boxStatus = computeBoxStatus(stock, data.boxCapacity);
     const status = computeStockStatus(stock, data.reorderLevel);
     await db.query(
       `INSERT INTO products (id, name, category, supplier, rack_number, size, cost, price, stock, box_capacity, reorder_level, box_status, box_status_mode, manual_box_status, notes, image, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-      [id, data.name, data.category, data.supplier, data.rackNumber, data.size, data.cost, data.price, stock, data.boxCapacity, data.reorderLevel, boxStatus, 'auto', 'Empty', data.notes, data.image, status],
+      [id, data.name, data.category || 'General', data.supplier || 'Unassigned', data.rackNumber || 'A-01', data.size || 'Standard', data.cost, data.price, stock, data.boxCapacity, data.reorderLevel, boxStatus, 'auto', 'Empty', data.notes || '', data.image || '', status],
     );
-    return { ...data, id, stock, boxStatus, boxStatusMode: 'auto', manualBoxStatus: 'Empty', status, lastPhysicalObservation: null };
+    return { ...data, category: data.category || 'General', supplier: data.supplier || 'Unassigned', rackNumber: data.rackNumber || 'A-01', size: data.size || 'Standard', image: data.image || '', notes: data.notes || '', id, stock, boxStatus, boxStatusMode: 'auto', manualBoxStatus: 'Empty', status, lastPhysicalObservation: null };
+  },
+
+  async createProductsBatch(
+    items: Array<Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'> & { initialStock?: number; stock?: number }>
+  ): Promise<Product[]> {
+    if (items.length === 0) return [];
+    const db = await getDb();
+    const created: Product[] = [];
+    const baseTimestamp = Date.now();
+    for (let i = 0; i < items.length; i++) {
+      const data = items[i];
+      validateNonEmpty(data.name, `Product name (row ${i + 1})`);
+      const id = `p${baseTimestamp}_${i}_${Math.random().toString(36).slice(2, 7)}`;
+      const stock = Math.max(0, data.stock ?? data.initialStock ?? 0);
+      const boxCapacity = Math.max(0, data.boxCapacity || 500);
+      const reorderLevel = Math.max(0, data.reorderLevel || 50);
+      const cost = Math.max(0, data.cost || 0);
+      const price = Math.max(0, data.price || 0);
+      const boxStatus = computeBoxStatus(stock, boxCapacity);
+      const status = computeStockStatus(stock, reorderLevel);
+      await db.query(
+        `INSERT INTO products (id, name, category, supplier, rack_number, size, cost, price, stock, box_capacity, reorder_level, box_status, box_status_mode, manual_box_status, notes, image, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+        [id, data.name, data.category || 'General', data.supplier || 'Unassigned', data.rackNumber || 'A-01', data.size || 'Standard', cost, price, stock, boxCapacity, reorderLevel, boxStatus, 'auto', 'Empty', data.notes || '', data.image || '', status],
+      );
+      created.push({
+        ...data,
+        category: data.category || 'General',
+        supplier: data.supplier || 'Unassigned',
+        rackNumber: data.rackNumber || 'A-01',
+        size: data.size || 'Standard',
+        cost,
+        price,
+        boxCapacity,
+        reorderLevel,
+        image: data.image || '',
+        notes: data.notes || '',
+        id,
+        stock,
+        boxStatus,
+        boxStatusMode: 'auto',
+        manualBoxStatus: 'Empty',
+        status,
+        lastPhysicalObservation: null,
+      });
+    }
+    return created;
   },
 
   async updateProduct(id: string, data: Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>): Promise<void> {
@@ -554,9 +611,9 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel, document_type, po_number, po_date, transport_mode, vehicle_number, eway_bill, vendor_code, bank_name, bank_account, bank_ifsc, seller_gstin, seller_pan, due_date, payment_terms, notes, cheque_no, cheque_bank, cheque_date, cheque_status, cheque_bounce_reason, cheque_bounce_date, pi_expiration_date, converted_from_pi_number, converted_to_invoice, converted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49)`,
-      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.piExpirationDate || '', sale.convertedFromPiNumber || '', sale.convertedToInvoice || '', sale.convertedAt || ''],
+      `INSERT INTO sales (id, invoice, customer, customer_id, phone, customer_gstin, customer_state, customer_state_code, date, item_count, subtotal, discount, discount_type, gst_rate, gst_type, cgst_amount, sgst_amount, igst_amount, gst_amount, grand_total, amount_paid, payment_method, status, channel, document_type, po_number, po_date, transport_mode, vehicle_number, eway_bill, vendor_code, bank_name, bank_account, bank_ifsc, seller_gstin, seller_pan, due_date, payment_terms, notes, cheque_no, cheque_bank, cheque_date, cheque_status, cheque_bounce_reason, cheque_bounce_date, pi_expiration_date, converted_from_pi_number, converted_from_po_number, expected_delivery_date, converted_to_invoice, converted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51)`,
+      [sale.id, sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.piExpirationDate || '', sale.convertedFromPiNumber || '', sale.convertedFromPoNumber || '', sale.expectedDeliveryDate || '', sale.convertedToInvoice || '', sale.convertedAt || ''],
     );
     for (let i = 0; i < sale.items.length; i++) {
       const item = sale.items[i];
@@ -573,11 +630,15 @@ export const api = {
     await db.query('UPDATE sales SET status=$1, amount_paid=$2 WHERE id=$3', [status, amountPaid, id]);
   },
 
-  async updateSaleDocument(id: string, documentType: string, invoice: string, convertedFromPiNumber: string = ''): Promise<void> {
+  async updateSaleDocument(id: string, documentType: string, invoice: string, convertedFromNumber: string = '', isPoConversion: boolean = false): Promise<void> {
     validateNonEmpty(invoice, 'Invoice number');
     const db = await getDb();
     const today = new Date().toISOString().slice(0, 10);
-    await db.query('UPDATE sales SET document_type = $1, invoice = $2, converted_from_pi_number = $3, converted_at = $4 WHERE id = $5', [documentType, invoice, convertedFromPiNumber, convertedFromPiNumber ? today : '', id]);
+    if (isPoConversion) {
+      await db.query('UPDATE sales SET document_type = $1, invoice = $2, converted_from_po_number = $3, converted_at = $4 WHERE id = $5', [documentType, invoice, convertedFromNumber, convertedFromNumber ? today : '', id]);
+    } else {
+      await db.query('UPDATE sales SET document_type = $1, invoice = $2, converted_from_pi_number = $3, converted_at = $4 WHERE id = $5', [documentType, invoice, convertedFromNumber, convertedFromNumber ? today : '', id]);
+    }
   },
 
   async updateSale(sale: SaleRecord): Promise<void> {
@@ -595,8 +656,8 @@ export const api = {
     }
     const db = await getDb();
     await db.query(
-      `UPDATE sales SET invoice=$1, customer=$2, customer_id=$3, phone=$4, customer_gstin=$5, customer_state=$6, customer_state_code=$7, date=$8, item_count=$9, subtotal=$10, discount=$11, discount_type=$12, gst_rate=$13, gst_type=$14, cgst_amount=$15, sgst_amount=$16, igst_amount=$17, gst_amount=$18, grand_total=$19, amount_paid=$20, payment_method=$21, status=$22, channel=$23, document_type=$24, po_number=$25, po_date=$26, transport_mode=$27, vehicle_number=$28, eway_bill=$29, vendor_code=$30, bank_name=$31, bank_account=$32, bank_ifsc=$33, seller_gstin=$34, seller_pan=$35, due_date=$36, payment_terms=$37, notes=$38, cheque_no=$39, cheque_bank=$40, cheque_date=$41, cheque_status=$42, cheque_bounce_reason=$43, cheque_bounce_date=$44, pi_expiration_date=$45, converted_from_pi_number=$46, converted_to_invoice=$47, converted_at=$48 WHERE id=$49`,
-      [sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.piExpirationDate || '', sale.convertedFromPiNumber || '', sale.convertedToInvoice || '', sale.convertedAt || '', sale.id],
+      `UPDATE sales SET invoice=$1, customer=$2, customer_id=$3, phone=$4, customer_gstin=$5, customer_state=$6, customer_state_code=$7, date=$8, item_count=$9, subtotal=$10, discount=$11, discount_type=$12, gst_rate=$13, gst_type=$14, cgst_amount=$15, sgst_amount=$16, igst_amount=$17, gst_amount=$18, grand_total=$19, amount_paid=$20, payment_method=$21, status=$22, channel=$23, document_type=$24, po_number=$25, po_date=$26, transport_mode=$27, vehicle_number=$28, eway_bill=$29, vendor_code=$30, bank_name=$31, bank_account=$32, bank_ifsc=$33, seller_gstin=$34, seller_pan=$35, due_date=$36, payment_terms=$37, notes=$38, cheque_no=$39, cheque_bank=$40, cheque_date=$41, cheque_status=$42, cheque_bounce_reason=$43, cheque_bounce_date=$44, pi_expiration_date=$45, converted_from_pi_number=$46, converted_from_po_number=$47, expected_delivery_date=$48, converted_to_invoice=$49, converted_at=$50 WHERE id=$51`,
+      [sale.invoice, sale.customer, sale.customerId || '', sale.phone, sale.customerGstin || '', sale.customerState || '', sale.customerStateCode || '', sale.date, sale.itemCount, sale.subtotal, sale.discount, sale.discountType || 'amount', sale.gstRate, sale.gstType || 'auto', sale.cgstAmount || 0, sale.sgstAmount || 0, sale.igstAmount || 0, sale.gstAmount, sale.grandTotal, sale.amountPaid, sale.paymentMethod, sale.status, sale.channel, sale.documentType || 'TAX INVOICE', sale.poNumber || '', sale.poDate || '', sale.transportMode || '', sale.vehicleNumber || '', sale.ewayBill || '', sale.vendorCode || '', sale.bankName || '', sale.bankAccount || '', sale.bankIfsc || '', sale.sellerGstin || '', sale.sellerPan || '', sale.dueDate || '', sale.paymentTerms || '', sale.notes || '', sale.chequeNo || '', sale.chequeBank || '', sale.chequeDate || '', sale.chequeStatus || '', sale.chequeBounceReason || '', sale.chequeBounceDate || '', sale.piExpirationDate || '', sale.convertedFromPiNumber || '', sale.convertedFromPoNumber || '', sale.expectedDeliveryDate || '', sale.convertedToInvoice || '', sale.convertedAt || '', sale.id],
     );
     await db.query('DELETE FROM sale_items WHERE sale_id = $1', [sale.id]);
     for (let i = 0; i < sale.items.length; i++) {
