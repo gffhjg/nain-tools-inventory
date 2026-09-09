@@ -1,13 +1,51 @@
 import { useState, useMemo } from 'react';
-import { Download, Calendar, Printer, TrendingUp, TrendingDown, DollarSign, Package, Percent, ShoppingCart, Truck, FileText, BarChart3, AlertTriangle, Trophy, Wallet, Users, IndianRupee, CheckCircle2, Clock, Landmark } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Download,
+  Calendar,
+  Printer,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  Package,
+  Percent,
+  ShoppingCart,
+  Truck,
+  FileText,
+  BarChart3,
+  AlertTriangle,
+  Trophy,
+  Wallet,
+  Users,
+  IndianRupee,
+  CheckCircle2,
+  Clock,
+  Landmark,
+  Eye,
+  ArrowLeft,
+  ExternalLink,
+  User,
+  RefreshCw,
+  PackageCheck,
+} from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
+import Modal from '@/components/Modal';
+import InvoiceDetailsModal from '@/components/InvoiceDetailsModal';
+import PODetailsModal from '@/components/PODetailsModal';
 import { useStore } from '@/store/AppStore';
-import type { SaleRecord, PurchaseRecord, Product, ChequeRecord } from '@/lib/types';
+import type { SaleRecord, PurchaseRecord, Product, ChequeRecord, CompanySettings } from '@/lib/types';
 import { computeDiscountAmount } from '@/lib/constants';
 import {
-  computeStats, topSellingProducts, filterByDateRange,
-  toCSV, downloadCSV, printReport, money, escapeHtml,
+  computeStats,
+  topSellingProducts,
+  filterByDateRange,
+  toCSV,
+  downloadCSV,
+  printReport,
+  money,
+  escapeHtml,
+  nextInvoice,
   type DateRange,
 } from '@/utils/analytics';
 
@@ -35,7 +73,7 @@ const dateRanges: { id: DateRange; label: string }[] = [
 ];
 
 export default function Reports() {
-  const { products, sales, purchases, customers, suppliers, cheques, confirmChequeClearance, confirmChequeBounce } = useStore();
+  const { products, sales, purchases, customers, suppliers, cheques, confirmChequeClearance, confirmChequeBounce, companySettings } = useStore();
 
   const [activeReport, setActiveReport] = useState<ReportType>('sales');
   const [dateRange, setDateRange] = useState<DateRange>('all');
@@ -496,15 +534,16 @@ export default function Reports() {
 
       {/* KPI cards */}
       <div className="mt-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
-        {kpis.map((k) => {
+        {kpis.map((k, idx) => {
           const Icon = k.icon;
+          const staggerClass = `stagger-${Math.min(idx + 1, 6)}`;
           return (
-            <div key={k.label} className="card p-5">
-              <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${k.tone}`}>
+            <div key={k.label} className={`${staggerClass} card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs`}>
+              <div className={`flex h-11 w-11 items-center justify-center rounded-xl shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300 ${k.tone}`}>
                 <Icon className="h-5 w-5" />
               </div>
-              <p className="mt-4 text-2xl font-bold text-slate-900">{k.value}</p>
-              <p className="mt-1 text-sm text-slate-500">{k.label}</p>
+              <p className="mt-4 text-2xl font-black tracking-tight text-slate-900">{k.value}</p>
+              <p className="mt-1 text-xs font-semibold uppercase tracking-wider text-slate-400">{k.label}</p>
             </div>
           );
         })}
@@ -513,7 +552,7 @@ export default function Reports() {
       {/* Report body */}
       <div className="mt-6">
         {activeReport === 'sales' && <SalesReport sales={filteredSales} />}
-        {activeReport === 'proforma' && <ProformaReport sales={filteredSales} />}
+        {activeReport === 'proforma' && <ProformaReport sales={filteredSales} companySettings={companySettings} />}
         {activeReport === 'purchase' && <PurchaseReport purchases={filteredPurchases} />}
         {activeReport === 'cheques' && (
           <ChequesReport
@@ -527,8 +566,8 @@ export default function Reports() {
         {activeReport === 'lowstock' && <LowStockReport products={products} />}
         {activeReport === 'topselling' && <TopSellingReport topProducts={topProducts} />}
         {activeReport === 'gst' && <GSTReport sales={filteredSales} purchases={filteredPurchases} />}
-        {activeReport === 'cust-outstanding' && <CustomerOutstandingReport sales={sales} customers={customers} />}
-        {activeReport === 'sup-outstanding' && <SupplierOutstandingReport purchases={purchases} suppliers={suppliers} />}
+        {activeReport === 'cust-outstanding' && <CustomerOutstandingReport sales={sales} customers={customers} companySettings={companySettings} />}
+        {activeReport === 'sup-outstanding' && <SupplierOutstandingReport purchases={purchases} suppliers={suppliers} companySettings={companySettings} />}
       </div>
     </div>
   );
@@ -544,9 +583,34 @@ function addMonthsToDate(dateStr: string, months: number = 1): string {
   }
 }
 
-function ProformaReport({ sales }: { sales: SaleRecord[] }) {
+function ProformaReport({ sales, companySettings }: { sales: SaleRecord[]; companySettings?: CompanySettings | null }) {
+  const { sales: allSales, updateSaleDocumentType } = useStore();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'converted' | 'active' | 'expired'>('all');
+
+  const [convertTarget, setConvertTarget] = useState<SaleRecord | null>(null);
+  const [convertInvoiceNumber, setConvertInvoiceNumber] = useState('');
+  const [isConverting, setIsConverting] = useState(false);
+  const [viewingSale, setViewingSale] = useState<SaleRecord | null>(null);
+
+  const openConvert = (sale: SaleRecord) => {
+    setConvertTarget(sale);
+    setConvertInvoiceNumber(nextInvoice(allSales));
+  };
+
+  const handleConfirmConvert = async () => {
+    if (!convertTarget || !convertInvoiceNumber.trim()) return;
+    setIsConverting(true);
+    try {
+      const isPo = convertTarget.documentType === 'PURCHASE ORDER' || convertTarget.invoice.startsWith('PO-') || convertTarget.invoice.startsWith('CPO-');
+      await updateSaleDocumentType(convertTarget.id, 'TAX INVOICE', convertInvoiceNumber.trim(), convertTarget.invoice, isPo);
+      setConvertTarget(null);
+    } catch (err) {
+      alert(`Conversion failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsConverting(false);
+    }
+  };
 
   const piList = useMemo(() => {
     return sales.filter(
@@ -632,6 +696,7 @@ function ProformaReport({ sales }: { sales: SaleRecord[] }) {
                 <th className="p-3 text-left">Validity / Expiration</th>
                 <th className="p-3 text-right">Amount (₹)</th>
                 <th className="p-3 text-left">Purchase Outcome / Status</th>
+                <th className="p-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -676,6 +741,30 @@ function ProformaReport({ sales }: { sales: SaleRecord[] }) {
                         </span>
                       )}
                     </td>
+                    <td className="p-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {!isConverted && (
+                          <button
+                            type="button"
+                            onClick={() => openConvert(s)}
+                            className="px-2.5 py-1 rounded text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1 shadow-xs transition"
+                            title="Convert to Tax Invoice"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            <span>⚡ Convert</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setViewingSale(s)}
+                          className="px-2.5 py-1 rounded text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center gap-1 transition"
+                          title="View Details"
+                        >
+                          <Eye className="w-3 h-3 text-slate-500" />
+                          <span>View</span>
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -683,6 +772,80 @@ function ProformaReport({ sales }: { sales: SaleRecord[] }) {
           </table>
         </div>
       </div>
+
+      {/* Confirmation Modal to Convert to Tax Invoice */}
+      {convertTarget && (
+        <Modal
+          open={!!convertTarget}
+          onClose={() => setConvertTarget(null)}
+          size="md"
+          title="Convert Proforma Invoice to Tax Invoice"
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <p className="text-slate-600">
+              You are converting Proforma Invoice{' '}
+              <strong className="text-purple-700 font-mono">
+                {convertTarget.invoice}
+              </strong>{' '}
+              for <strong>{convertTarget.customer}</strong> into an official Tax Invoice.
+            </p>
+
+            <div className="p-3 bg-purple-50/80 rounded-xl border border-purple-200 text-purple-900 text-xs">
+              <span className="font-bold flex items-center gap-1.5 mb-1">
+                <PackageCheck className="w-4 h-4 text-purple-600" />
+                Inventory Stock Movement
+              </span>
+              <p>
+                Upon conversion to Tax Invoice, items on this Proforma Quote will be{' '}
+                <strong>deducted from inventory stock</strong> and recorded under official GST sales.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                New Tax Invoice Number *
+              </label>
+              <input
+                type="text"
+                value={convertInvoiceNumber}
+                onChange={(e) => setConvertInvoiceNumber(e.target.value)}
+                placeholder="e.g. INV-2042"
+                className="input font-mono font-bold text-brand-600 w-full"
+                autoFocus
+              />
+              <p className="text-[11px] text-slate-400 mt-1">You can customize the invoice number if needed.</p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setConvertTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-700 font-bold flex items-center gap-1.5"
+                onClick={handleConfirmConvert}
+                disabled={isConverting || !convertInvoiceNumber.trim()}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                <span>{isConverting ? 'Converting...' : 'Confirm Conversion'}</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Invoice Details Modal */}
+      {viewingSale && (
+        <InvoiceDetailsModal
+          sale={viewingSale}
+          onClose={() => setViewingSale(null)}
+          companySettings={companySettings}
+        />
+      )}
     </div>
   );
 }
@@ -1132,9 +1295,11 @@ function EmptyReport() {
   );
 }
 
-function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; customers: { id: string; name: string; phone: string; gstin: string; address: string; notes: string }[] }) {
+function CustomerOutstandingReport({ sales, customers, companySettings }: { sales: SaleRecord[]; customers: { id: string; name: string; phone: string; gstin: string; address: string; notes: string }[]; companySettings?: CompanySettings | null }) {
+  const navigate = useNavigate();
   const [selectedCust, setSelectedCust] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
+  const [viewingSale, setViewingSale] = useState<SaleRecord | null>(null);
 
   const customerList = useMemo(() => {
     const names = new Set<string>();
@@ -1153,6 +1318,7 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
       const invoiceCount = custSales.length;
       const lastDate = custSales.length > 0 ? custSales.sort((a, b) => b.date.localeCompare(a.date))[0].date : '—';
       return {
+        id: custInfo?.id,
         name,
         phone: custInfo?.phone || '—',
         gstin: custInfo?.gstin || '—',
@@ -1191,6 +1357,7 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
         credit,
         balance: runningBalance,
         status: s.status,
+        saleRecord: s,
       };
     });
 
@@ -1210,10 +1377,22 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
 
   return (
     <div className="space-y-4">
-      {/* Customer Selection Bar */}
+      {/* Customer Selection & Navigation Bar */}
       <div className="card p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-1">
-          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">Select Customer Ledger:</label>
+          {selectedCust !== 'all' && (
+            <button
+              onClick={() => setSelectedCust('all')}
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-bold shadow-xs hover:bg-slate-100 shrink-0"
+              title="Return to all customers summary list"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Back to All Customers
+            </button>
+          )}
+
+          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">
+            {selectedCust === 'all' ? 'Select Customer Ledger:' : 'Switch Customer:'}
+          </label>
           <select
             value={selectedCust}
             onChange={(e) => setSelectedCust(e.target.value)}
@@ -1231,23 +1410,42 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
           </select>
         </div>
 
-        {selectedCust === 'all' && (
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search customer name or phone..."
-            className="input text-xs max-w-xs"
-          />
-        )}
-
-        {selectedCust !== 'all' && (
-          <button
-            onClick={() => setSelectedCust('all')}
-            className="btn-secondary text-xs px-3 py-1.5"
-          >
-            ← Back to All Customers
-          </button>
+        {selectedCust === 'all' ? (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search customer name or phone..."
+              className="input text-xs max-w-xs"
+            />
+            <button
+              onClick={() => navigate('/customers')}
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 text-slate-700 font-semibold shrink-0"
+              title="Open full customer directory"
+            >
+              <Users className="h-3.5 w-3.5 text-slate-500" /> Customer Directory
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            {singleCustomerDetails?.custInfo && (
+              <button
+                onClick={() => navigate(`/customers/${singleCustomerDetails.custInfo?.id}`)}
+                className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 text-brand-700 hover:bg-brand-50 border-brand-200 font-bold shrink-0"
+                title="View full customer profile, credit terms, and invoices"
+              >
+                <User className="h-3.5 w-3.5 text-brand-600" /> View Customer Profile <ExternalLink className="h-3 w-3 text-brand-500" />
+              </button>
+            )}
+            <button
+              onClick={() => navigate('/customers')}
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 text-slate-700 font-semibold shrink-0"
+              title="Open full customer directory"
+            >
+              <Users className="h-3.5 w-3.5 text-slate-500" /> All Customers
+            </button>
+          </div>
         )}
       </div>
 
@@ -1278,12 +1476,23 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
                       {money(c.balance)}
                     </td>
                     <td className="table-td text-right">
-                      <button
-                        onClick={() => setSelectedCust(c.name)}
-                        className="px-2.5 py-1 text-xs font-bold bg-brand-50 text-brand-600 rounded-lg hover:bg-brand-100 transition"
-                      >
-                        View Ledger
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => setSelectedCust(c.name)}
+                          className="px-2.5 py-1 text-xs font-bold bg-brand-50 text-brand-600 rounded-lg hover:bg-brand-100 transition"
+                        >
+                          View Ledger
+                        </button>
+                        {c.id && (
+                          <button
+                            onClick={() => navigate(`/customers/${c.id}`)}
+                            className="px-2 py-1 text-xs font-medium text-slate-600 hover:text-brand-600 rounded-lg hover:bg-slate-100 transition flex items-center gap-1"
+                            title="View Customer Profile"
+                          >
+                            <User className="h-3 w-3" /> Profile
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1320,20 +1529,46 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
 
           {/* Ledger Statement Table */}
           <div className="card overflow-hidden">
-            <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-              <span className="font-bold text-sm text-slate-800">Statement of Account — {selectedCust}</span>
-              <button
-                onClick={() => {
-                  const rows = singleCustomerDetails.ledgerRows.map((r) => ({
-                    Date: r.date, VoucherNo: r.voucherNo, Type: r.type,
-                    Debit: r.debit.toFixed(2), Credit: r.credit.toFixed(2), Balance: r.balance.toFixed(2),
-                  }));
-                  downloadCSV(`${selectedCust}-ledger.csv`, toCSV(rows));
-                }}
-                className="btn-secondary text-xs px-2.5 py-1"
-              >
-                Export Ledger CSV
-              </button>
+            <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setSelectedCust('all')}
+                  className="btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold text-slate-700 hover:bg-slate-200"
+                  title="Return to customer list"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back
+                </button>
+                <span className="font-bold text-sm text-slate-800">
+                  Statement of Account — {selectedCust}
+                </span>
+                {singleCustomerDetails.custInfo?.phone && (
+                  <span className="text-xs text-slate-500 font-medium">
+                    ({singleCustomerDetails.custInfo.phone})
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {singleCustomerDetails.custInfo && (
+                  <button
+                    onClick={() => navigate(`/customers/${singleCustomerDetails.custInfo?.id}`)}
+                    className="btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 text-brand-700 font-semibold hover:bg-brand-50"
+                  >
+                    <User className="h-3.5 w-3.5 text-brand-600" /> Full Profile
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    const rows = singleCustomerDetails.ledgerRows.map((r) => ({
+                      Date: r.date, VoucherNo: r.voucherNo, Type: r.type,
+                      Debit: r.debit.toFixed(2), Credit: r.credit.toFixed(2), Balance: r.balance.toFixed(2),
+                    }));
+                    downloadCSV(`${selectedCust}-ledger.csv`, toCSV(rows));
+                  }}
+                  className="btn-secondary text-xs px-2.5 py-1"
+                >
+                  Export Ledger CSV
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[700px] text-xs">
@@ -1345,13 +1580,22 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
                     <th className="p-2.5 text-right">Debit (Billed ₹)</th>
                     <th className="p-2.5 text-right">Credit (Paid ₹)</th>
                     <th className="p-2.5 text-right">Running Balance (₹)</th>
+                    <th className="p-2.5 text-center">Purchased Items</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-sans">
                   {singleCustomerDetails.ledgerRows.map((r, i) => (
-                    <tr key={i} className="hover:bg-slate-50/60">
+                    <tr key={i} className="hover:bg-slate-50/60 transition">
                       <td className="p-2.5 text-slate-600">{r.date}</td>
-                      <td className="p-2.5 font-bold text-slate-900">{r.voucherNo}</td>
+                      <td className="p-2.5">
+                        <button
+                          onClick={() => setViewingSale(r.saleRecord)}
+                          className="font-bold text-brand-600 hover:text-brand-800 hover:underline flex items-center gap-1 text-left"
+                          title="Click to view purchase details"
+                        >
+                          {r.voucherNo}
+                        </button>
+                      </td>
                       <td className="p-2.5">
                         <span className={`badge text-[10.5px] ${r.type === 'CREDIT NOTE' ? 'bg-rose-100 text-rose-700' : 'bg-indigo-100 text-indigo-700'}`}>
                           {r.type}
@@ -1366,21 +1610,48 @@ function CustomerOutstandingReport({ sales, customers }: { sales: SaleRecord[]; 
                       <td className="p-2.5 text-right font-mono font-bold text-slate-900">
                         {money(r.balance)}
                       </td>
+                      <td className="p-2.5 text-center">
+                        <button
+                          onClick={() => setViewingSale(r.saleRecord)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 hover:text-brand-900 rounded-lg shadow-2xs border border-brand-200/80 transition"
+                          title="View what products were purchased on this date"
+                        >
+                          <Eye className="h-3.5 w-3.5 text-brand-600" /> View Details
+                        </button>
+                      </td>
                     </tr>
                   ))}
+                  {singleCustomerDetails.ledgerRows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-6 text-center text-slate-400">
+                        No transactions found for this customer.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
       ) : null}
+
+      {/* Itemized Purchase Details Modal */}
+      {viewingSale && (
+        <InvoiceDetailsModal
+          sale={viewingSale}
+          onClose={() => setViewingSale(null)}
+          companySettings={companySettings}
+        />
+      )}
     </div>
   );
 }
 
-function SupplierOutstandingReport({ purchases, suppliers }: { purchases: PurchaseRecord[]; suppliers: { id: string; name: string; phone: string; gstin: string; address: string; notes: string }[] }) {
+function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { purchases: PurchaseRecord[]; suppliers: { id: string; name: string; phone: string; gstin: string; address: string; notes: string }[]; companySettings?: CompanySettings | null }) {
+  const navigate = useNavigate();
   const [selectedSup, setSelectedSup] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
+  const [viewingPO, setViewingPO] = useState<PurchaseRecord | null>(null);
 
   const supplierList = useMemo(() => {
     const names = new Set<string>();
@@ -1399,6 +1670,7 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
       const poCount = supPurchases.length;
       const lastDate = supPurchases.length > 0 ? supPurchases.sort((a, b) => b.date.localeCompare(a.date))[0].date : '—';
       return {
+        id: supInfo?.id,
         name,
         phone: supInfo?.phone || '—',
         gstin: supInfo?.gstin || '—',
@@ -1436,6 +1708,7 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
         debit,
         balance: runningBalance,
         status: p.paymentStatus,
+        purchaseRecord: p,
       };
     });
 
@@ -1458,7 +1731,19 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
       {/* Supplier Selection Bar */}
       <div className="card p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-1">
-          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">Select Supplier Ledger:</label>
+          {selectedSup !== 'all' && (
+            <button
+              onClick={() => setSelectedSup('all')}
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-bold shadow-xs hover:bg-slate-100 shrink-0"
+              title="Return to supplier summary list"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Back to All Suppliers
+            </button>
+          )}
+
+          <label className="text-xs font-bold text-slate-700 whitespace-nowrap">
+            {selectedSup === 'all' ? 'Select Supplier Ledger:' : 'Switch Supplier:'}
+          </label>
           <select
             value={selectedSup}
             onChange={(e) => setSelectedSup(e.target.value)}
@@ -1471,23 +1756,33 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
           </select>
         </div>
 
-        {selectedSup === 'all' && (
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search supplier name or phone..."
-            className="input text-xs max-w-xs"
-          />
-        )}
-
-        {selectedSup !== 'all' && (
-          <button
-            onClick={() => setSelectedSup('all')}
-            className="btn-secondary text-xs px-3 py-1.5"
-          >
-            ← Back to All Suppliers
-          </button>
+        {selectedSup === 'all' ? (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search supplier name or phone..."
+              className="input text-xs max-w-xs"
+            />
+            <button
+              onClick={() => navigate('/purchase')}
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 text-slate-700 font-semibold shrink-0"
+              title="Open purchase orders"
+            >
+              <Truck className="h-3.5 w-3.5 text-slate-500" /> Purchase Orders
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate('/purchase')}
+              className="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 text-slate-700 font-semibold shrink-0"
+              title="Open purchase orders"
+            >
+              <Truck className="h-3.5 w-3.5 text-slate-500" /> All Purchases
+            </button>
+          </div>
         )}
       </div>
 
@@ -1560,8 +1855,17 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
 
           {/* Ledger Statement Table */}
           <div className="card overflow-hidden">
-            <div className="p-3 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-              <span className="font-bold text-sm text-slate-800">Supplier Ledger Statement — {selectedSup}</span>
+            <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setSelectedSup('all')}
+                  className="btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold text-slate-700 hover:bg-slate-200"
+                  title="Return to supplier list"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back
+                </button>
+                <span className="font-bold text-sm text-slate-800">Supplier Ledger Statement — {selectedSup}</span>
+              </div>
               <button
                 onClick={() => {
                   const rows = singleSupplierDetails.ledgerRows.map((r) => ({
@@ -1585,13 +1889,22 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
                     <th className="p-2.5 text-right">Credit (Purchased ₹)</th>
                     <th className="p-2.5 text-right">Debit (Paid ₹)</th>
                     <th className="p-2.5 text-right">Payable Balance (₹)</th>
+                    <th className="p-2.5 text-center">Items</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-sans">
                   {singleSupplierDetails.ledgerRows.map((r, i) => (
-                    <tr key={i} className="hover:bg-slate-50/60">
+                    <tr key={i} className="hover:bg-slate-50/60 transition">
                       <td className="p-2.5 text-slate-600">{r.date}</td>
-                      <td className="p-2.5 font-bold text-slate-900">{r.voucherNo}</td>
+                      <td className="p-2.5">
+                        <button
+                          onClick={() => setViewingPO(r.purchaseRecord)}
+                          className="font-bold text-brand-600 hover:text-brand-800 hover:underline flex items-center gap-1 text-left"
+                          title="Click to view PO items"
+                        >
+                          {r.voucherNo}
+                        </button>
+                      </td>
                       <td className="p-2.5">
                         <span className="badge text-[10.5px] bg-blue-100 text-blue-700">
                           {r.type}
@@ -1606,14 +1919,39 @@ function SupplierOutstandingReport({ purchases, suppliers }: { purchases: Purcha
                       <td className="p-2.5 text-right font-mono font-bold text-slate-900">
                         {money(r.balance)}
                       </td>
+                      <td className="p-2.5 text-center">
+                        <button
+                          onClick={() => setViewingPO(r.purchaseRecord)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 rounded-lg shadow-2xs border border-brand-200/80 transition"
+                          title="View PO items"
+                        >
+                          <Eye className="h-3.5 w-3.5 text-brand-600" /> View Details
+                        </button>
+                      </td>
                     </tr>
                   ))}
+                  {singleSupplierDetails.ledgerRows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-6 text-center text-slate-400">
+                        No transactions found for this supplier.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
       ) : null}
+
+      {/* PO Details Modal */}
+      {viewingPO && (
+        <PODetailsModal
+          po={viewingPO}
+          onClose={() => setViewingPO(null)}
+          companySettings={companySettings}
+        />
+      )}
     </div>
   );
 }

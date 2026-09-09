@@ -5,12 +5,13 @@ import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
+import { indianStates, getStateCode, validateGstin } from '@/lib/constants';
 import type { Customer, SaleStatus, PaymentMethod, ChequeRecord } from '@/lib/types';
 
 const empty: Customer = { id: '', name: '', businessName: '', phone: '', gstin: '', email: '', address: '', state: '', stateCode: '', notes: '' };
 
 export default function Customers() {
-  const { customers, sales, addCustomer, updateCustomer, deleteCustomer, updateSaleStatus, updateSale, addCheque, cheques } = useStore();
+  const { customers, sales, addCustomer, updateCustomer, deleteCustomer, updateSaleStatus, updateSale, addCheque, cheques, companySettings } = useStore();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
@@ -18,7 +19,10 @@ export default function Customers() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [form, setForm] = useState<Customer>(empty);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Quick Payment Modal state
   const [payTarget, setPayTarget] = useState<{ customer: Customer; pendingInvoices: typeof sales } | null>(null);
@@ -33,7 +37,7 @@ export default function Customers() {
 
   const enriched = useMemo(() => {
     return customers.map((c) => {
-      const customerSales = sales.filter((s) => s.customer === c.name);
+      const customerSales = sales.filter((s) => (s.customerId && s.customerId === c.id) || s.customer === c.name);
       const totalPurchases = customerSales.reduce((s, r) => s + r.grandTotal, 0);
       const outstanding = customerSales
         .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
@@ -62,31 +66,94 @@ export default function Customers() {
 
   const openAdd = () => {
     setEditing(null);
-    setForm(empty);
+    setForm({
+      ...empty,
+      state: companySettings?.state || 'Haryana',
+      stateCode: companySettings?.stateCode || '06',
+    });
+    setFormError(null);
     setFormOpen(true);
   };
 
   const openEdit = (c: Customer) => {
     setEditing(c);
-    setForm(c);
+    setForm({ ...empty, ...c });
+    setFormError(null);
     setFormOpen(true);
   };
 
-  const handleSubmit = () => {
-    if (!form.name.trim()) return;
-    if (editing) {
-      updateCustomer(editing.id, { ...form });
-    } else {
-      addCustomer({ ...form, id: `c${Date.now()}` });
+  const handleSubmit = async () => {
+    setFormError(null);
+    const cleanName = form.name.trim();
+    if (!cleanName) {
+      setFormError('Customer name is required.');
+      return;
     }
-    setFormOpen(false);
-    setEditing(null);
+
+    if (form.gstin.trim()) {
+      const v = validateGstin(form.gstin.trim());
+      if (!v.valid) {
+        setFormError(v.error || 'Invalid GSTIN');
+        return;
+      }
+    }
+
+    if (form.phone.trim()) {
+      const cleanPhoneDigits = form.phone.replace(/[^0-9]/g, '');
+      if (cleanPhoneDigits.length < 10 && form.phone.trim().length > 0) {
+        setFormError('Phone number should be at least 10 digits.');
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+    try {
+      if (editing) {
+        await updateCustomer(editing.id, {
+          ...form,
+          name: cleanName,
+          businessName: form.businessName.trim(),
+          phone: form.phone.trim(),
+          gstin: form.gstin.trim().toUpperCase(),
+          email: form.email.trim(),
+          address: form.address.trim(),
+          state: form.state.trim(),
+          stateCode: form.stateCode.trim(),
+          notes: form.notes.trim(),
+        });
+      } else {
+        await addCustomer({
+          ...form,
+          id: `c${Date.now()}`,
+          name: cleanName,
+          businessName: form.businessName.trim(),
+          phone: form.phone.trim(),
+          gstin: form.gstin.trim().toUpperCase(),
+          email: form.email.trim(),
+          address: form.address.trim(),
+          state: form.state.trim(),
+          stateCode: form.stateCode.trim(),
+          notes: form.notes.trim(),
+        });
+      }
+      setFormOpen(false);
+      setEditing(null);
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : 'Failed to save customer. Please check your data.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteTarget) return;
-    deleteCustomer(deleteTarget.id);
-    setDeleteTarget(null);
+    setDeleteError(null);
+    try {
+      await deleteCustomer(deleteTarget.id);
+      setDeleteTarget(null);
+    } catch (err: unknown) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete customer.');
+    }
   };
 
   const openQuickPayment = (c: Customer) => {
@@ -391,24 +458,44 @@ export default function Customers() {
           onClose={() => setFormOpen(false)}
         >
           <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Customer Name *</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="input"
-                placeholder="e.g. Ramesh Hardware Mart"
-              />
+            {formError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-semibold flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Customer / Contact Name *</label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="input"
+                  placeholder="e.g. Ramesh Sharma"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Business / Firm Name</label>
+                <input
+                  type="text"
+                  value={form.businessName}
+                  onChange={(e) => setForm({ ...form, businessName: e.target.value })}
+                  className="input"
+                  placeholder="e.g. Ramesh Hardware Mart"
+                />
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number</label>
                 <input
                   type="text"
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                  className="input"
+                  className="input font-mono"
                   placeholder="10-digit mobile"
                 />
               </div>
@@ -418,36 +505,71 @@ export default function Customers() {
                   type="text"
                   value={form.gstin}
                   onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
-                  className="input"
-                  placeholder="22AAAAA0000A1Z5"
+                  className="input font-mono uppercase"
+                  placeholder="06AAAAA0000A1Z5"
                 />
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Email</label>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="input"
-                placeholder="customer@example.com"
-              />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  className="input"
+                  placeholder="customer@example.com"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">State / Place of Supply</label>
+                <select
+                  value={form.state}
+                  onChange={(e) => {
+                    const st = e.target.value;
+                    const code = getStateCode(st);
+                    setForm({ ...form, state: st, stateCode: code });
+                  }}
+                  className="input text-xs"
+                >
+                  <option value="">Select State</option>
+                  {indianStates.map((s) => (
+                    <option key={s.code} value={s.state}>
+                      {s.state} ({s.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
+
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Billing Address</label>
               <textarea
                 value={form.address}
                 onChange={(e) => setForm({ ...form, address: e.target.value })}
-                className="input h-20 resize-none"
+                className="input h-16 resize-none"
                 placeholder="Street address, city, pin code..."
               />
             </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Notes / Terms</label>
+              <input
+                type="text"
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                className="input text-xs"
+                placeholder="Special delivery notes, credit limit, etc."
+              />
+            </div>
+
             <div className="flex justify-end gap-2 pt-4">
-              <button className="btn-secondary" onClick={() => setFormOpen(false)}>
+              <button className="btn-secondary" onClick={() => setFormOpen(false)} disabled={isSubmitting}>
                 Cancel
               </button>
-              <button className="btn-primary" onClick={handleSubmit}>
-                Save Customer
+              <button className="btn-primary" onClick={handleSubmit} disabled={isSubmitting}>
+                {isSubmitting ? 'Saving...' : 'Save Customer'}
               </button>
             </div>
           </div>
@@ -566,21 +688,54 @@ export default function Customers() {
       )}
 
       {/* Delete Confirmation Modal */}
-      {deleteTarget && (
-        <Modal title="Delete Customer" onClose={() => setDeleteTarget(null)}>
-          <p className="text-sm text-slate-600">
-            Are you sure you want to delete <span className="font-bold">{deleteTarget.name}</span>? This action cannot be undone.
-          </p>
-          <div className="flex justify-end gap-2 mt-6">
-            <button className="btn-secondary" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </button>
-            <button className="btn-danger" onClick={confirmDelete}>
-              Delete
-            </button>
-          </div>
-        </Modal>
-      )}
+      {deleteTarget && (() => {
+        const targetSalesCount = sales.filter((s) => (s.customerId && s.customerId === deleteTarget.id) || s.customer === deleteTarget.name).length;
+        return (
+          <Modal title="Delete Customer" onClose={() => { setDeleteTarget(null); setDeleteError(null); }}>
+            {deleteError && (
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-semibold flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+            {targetSalesCount > 0 ? (
+              <div className="space-y-3">
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                  <p className="font-bold flex items-center gap-1.5 mb-1.5 text-amber-900 text-sm">
+                    <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    Protected Customer Account
+                  </p>
+                  <p>
+                    <span className="font-bold">{deleteTarget.name}</span> has <strong>{targetSalesCount} sales transaction(s)</strong> recorded.
+                  </p>
+                  <p className="mt-1 text-[11px] text-amber-700">
+                    To maintain accounting accuracy, tax audit history, and ledger integrity, customers with transaction records cannot be deleted.
+                  </p>
+                </div>
+                <div className="flex justify-end gap-2 mt-4">
+                  <button className="btn-secondary" onClick={() => { setDeleteTarget(null); setDeleteError(null); }}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="text-sm text-slate-600">
+                  Are you sure you want to delete <span className="font-bold">{deleteTarget.name}</span>? This action cannot be undone.
+                </p>
+                <div className="flex justify-end gap-2 mt-6">
+                  <button className="btn-secondary" onClick={() => { setDeleteTarget(null); setDeleteError(null); }}>
+                    Cancel
+                  </button>
+                  <button className="btn-danger" onClick={confirmDelete}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
     </div>
   );
 }

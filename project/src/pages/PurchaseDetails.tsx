@@ -1,19 +1,63 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMemo } from 'react';
 import {
-  ArrowLeft, Truck, Printer, CheckCircle2, Clock, FileText, MapPin, Phone,
+  ArrowLeft, Truck, Printer, CheckCircle2, Clock, FileText, MapPin, Phone, Trash2
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import { printPurchase } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
+import type { PurchaseRecord, PurchaseLineItem } from '@/lib/types';
 
 export default function PurchaseDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { purchases, suppliers, markPurchaseReceived, updatePurchaseStatus, companySettings } = useStore();
+  const { purchases, sales, suppliers, markPurchaseReceived, updatePurchaseStatus, deletePurchase, deleteSale, companySettings } = useStore();
 
-  const po = useMemo(() => purchases.find((p) => p.id === id), [purchases, id]);
+  const po = useMemo(() => {
+    const foundPo = purchases.find((p) => p.id === id);
+    if (foundPo) return foundPo;
+    const foundSale = sales.find((s) => s.id === id && (s.documentType === 'PURCHASE BILL' || s.documentType === 'CREDIT NOTE' || s.documentType === 'DEBIT NOTE'));
+    if (foundSale) {
+      const convertedPo: PurchaseRecord = {
+        id: foundSale.id,
+        poNumber: foundSale.invoice,
+        supplier: foundSale.customer,
+        supplierInvoice: foundSale.poNumber || foundSale.invoice,
+        phone: foundSale.phone || '—',
+        date: foundSale.date,
+        dueDate: foundSale.dueDate || '',
+        expectedDelivery: foundSale.expectedDeliveryDate || '',
+        receivedDate: foundSale.date,
+        items: foundSale.items.map((i) => ({
+          productId: i.productId,
+          name: i.name,
+          cost: i.price,
+          qty: i.qty,
+          gstRate: foundSale.gstRate,
+          size: '',
+          category: '',
+          rackNumber: '',
+        })),
+        itemCount: foundSale.itemCount,
+        subtotal: foundSale.subtotal,
+        gstRate: foundSale.gstRate,
+        gstAmount: foundSale.gstAmount,
+        grandTotal: foundSale.grandTotal,
+        amountPaid: foundSale.amountPaid,
+        paymentStatus: foundSale.status === 'paid' ? 'Paid' : 'Pending',
+        paymentMethod: (foundSale.paymentMethod as any) || 'Bank Transfer',
+        status: 'received',
+        notes: foundSale.notes || '',
+        chequeNo: foundSale.chequeNo,
+        chequeBank: foundSale.chequeBank,
+        chequeDate: foundSale.chequeDate,
+        chequeStatus: foundSale.chequeStatus,
+      };
+      return convertedPo;
+    }
+    return undefined;
+  }, [purchases, sales, id]);
   const supplierInfo = useMemo(
     () => (po ? suppliers.find((s) => s.name === po.supplier) : null),
     [suppliers, po],
@@ -58,6 +102,26 @@ export default function PurchaseDetails() {
                 <span className="hidden sm:inline">Mark Received</span>
               </button>
             )}
+            <button
+              className="btn-secondary border-rose-200 text-rose-600 hover:bg-rose-50 flex items-center gap-1.5"
+              onClick={async () => {
+                const isPb = po.id.startsWith('pb-') || sales.some((s) => s.id === po.id);
+                const isReceived = po.status === 'received';
+                const promptMsg = `Are you sure you want to delete ${billNumber}?${isReceived ? ' Received items will be deducted from inventory stock.' : ''}`;
+                if (window.confirm(promptMsg)) {
+                  if (isPb) {
+                    await deleteSale(po.id);
+                  } else {
+                    await deletePurchase(po.id);
+                  }
+                  navigate('/purchase');
+                }
+              }}
+              title="Delete Document"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Delete</span>
+            </button>
           </>
         }
       />
@@ -155,7 +219,7 @@ export default function PurchaseDetails() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {po.items.map((it) => (
+                {po.items.map((it: PurchaseLineItem) => (
                   <tr key={it.productId} className="hover:bg-slate-50/50">
                     <td className="table-td font-medium text-slate-800">{it.name}</td>
                     <td className="table-td text-right tabular-nums">{it.qty.toLocaleString('en-IN')}</td>

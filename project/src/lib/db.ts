@@ -234,6 +234,7 @@ CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases (date);
 CREATE INDEX IF NOT EXISTS idx_purchases_supplier ON purchases (supplier);
 CREATE INDEX IF NOT EXISTS idx_cheques_date ON cheques (cheque_date);
 CREATE INDEX IF NOT EXISTS idx_cheques_status ON cheques (status);
+CREATE INDEX IF NOT EXISTS idx_sales_customer_id ON sales (customer_id) WHERE customer_id != '';
 
 INSERT INTO company_settings (id) VALUES (1)
 ON CONFLICT (id) DO NOTHING;
@@ -463,6 +464,15 @@ export async function getDb(): Promise<PGlite> {
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
+    // Request persistent storage so the browser will never evict local customer & inventory data
+    if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
+      try {
+        await navigator.storage.persist();
+      } catch {
+        // Non-fatal if browser environment restricts storage.persist()
+      }
+    }
+
     const db = new PGlite('idb://nain-tools-db');
     await db.exec(SCHEMA_SQL);
 

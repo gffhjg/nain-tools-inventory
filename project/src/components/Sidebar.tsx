@@ -70,8 +70,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         {/* Nav */}
-        <nav className="mt-3 flex-1 space-y-1.5 px-3">
-          <p className="px-3 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
+        <nav className="mt-3 flex-1 space-y-1 px-3">
+          <p className="px-3 pb-1.5 pt-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
             Navigation
           </p>
           {navItems.map((item) => {
@@ -85,17 +85,29 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 className={({ isActive }) =>
                   `group flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-bold transition-all duration-200 ${
                     isActive
-                      ? 'bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-md shadow-brand-600/30 ring-1 ring-white/10'
-                      : 'text-slate-400 hover:bg-white/5 hover:text-slate-100'
+                      ? 'bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-600 text-white shadow-lg shadow-brand-600/30 ring-1 ring-white/20 translate-x-0.5'
+                      : 'text-slate-400 hover:bg-white/5 hover:text-slate-100 hover:translate-x-1'
                   }`
                 }
               >
-                <Icon className="h-4 w-4 shrink-0" />
+                <Icon className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-3" />
                 <span>{item.label}</span>
               </NavLink>
             );
           })}
         </nav>
+
+        {/* Database & System Live Indicator */}
+        <div className="p-3 border-t border-slate-800/60 m-2 rounded-xl bg-slate-950/60 border border-slate-800/40">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span className="text-[11px] font-bold text-slate-300">Local Database Online</span>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-0.5 font-mono">PGlite WASM · IndexedDB</p>
+        </div>
       </aside>
     </>
   );

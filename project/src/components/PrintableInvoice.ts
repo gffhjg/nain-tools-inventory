@@ -1,8 +1,9 @@
 import type { SaleRecord, PurchaseRecord, CompanySettings } from '@/lib/types';
 import { computeDiscountAmount } from '@/lib/constants';
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function esc(s: unknown): string {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 export const BUSINESS = {

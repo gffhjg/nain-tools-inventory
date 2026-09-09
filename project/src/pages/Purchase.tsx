@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
   Trash2, Minus, Printer, CheckCircle2, Package, X, AlertTriangle, Sparkles,
-  ShoppingCart, ArrowRight, Landmark, CreditCard, Calendar
+  ShoppingCart, ArrowRight, Landmark, CreditCard, Calendar,
+  Zap, Wallet, Receipt
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -12,6 +13,7 @@ import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeDiscountAmount, computeGrandTotal, productCategories } from '@/lib/constants';
 import { downloadCSV, toCSV, money } from '@/utils/analytics';
+import { smartFilterItems } from '@/utils/search';
 import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType, Product, ChequeStatus, Supplier } from '@/lib/types';
 
 const paymentTone: Record<PurchasePaymentMethod, string> = {
@@ -61,13 +63,48 @@ function nextDebitNote(existingSales: SaleRecord[]): string {
   return `DN-${max + 1}`;
 }
 
+function nextRawPurchaseNumber(existingSales: SaleRecord[]): string {
+  const nums = existingSales
+    .filter((s) => s.documentType === 'RAW PURCHASE' || s.invoice.startsWith('RP-') || s.invoice.startsWith('RAW-P-'))
+    .map((s) => parseInt(s.invoice.replace(/^(RP-|RAW-P-)/, ''), 10))
+    .filter((n) => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 1000;
+  return `RP-${max + 1}`;
+}
+
 type DraftLine = PurchaseLineItem;
 
 export default function Purchase() {
-  const { purchases, products, suppliers, sales, addPurchase, addSale, addProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
+  const { purchases, products, suppliers, sales, addPurchase, updatePurchase, deletePurchase, addSale, addProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [activePurchaseSubTab, setActivePurchaseSubTab] = useState<'bills' | 'raw-purchases'>('bills');
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'bills' | 'credit-notes' | 'suggestions'>('all');
+
+  // Raw Purchases (Cash / UPI Inward Counter Purchases) State
+  const [rawPurFilter, setRawPurFilter] = useState<'all' | 'Cash' | 'UPI'>('all');
+  const [rawPurSearch, setRawPurSearch] = useState('');
+  const [rawPurchaseModalOpen, setRawPurchaseModalOpen] = useState(false);
+  const [rawPurNumber, setRawPurNumber] = useState('');
+  const [rawPurDate, setRawPurDate] = useState(todayISO());
+  const [rawPurNote, setRawPurNote] = useState('');
+  const [rawPurPaymentMethod, setRawPurPaymentMethod] = useState<'Cash' | 'UPI'>('Cash');
+  const [rawPurLines, setRawPurLines] = useState<InvoiceLineItem[]>([]);
+  const [rawPurProductSearch, setRawPurProductSearch] = useState('');
+  const [rawPurCategory, setRawPurCategory] = useState('All');
+  const [viewingRawPur, setViewingRawPur] = useState<SaleRecord | null>(null);
+
+  // New Product Creator State in Raw Purchase (auto-adds to Main Inventory & Inward List)
+  const [isAddingRawPurProduct, setIsAddingRawPurProduct] = useState(false);
+  const [rawNewProdName, setRawNewProdName] = useState('');
+  const [rawNewProdCategory, setRawNewProdCategory] = useState('Bolts');
+  const [rawNewProdRack, setRawNewProdRack] = useState('');
+  const [rawNewProdSize, setRawNewProdSize] = useState('');
+  const [rawNewProdCost, setRawNewProdCost] = useState('');
+  const [rawNewProdPrice, setRawNewProdPrice] = useState('');
+  const [rawNewProdInwardQty, setRawNewProdInwardQty] = useState('1');
+  const [rawNewProdHsn, setRawNewProdHsn] = useState('7318150');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [supplier, setSupplier] = useState('');
@@ -186,29 +223,21 @@ export default function Purchase() {
   const poNumber = useMemo(() => nextPONumber(purchases), [purchases]);
 
   const filteredPbSuppliers = useMemo(() => {
-    const q = pbSupplier.trim().toLowerCase();
-    if (!q) return suppliers.slice(0, 8);
-    return suppliers
-      .filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) ||
-          (s.phone && s.phone.includes(q)) ||
-          (s.gstin && s.gstin.toLowerCase().includes(q))
-      )
-      .slice(0, 8);
+    return smartFilterItems(
+      suppliers,
+      pbSupplier,
+      (s) => [s.name, s.phone, s.gstin, s.address],
+      { maxResults: 8 }
+    );
   }, [suppliers, pbSupplier]);
 
   const filteredPoSuppliers = useMemo(() => {
-    const q = supplier.trim().toLowerCase();
-    if (!q) return suppliers.slice(0, 8);
-    return suppliers
-      .filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) ||
-          (s.phone && s.phone.includes(q)) ||
-          (s.gstin && s.gstin.toLowerCase().includes(q))
-      )
-      .slice(0, 8);
+    return smartFilterItems(
+      suppliers,
+      supplier,
+      (s) => [s.name, s.phone, s.gstin, s.address],
+      { maxResults: 8 }
+    );
   }, [suppliers, supplier]);
 
   // Inventory restock low-stock suggestions calculation
@@ -315,6 +344,46 @@ export default function Purchase() {
     { label: 'Restock Suggestions', value: `${lowStockItems.length} items`, icon: Sparkles, tone: 'bg-amber-50 text-amber-600' },
   ];
 
+  // Raw Purchases (Counter / Cash & UPI Purchases without GST bill)
+  const rawPurchasesList = useMemo(
+    () => sales.filter((s) => s.documentType === 'RAW PURCHASE' || s.invoice.startsWith('RP-')),
+    [sales]
+  );
+
+  const filteredRawPurchases = useMemo(() => {
+    let list = rawPurchasesList;
+    if (rawPurFilter !== 'all') {
+      list = list.filter((s) => s.paymentMethod === rawPurFilter);
+    }
+    const q = rawPurSearch.toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(
+      (s) =>
+        s.invoice.toLowerCase().includes(q) ||
+        s.customer.toLowerCase().includes(q) ||
+        (s.notes && s.notes.toLowerCase().includes(q)) ||
+        (s.items && s.items.some((i) => i.name.toLowerCase().includes(q)))
+    );
+  }, [rawPurchasesList, rawPurFilter, rawPurSearch]);
+
+  const rawPurSummary = useMemo(() => {
+    const total = rawPurchasesList.reduce((s, r) => s + r.grandTotal, 0);
+    const cash = rawPurchasesList.filter((s) => s.paymentMethod === 'Cash');
+    const cashTotal = cash.reduce((s, r) => s + r.grandTotal, 0);
+    const upi = rawPurchasesList.filter((s) => s.paymentMethod === 'UPI');
+    const upiTotal = upi.reduce((s, r) => s + r.grandTotal, 0);
+    const totalPieces = rawPurchasesList.reduce((s, r) => s + (r.items ? r.items.reduce((sum, i) => sum + i.qty, 0) : 0), 0);
+    return {
+      total,
+      count: rawPurchasesList.length,
+      cashTotal,
+      cashCount: cash.length,
+      upiTotal,
+      upiCount: upi.length,
+      totalPieces,
+    };
+  }, [rawPurchasesList]);
+
   const subtotal = useMemo(
     () => lines.reduce((s, l) => s + l.cost * l.qty, 0),
     [lines],
@@ -331,21 +400,16 @@ export default function Purchase() {
   }, [products]);
 
   const searchResults = useMemo(() => {
-    const q = productSearch.toLowerCase().trim();
-    let list = products;
-    if (poCategory !== 'All') {
-      list = list.filter((p) => (p.category || '').toLowerCase() === poCategory.toLowerCase());
-    }
-    if (q) {
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.size && p.size.toLowerCase().includes(q)) ||
-          (p.category && p.category.toLowerCase().includes(q)) ||
-          (p.rackNumber && p.rackNumber.toLowerCase().includes(q))
-      );
-    }
-    return list.slice(0, 100);
+    return smartFilterItems(
+      products,
+      productSearch,
+      (p) => [p.name, p.size, p.category, p.rackNumber],
+      {
+        activeCategory: poCategory,
+        getCategory: (p) => p.category,
+        maxResults: 100,
+      }
+    );
   }, [productSearch, products, poCategory]);
 
 
@@ -511,25 +575,15 @@ export default function Purchase() {
       return {
         productId: p.id,
         name: p.name,
-        hsn: p.hsn || '7318150',
-        size: p.size || '',
-        rack: p.rack || '',
-        qty: neededQty,
         price: p.cost,
-        discountPercent: 0,
-        taxableAmount: taxable,
-        cgstPercent: pbGstTaxType === 'central' ? 0 : halfRate,
-        sgstPercent: pbGstTaxType === 'central' ? 0 : halfRate,
-        igstPercent: pbGstTaxType === 'central' ? pbEffectiveGstRate : 0,
-        cgstAmount: cgstAmt,
-        sgstAmount: sgstAmt,
-        igstAmount: igstAmt,
-        total: totalAmt,
+        qty: neededQty,
+        cost: p.cost,
+        hsnCode: p.hsnCode || '7318150',
       };
     });
 
     setPbLines(newPbLines);
-    setPbNotes(`Auto-generated from Inventory Restock Suggestions (${itemsToOrder.length} items)`);
+    setNotes(`Auto-generated from Inventory Restock Suggestions (${itemsToOrder.length} items)`);
     setPbModalOpen(true);
   };
 
@@ -557,21 +611,16 @@ export default function Purchase() {
   const pbIgstAmount = pbApplyGst && pbGstTaxType === 'central' ? +pbGstAmount.toFixed(2) : 0;
 
   const pbSearchResults = useMemo(() => {
-    const q = pbProductSearch.toLowerCase().trim();
-    let list = products;
-    if (pbCategory !== 'All') {
-      list = list.filter((p) => (p.category || '').toLowerCase() === pbCategory.toLowerCase());
-    }
-    if (q) {
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.size && p.size.toLowerCase().includes(q)) ||
-          (p.category && p.category.toLowerCase().includes(q)) ||
-          (p.rackNumber && p.rackNumber.toLowerCase().includes(q))
-      );
-    }
-    return list.slice(0, 100);
+    return smartFilterItems(
+      products,
+      pbProductSearch,
+      (p) => [p.name, p.size, p.category, p.rackNumber],
+      {
+        activeCategory: pbCategory,
+        getCategory: (p) => p.category,
+        maxResults: 100,
+      }
+    );
   }, [pbProductSearch, products, pbCategory]);
 
   const resetPbForm = () => {
@@ -617,6 +666,190 @@ export default function Purchase() {
     setPbDocumentType('CREDIT NOTE');
     setPbCustomBillNumber(nextCreditNote(sales));
     setPbModalOpen(true);
+  };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if ((location.state as any)?.openNewBill || params.get('action') === 'new-bill') {
+      openNewPurchaseBill();
+      window.history.replaceState({}, document.title, location.pathname);
+    }
+  }, [location]);
+
+  const rawPurSearchResults = useMemo(() => {
+    return smartFilterItems(
+      products,
+      rawPurProductSearch,
+      (p) => [p.name, p.rackNumber, p.size, p.category],
+      {
+        activeCategory: rawPurCategory,
+        getCategory: (p) => p.category,
+        maxResults: 50,
+      }
+    );
+  }, [products, rawPurProductSearch, rawPurCategory]);
+
+  const openNewRawPurchase = () => {
+    setRawPurNumber(nextRawPurchaseNumber(sales));
+    setRawPurDate(todayISO());
+    setRawPurNote('');
+    setRawPurPaymentMethod('Cash');
+    setRawPurLines([]);
+    setRawPurProductSearch('');
+    setRawPurCategory('All');
+    setIsAddingRawPurProduct(false);
+    setRawNewProdName('');
+    setRawNewProdRack('');
+    setRawNewProdSize('');
+    setRawNewProdCost('');
+    setRawNewProdPrice('');
+    setRawNewProdInwardQty('1');
+    setRawPurchaseModalOpen(true);
+  };
+
+  const addRawProductToPurchase = (p: Product) => {
+    setRawPurLines((prev) => {
+      const idx = prev.findIndex((l) => l.productId === p.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
+        return next;
+      }
+      return [
+        ...prev,
+        {
+          productId: p.id,
+          name: p.name,
+          price: p.cost || p.price,
+          cost: p.cost,
+          qty: 1,
+          hsnCode: p.hsnCode || '7318150',
+        },
+      ];
+    });
+  };
+
+  const updateRawPurLineQty = (productId: string, qty: number) => {
+    if (qty <= 0) {
+      setRawPurLines((prev) => prev.filter((l) => l.productId !== productId));
+      return;
+    }
+    setRawPurLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, qty } : l))
+    );
+  };
+
+  const updateRawPurLineCost = (productId: string, price: number) => {
+    setRawPurLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, price: Math.max(0, price) } : l))
+    );
+  };
+
+  const removeRawPurLine = (productId: string) => {
+    setRawPurLines((prev) => prev.filter((l) => l.productId !== productId));
+  };
+
+  const handleCreateRawPurNewProduct = async () => {
+    if (!rawNewProdName.trim()) {
+      alert('Please enter a product name');
+      return;
+    }
+    const cost = parseFloat(rawNewProdCost) || 0;
+    const price = parseFloat(rawNewProdPrice) || (cost > 0 ? cost * 1.25 : 0);
+    const inwardQty = Math.max(1, parseInt(rawNewProdInwardQty, 10) || 1);
+
+    try {
+      // 1. Create product in Main Inventory Master with initial stock = 0
+      // (Because saving this Raw Purchase will add inwardQty to stock!)
+      const created = await addProduct({
+        name: rawNewProdName.trim(),
+        category: rawNewProdCategory,
+        supplier: 'Raw Purchase',
+        rackNumber: rawNewProdRack.trim() || 'General',
+        size: rawNewProdSize.trim() || 'Standard',
+        cost,
+        price,
+        boxCapacity: 1000,
+        reorderLevel: 100,
+        notes: 'Auto-created via Raw Purchase Inward Entry',
+        image: '',
+        hsnCode: rawNewProdHsn.trim() || '7318150',
+        stock: 0,
+        boxStatusMode: 'auto',
+      });
+
+      // 2. Add line item directly to active Raw Purchase lines
+      setRawPurLines((prev) => [
+        ...prev,
+        {
+          productId: created.id,
+          name: created.name,
+          price: cost > 0 ? cost : price,
+          cost,
+          qty: inwardQty,
+          hsnCode: created.hsnCode || '7318150',
+        },
+      ]);
+
+      // 3. Reset form
+      setRawNewProdName('');
+      setRawNewProdRack('');
+      setRawNewProdSize('');
+      setRawNewProdCost('');
+      setRawNewProdPrice('');
+      setRawNewProdInwardQty('1');
+      setIsAddingRawPurProduct(false);
+      setRawPurProductSearch('');
+    } catch (err) {
+      alert(`Failed to create product: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleSaveRawPurchase = async () => {
+    if (rawPurLines.length === 0) {
+      alert('Please select at least one product.');
+      return;
+    }
+
+    const subtotalAmt = rawPurLines.reduce((s, l) => s + (l.price * l.qty), 0);
+    const totalAmt = +subtotalAmt.toFixed(2);
+
+    const newRawPurchase: SaleRecord = {
+      id: `raw_pur_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      invoice: rawPurNumber.trim() || nextRawPurchaseNumber(sales),
+      customer: 'Raw Purchase',
+      customerId: '',
+      phone: '',
+      customerGstin: '',
+      customerState: 'Haryana',
+      customerStateCode: '06',
+      date: rawPurDate,
+      items: rawPurLines,
+      itemCount: rawPurLines.length,
+      subtotal: totalAmt,
+      discount: 0,
+      discountType: 'amount',
+      gstRate: 0,
+      gstType: 'local',
+      cgstAmount: 0,
+      sgstAmount: 0,
+      igstAmount: 0,
+      gstAmount: 0,
+      grandTotal: totalAmt,
+      amountPaid: totalAmt,
+      paymentMethod: rawPurPaymentMethod,
+      status: 'paid',
+      channel: 'in-store',
+      documentType: 'RAW PURCHASE',
+      notes: rawPurNote.trim(),
+    };
+
+    try {
+      await addSale(newRawPurchase);
+      setRawPurchaseModalOpen(false);
+    } catch (err) {
+      alert(`Failed to record raw purchase: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
   };
 
   const handlePbSupplierSelect = (id: string) => {
@@ -939,6 +1172,13 @@ export default function Purchase() {
               <span>Credit Note</span>
             </button>
             <button
+              className="btn-secondary bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 font-bold flex items-center gap-1.5 shadow-sm"
+              onClick={openNewRawPurchase}
+            >
+              <Zap className="h-4 w-4 text-emerald-600" />
+              <span>New Raw Purchase</span>
+            </button>
+            <button
               className="btn-primary flex items-center gap-1.5 shadow-sm"
               onClick={openNewPurchaseBill}
             >
@@ -949,18 +1189,55 @@ export default function Purchase() {
         }
       />
 
-      {/* Metric Cards - Interactive Filter Shortcuts */}
+      {/* Main Sub-Navigation: Purchase Bills vs Raw Purchases */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 mb-6">
+        <button
+          type="button"
+          onClick={() => setActivePurchaseSubTab('bills')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition ${
+            activePurchaseSubTab === 'bills'
+              ? 'bg-brand-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100 bg-white border border-slate-200'
+          }`}
+        >
+          <Truck className="w-4 h-4" />
+          <span>Purchase Bills &amp; Inward</span>
+          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${activePurchaseSubTab === 'bills' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'}`}>
+            {combinedRecords.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActivePurchaseSubTab('raw-purchases')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition ${
+            activePurchaseSubTab === 'raw-purchases'
+              ? 'bg-emerald-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100 bg-white border border-slate-200'
+          }`}
+        >
+          <Zap className="w-4 h-4" />
+          <span>Raw Purchases (Cash / UPI)</span>
+          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${activePurchaseSubTab === 'raw-purchases' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'}`}>
+            {rawPurchasesList.length}
+          </span>
+        </button>
+      </div>
+
+      {activePurchaseSubTab === 'bills' && (
+        <>
+          {/* Metric Cards - Interactive Filter Shortcuts */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         <div
-          className={`card p-5 cursor-pointer transition-all duration-200 ${
+          className={`stagger-1 card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs cursor-pointer transition-all duration-200 ${
             activeTab === 'all'
-              ? 'ring-2 ring-brand-500/80 bg-brand-50/20 border-brand-300 shadow-md'
+              ? 'ring-2 ring-brand-500/80 bg-brand-50/30 border-brand-300 shadow-md'
               : 'hover:border-slate-300 hover:shadow-md'
           }`}
           onClick={() => setActiveTab('all')}
         >
           <div className="flex items-center justify-between">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
               <Truck className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
@@ -974,15 +1251,15 @@ export default function Purchase() {
         </div>
 
         <div
-          className={`card p-5 cursor-pointer transition-all duration-200 ${
+          className={`stagger-2 card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs cursor-pointer transition-all duration-200 ${
             activeTab === 'bills'
-              ? 'ring-2 ring-indigo-500/80 bg-indigo-50/20 border-indigo-300 shadow-md'
+              ? 'ring-2 ring-indigo-500/80 bg-indigo-50/30 border-indigo-300 shadow-md'
               : 'hover:border-slate-300 hover:shadow-md'
           }`}
           onClick={() => setActiveTab('bills')}
         >
           <div className="flex items-center justify-between">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 font-bold">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
               <PackageCheck className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
@@ -998,15 +1275,15 @@ export default function Purchase() {
         </div>
 
         <div
-          className={`card p-5 cursor-pointer transition-all duration-200 ${
+          className={`stagger-3 card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs cursor-pointer transition-all duration-200 ${
             activeTab === 'credit-notes'
-              ? 'ring-2 ring-rose-500/80 bg-rose-50/20 border-rose-300 shadow-md'
+              ? 'ring-2 ring-rose-500/80 bg-rose-50/30 border-rose-300 shadow-md'
               : 'hover:border-slate-300 hover:shadow-md'
           }`}
           onClick={() => setActiveTab('credit-notes')}
         >
           <div className="flex items-center justify-between">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-600 font-bold">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
               <FileText className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md">
@@ -1022,15 +1299,15 @@ export default function Purchase() {
         </div>
 
         <div
-          className={`card p-5 cursor-pointer transition-all duration-200 ${
+          className={`stagger-4 card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs cursor-pointer transition-all duration-200 ${
             activeTab === 'suggestions'
-              ? 'ring-2 ring-amber-500/80 bg-amber-50/20 border-amber-300 shadow-md'
+              ? 'ring-2 ring-amber-500/80 bg-amber-50/30 border-amber-300 shadow-md'
               : 'hover:border-slate-300 hover:shadow-md'
           }`}
           onClick={() => setActiveTab('suggestions')}
         >
           <div className="flex items-center justify-between">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 font-bold">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
               <Sparkles className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md">
@@ -1321,19 +1598,25 @@ export default function Purchase() {
                           >
                             <Printer className="h-4 w-4" />
                           </button>
-                          {!isPO && (
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Are you sure you want to delete ${rec.docNumber}?`)) {
+                          <button
+                            onClick={() => {
+                              const isReceivedPo = isPO && (rec.raw as any).status === 'received';
+                              const promptMsg = isPO
+                                ? `Are you sure you want to delete ${rec.docNumber}?${isReceivedPo ? ' Received items will be deducted from inventory stock.' : ''}`
+                                : `Are you sure you want to delete Purchase Bill ${rec.docNumber}? Added items will be deducted from inventory stock.`;
+                              if (window.confirm(promptMsg)) {
+                                if (isPO) {
+                                  deletePurchase(rec.id);
+                                } else {
                                   deleteSale(rec.id);
                                 }
-                              }}
-                              className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
-                              title="Delete Document"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
+                              }
+                            }}
+                            className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
+                            title="Delete Document"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1345,12 +1628,243 @@ export default function Purchase() {
           <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
             <p className="text-sm text-slate-500">
               Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{' '}
-              <span className="font-semibold text-slate-700">{purchases.length}</span> orders
+              <span className="font-semibold text-slate-700">{combinedRecords.length}</span> records
             </p>
             <div className="flex items-center gap-1">
               <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Previous</button>
               <button className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white">1</button>
               <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+      )}
+        </>
+      )}
+
+      {/* Raw Purchases (Cash / UPI Inward Counter Purchases) */}
+      {activePurchaseSubTab === 'raw-purchases' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Metric Cards */}
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+            <div
+              className={`stagger-1 card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs cursor-pointer transition-all duration-200 ${
+                rawPurFilter === 'all'
+                  ? 'ring-2 ring-emerald-500/80 bg-emerald-50/30 border-emerald-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setRawPurFilter('all')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
+                  <Zap className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                  All Raw Inward
+                </span>
+              </div>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(rawPurSummary.total)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-semibold">{rawPurSummary.count} Inward Purchases ({rawPurSummary.totalPieces} pcs)</p>
+            </div>
+
+            <div
+              className={`stagger-2 card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs cursor-pointer transition-all duration-200 ${
+                rawPurFilter === 'Cash'
+                  ? 'ring-2 ring-brand-500/80 bg-brand-50/30 border-brand-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setRawPurFilter('Cash')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
+                  <Wallet className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
+                  Cash Inward
+                </span>
+              </div>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(rawPurSummary.cashTotal)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-semibold">{rawPurSummary.cashCount} Cash Purchases</p>
+            </div>
+
+            <div
+              className={`stagger-3 card-interactive group p-5 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs cursor-pointer transition-all duration-200 ${
+                rawPurFilter === 'UPI'
+                  ? 'ring-2 ring-indigo-500/80 bg-indigo-50/30 border-indigo-300 shadow-md'
+                  : 'hover:border-slate-300 hover:shadow-md'
+              }`}
+              onClick={() => setRawPurFilter('UPI')}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
+                  <CreditCard className="h-5 w-5" />
+                </div>
+                <span className="text-[10.5px] font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
+                  UPI Instant
+                </span>
+              </div>
+              <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(rawPurSummary.upiTotal)}</p>
+              <p className="mt-1 text-xs text-slate-500 font-semibold">{rawPurSummary.upiCount} UPI Purchases</p>
+            </div>
+
+            <div
+              className="stagger-4 card-interactive group p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-200/80 shadow-xs cursor-pointer transition-all duration-200"
+              onClick={openNewRawPurchase}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white font-bold shadow-md shadow-emerald-600/25 group-hover:scale-110 transition-transform">
+                  <Plus className="h-5 w-5" />
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                  Fast Inward
+                </span>
+              </div>
+              <p className="mt-3 text-lg font-black text-emerald-950">Quick Raw Inward</p>
+              <p className="mt-1 text-xs text-emerald-700 font-medium">Click to record cash / UPI purchase</p>
+            </div>
+          </div>
+
+          {/* Raw Purchases Table Card */}
+          <div className="card p-6 space-y-4 rounded-2xl bg-white/90 backdrop-blur-md border border-slate-200/80 shadow-xs">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
+                  <Zap className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Raw Counter Purchases</h3>
+                  <p className="text-xs text-slate-500">Immediate cash &amp; UPI inward items with automatic stock addition to Main Inventory</p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Search */}
+                <div className="relative w-full sm:w-64">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={rawPurSearch}
+                    onChange={(e) => setRawPurSearch(e.target.value)}
+                    placeholder="Search raw purchase # or product..."
+                    className="input pl-9 text-xs"
+                  />
+                </div>
+
+                {/* Filter Pills */}
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+                  <button
+                    onClick={() => setRawPurFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg transition ${rawPurFilter === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    All ({rawPurchasesList.length})
+                  </button>
+                  <button
+                    onClick={() => setRawPurFilter('Cash')}
+                    className={`px-3 py-1.5 rounded-lg transition ${rawPurFilter === 'Cash' ? 'bg-brand-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    Cash ({rawPurSummary.cashCount})
+                  </button>
+                  <button
+                    onClick={() => setRawPurFilter('UPI')}
+                    className={`px-3 py-1.5 rounded-lg transition ${rawPurFilter === 'UPI' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    UPI ({rawPurSummary.upiCount})
+                  </button>
+                </div>
+
+                <button
+                  onClick={openNewRawPurchase}
+                  className="btn-primary flex items-center gap-1.5 py-2 text-xs"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>New Raw Purchase</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200/80 shadow-xs">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50/80 text-[11px] uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3 font-bold">Bill #</th>
+                    <th className="px-4 py-3 font-bold">Party Name</th>
+                    <th className="px-4 py-3 font-bold">Date</th>
+                    <th className="px-4 py-3 font-bold">Items Summary</th>
+                    <th className="px-4 py-3 font-bold">Payment Mode</th>
+                    <th className="px-4 py-3 font-bold text-right">Grand Total</th>
+                    <th className="px-4 py-3 font-bold text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredRawPurchases.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                        <Zap className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                        <p className="font-bold text-slate-600 text-sm">No Raw Purchases Recorded</p>
+                        <p className="text-xs text-slate-400 mt-1">Click "+ New Raw Purchase" to record a quick cash/UPI inward delivery.</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredRawPurchases.map((s) => (
+                      <tr key={s.id} className="hover:bg-emerald-50/20 transition-colors duration-150">
+                        <td className="px-4 py-3 font-mono font-bold text-emerald-700">{s.invoice}</td>
+                        <td className="px-4 py-3">
+                          <span className="font-bold text-slate-900">{s.customer || 'Raw Purchase'}</span>
+                          {s.notes && <p className="text-[11px] text-slate-500 italic truncate max-w-xs">{s.notes}</p>}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-600">{s.date}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-slate-800">
+                              {s.items && s.items.length > 0
+                                ? `${s.items.length} item${s.items.length > 1 ? 's' : ''} (${s.items.reduce((sum, i) => sum + i.qty, 0)} pcs added)`
+                                : '—'}
+                            </span>
+                            <span className="text-[11px] text-slate-500 truncate max-w-sm">
+                              {s.items?.map((i) => `${i.qty}× ${i.name}`).join(', ')}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                            s.paymentMethod === 'UPI'
+                              ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                              : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                          }`}>
+                            {s.paymentMethod === 'UPI' ? <CreditCard className="w-3 h-3" /> : <Wallet className="w-3 h-3" />}
+                            {s.paymentMethod} (Paid)
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-black text-slate-900 text-right font-mono text-sm">
+                          {money(s.grandTotal)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => setViewingRawPur(s)}
+                              className="p-1.5 text-slate-600 hover:text-brand-600 hover:bg-slate-100 rounded-lg transition"
+                              title="View Items Detail"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (confirm(`Delete raw purchase ${s.invoice}? Items will be deducted from inventory stock.`)) {
+                                  deleteSale(s.id);
+                                }
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                              title="Delete Raw Purchase"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -1390,12 +1904,12 @@ export default function Purchase() {
                   setShowPoSupplierDropdown(true);
                 }}
                 placeholder="Type or search supplier..."
-                className="input"
+                className="input relative z-20"
               />
               {showPoSupplierDropdown && filteredPoSuppliers.length > 0 && (
                 <>
-                  <div className="fixed inset-0 z-20" onClick={() => setShowPoSupplierDropdown(false)} />
-                  <div className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg divide-y divide-slate-100">
+                  <div className="fixed inset-0 z-10" onClick={() => setShowPoSupplierDropdown(false)} />
+                  <div className="absolute left-0 right-0 z-20 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg divide-y divide-slate-100">
                     {filteredPoSuppliers.map((s) => (
                       <div
                         key={s.id}
@@ -1596,6 +2110,13 @@ export default function Purchase() {
                   type="text"
                   value={productSearch}
                   onChange={(e) => setProductSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && searchResults.length > 0) {
+                      e.preventDefault();
+                      addLine(searchResults[0].id);
+                      setProductSearch('');
+                    }
+                  }}
                   placeholder="Search 990+ products by name, size, rack..."
                   className="input pl-9 pr-9 text-xs bg-white"
                 />
@@ -1704,8 +2225,22 @@ export default function Purchase() {
                       );
                     })
                   ) : (
-                    <div className="p-4 text-center text-xs text-slate-400">
-                      No products found matching &quot;{productSearch}&quot;.
+                    <div className="p-4 text-center text-xs space-y-2">
+                      <p className="text-slate-400">No products found matching &quot;{productSearch}&quot;.</p>
+                      {productSearch.trim() && !isAddingNewProduct && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewProdName(productSearch.trim());
+                            setIsAddingNewProduct(true);
+                            setProductSearch('');
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs shadow-xs transition"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>+ Add &quot;{productSearch}&quot; as New Product Master</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2096,14 +2631,14 @@ export default function Purchase() {
                       if (pbSupplierId !== 'new') setPbSupplierId('new');
                     }}
                     placeholder="Type or search supplier..."
-                    className="input bg-white text-xs font-medium"
+                    className="input bg-white text-xs font-medium relative z-20"
                   />
 
                   {/* Floating Autocomplete List */}
                   {showPbSupplierDropdown && filteredPbSuppliers.length > 0 && (
                     <>
-                      <div className="fixed inset-0 z-20" onClick={() => setShowPbSupplierDropdown(false)} />
-                      <div className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg divide-y divide-slate-100">
+                      <div className="fixed inset-0 z-10" onClick={() => setShowPbSupplierDropdown(false)} />
+                      <div className="absolute left-0 right-0 z-20 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg divide-y divide-slate-100">
                         {filteredPbSuppliers.map((s) => (
                           <div
                             key={s.id}
@@ -2179,7 +2714,7 @@ export default function Purchase() {
                   type="text"
                   value={pbCustomBillNumber}
                   onChange={(e) => setPbCustomBillNumber(e.target.value)}
-                  placeholder="e.g. PI-3101"
+                  placeholder="e.g. PB-1001 or BILL-5521"
                   className="input font-mono font-bold text-indigo-600"
                 />
               </div>
@@ -2369,6 +2904,13 @@ export default function Purchase() {
                     type="text"
                     value={pbProductSearch}
                     onChange={(e) => setPbProductSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && pbSearchResults.length > 0) {
+                        e.preventDefault();
+                        addPbLine(pbSearchResults[0].id);
+                        setPbProductSearch('');
+                      }
+                    }}
                     placeholder="Search 990+ products by name, size, rack..."
                     className="input pl-9 pr-9 text-xs bg-white"
                   />
@@ -3139,6 +3681,552 @@ export default function Purchase() {
                 </div>
               </div>
             )}
+          </div>
+        </Modal>
+      )}
+
+      {/* New Raw Purchase Modal (Quick Cash / UPI Inward) */}
+      {rawPurchaseModalOpen && (
+        <Modal
+          title={`Create Raw Purchase (${rawPurNumber || 'Auto'})`}
+          size="lg"
+          onClose={() => setRawPurchaseModalOpen(false)}
+        >
+          <div className="space-y-4 max-h-[82vh] overflow-y-auto pr-1 text-xs">
+            {/* Top Bar Info & Payment Mode */}
+            <div className="p-3.5 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-black">
+                    <Zap className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-emerald-950 text-sm">Direct Inward Purchase</h4>
+                    <p className="text-[11px] text-emerald-700">Immediate inventory addition • No vendor or GST bill details required</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-600">Recorded Under:</span>
+                  <span className="px-2.5 py-0.5 rounded-md bg-emerald-100 border border-emerald-300 font-extrabold text-emerald-900">
+                    Raw Purchase
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-emerald-200/60">
+                <div>
+                  <label className="block text-[11px] font-bold text-emerald-900 mb-1">Purchase / Inward Slip #</label>
+                  <input
+                    type="text"
+                    value={rawPurNumber}
+                    onChange={(e) => setRawPurNumber(e.target.value)}
+                    placeholder="e.g. RP-1001"
+                    className="input font-mono font-bold text-emerald-800 bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-emerald-900 mb-1">Inward Date</label>
+                  <input
+                    type="date"
+                    value={rawPurDate}
+                    onChange={(e) => setRawPurDate(e.target.value)}
+                    className="input font-semibold bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-emerald-900 mb-1">Payment Method (Immediate) *</label>
+                  <div className="grid grid-cols-2 gap-1.5 p-1 bg-white rounded-xl border border-emerald-300">
+                    <button
+                      type="button"
+                      onClick={() => setRawPurPaymentMethod('Cash')}
+                      className={`py-1.5 px-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition ${
+                        rawPurPaymentMethod === 'Cash'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Wallet className="w-3.5 h-3.5" />
+                      <span>Cash</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRawPurPaymentMethod('UPI')}
+                      className={`py-1.5 px-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition ${
+                        rawPurPaymentMethod === 'UPI'
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>UPI</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-emerald-900 mb-1">Optional Note / Reference</label>
+                <input
+                  type="text"
+                  value={rawPurNote}
+                  onChange={(e) => setRawPurNote(e.target.value)}
+                  placeholder="e.g. Local supplier cash inward, Chawri Bazar hardware, etc."
+                  className="input bg-white text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Product Selector for Raw Purchase */}
+            <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/70 space-y-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="font-extrabold text-slate-800 flex items-center gap-1.5">
+                  <Package className="w-4 h-4 text-emerald-600" />
+                  <span>Select Products to Inward (Adds to Stock)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={rawPurCategory}
+                    onChange={(e) => setRawPurCategory(e.target.value)}
+                    className="input py-1 text-xs font-semibold"
+                  >
+                    {availableCategories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isAddingRawPurProduct) setRawNewProdName(rawPurProductSearch.trim());
+                      setIsAddingRawPurProduct(!isAddingRawPurProduct);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1 shadow-xs shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add New Product</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Inline New Product Form for Raw Purchase */}
+              {isAddingRawPurProduct && (
+                <div className="p-3 bg-emerald-50/70 rounded-xl border-2 border-emerald-300 space-y-2.5 animate-fade-in shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-emerald-600" />
+                      Add Brand New Product (Auto-creates Master &amp; Inwards to Purchase)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingRawPurProduct(false)}
+                      className="text-slate-400 hover:text-slate-600 text-xs font-bold"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Product Name *</label>
+                      <input
+                        type="text"
+                        value={rawNewProdName}
+                        onChange={(e) => setRawNewProdName(e.target.value)}
+                        placeholder="e.g. Hex Bolt M10 x 40mm SS"
+                        className="input text-xs bg-white font-medium"
+                        autoFocus
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Category</label>
+                      <select
+                        value={rawNewProdCategory}
+                        onChange={(e) => setRawNewProdCategory(e.target.value)}
+                        className="input text-xs bg-white"
+                      >
+                        {availableCategories.filter((c) => c !== 'All').map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Size / Spec</label>
+                      <input
+                        type="text"
+                        value={rawNewProdSize}
+                        onChange={(e) => setRawNewProdSize(e.target.value)}
+                        placeholder="e.g. M10 x 40"
+                        className="input text-xs bg-white font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Inward Cost Price (₹)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={rawNewProdCost}
+                        onChange={(e) => setRawNewProdCost(e.target.value)}
+                        placeholder="0.00"
+                        className="input text-xs bg-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Selling Price (₹)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={rawNewProdPrice}
+                        onChange={(e) => setRawNewProdPrice(e.target.value)}
+                        placeholder="0.00"
+                        className="input text-xs bg-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Rack / Shelf</label>
+                      <input
+                        type="text"
+                        value={rawNewProdRack}
+                        onChange={(e) => setRawNewProdRack(e.target.value)}
+                        placeholder="e.g. R-04"
+                        className="input text-xs bg-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Inward Qty (Pcs) *</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={rawNewProdInwardQty}
+                        onChange={(e) => setRawNewProdInwardQty(e.target.value)}
+                        placeholder="1"
+                        className="input text-xs bg-white font-mono font-bold text-emerald-800"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10.5px] text-emerald-800 font-medium">
+                      ✓ Saves to product catalog &amp; immediately adds to Inward Items below.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCreateRawPurNewProduct}
+                      className="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 flex items-center gap-1.5 shadow-sm"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Save &amp; Inward to Purchase</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={rawPurProductSearch}
+                  onChange={(e) => setRawPurProductSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && rawPurSearchResults.length > 0) {
+                      e.preventDefault();
+                      addRawProductToPurchase(rawPurSearchResults[0]);
+                      setRawPurProductSearch('');
+                    }
+                  }}
+                  placeholder="Search products by name, rack #, size..."
+                  className="input pl-8 py-1.5 bg-white text-xs font-medium"
+                />
+              </div>
+
+              {/* Quick Pick Products Grid */}
+              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1.5 divide-y divide-slate-100">
+                {rawPurSearchResults.length === 0 ? (
+                  <div className="py-4 px-2 text-center space-y-2">
+                    <p className="text-slate-400 text-xs">
+                      {rawPurProductSearch
+                        ? `No products found matching "${rawPurProductSearch}".`
+                        : 'No products in this category.'}
+                    </p>
+                    {rawPurProductSearch.trim() && !isAddingRawPurProduct && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRawNewProdName(rawPurProductSearch.trim());
+                          setIsAddingRawPurProduct(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ Create &quot;{rawPurProductSearch}&quot; as New Product</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  rawPurSearchResults.map((p) => {
+                    const alreadyInCart = rawPurLines.find((l) => l.productId === p.id);
+                    return (
+                      <div
+                        key={p.id}
+                        className="flex items-center justify-between py-1.5 px-2 hover:bg-slate-50 rounded-lg transition"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="font-bold text-slate-800 truncate">{p.name}</p>
+                          <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                            <span>Rack: <strong className="text-slate-700">{p.rackNumber || '—'}</strong></span>
+                            <span>•</span>
+                            <span>Cost: <strong className="text-emerald-700">{money(p.cost)}</strong></span>
+                            <span>•</span>
+                            <span className="text-slate-600">
+                              Current Stock: <strong>{p.stock}</strong>
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => addRawProductToPurchase(p)}
+                          className={`px-2.5 py-1 text-xs font-bold rounded-lg transition flex items-center gap-1 shrink-0 ${
+                            alreadyInCart
+                              ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                              : 'bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white'
+                          }`}
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>{alreadyInCart ? `Add (${alreadyInCart.qty})` : 'Add'}</span>
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Selected Inward Items Table */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h5 className="font-extrabold text-slate-800">
+                  Inward Items ({rawPurLines.length})
+                </h5>
+                <span className="text-[11px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                  ⚡ Stock to add: +{rawPurLines.reduce((s, l) => s + l.qty, 0)} pcs
+                </span>
+              </div>
+
+              {rawPurLines.length === 0 ? (
+                <div className="p-6 border-2 border-dashed border-slate-200 rounded-xl text-center text-slate-400">
+                  <ShoppingCart className="w-8 h-8 mx-auto mb-1 text-slate-300" />
+                  <p className="font-semibold">No items selected for inward yet</p>
+                  <p className="text-[11px]">Click items above to add them to this raw purchase.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-xs">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-[11px] font-bold text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2">Item Name</th>
+                        <th className="px-3 py-2 w-28 text-center">Inward Qty</th>
+                        <th className="px-3 py-2 w-28 text-right">Cost Rate (₹)</th>
+                        <th className="px-3 py-2 text-right">Total</th>
+                        <th className="px-2 py-2 w-10 text-center"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {rawPurLines.map((line) => {
+                        const lineTotal = +(line.price * line.qty).toFixed(2);
+                        const prod = products.find((p) => p.id === line.productId);
+
+                        return (
+                          <tr key={line.productId} className="hover:bg-slate-50">
+                            <td className="px-3 py-2">
+                              <p className="font-bold text-slate-900">{line.name}</p>
+                              {prod && (
+                                <p className="text-[10px] text-slate-400">
+                                  Current Stock: {prod.stock} → New: <strong className="text-emerald-700 font-bold">{prod.stock + line.qty}</strong>
+                                </p>
+                              )}
+                            </td>
+
+                            <td className="px-3 py-2">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => updateRawPurLineQty(line.productId!, line.qty - 1)}
+                                  className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700"
+                                >
+                                  -
+                                </button>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={line.qty}
+                                  onChange={(e) => updateRawPurLineQty(line.productId!, parseInt(e.target.value, 10) || 1)}
+                                  className="w-12 text-center font-bold input py-0.5 px-1 text-xs"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => updateRawPurLineQty(line.productId!, line.qty + 1)}
+                                  className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </td>
+
+                            <td className="px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={line.price}
+                                onChange={(e) => updateRawPurLineCost(line.productId!, parseFloat(e.target.value) || 0)}
+                                className="w-20 text-right font-mono font-bold input py-0.5 px-1 text-xs"
+                              />
+                            </td>
+
+                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900">
+                              {money(lineTotal)}
+                            </td>
+
+                            <td className="px-2 py-2 text-center">
+                              <button
+                                type="button"
+                                onClick={() => removeRawPurLine(line.productId!)}
+                                className="text-slate-400 hover:text-red-600 p-1 transition"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Bill Summary & Actions */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <span className="text-[11px] text-slate-500 block">Immediate Settlement (No Credit / Cheques)</span>
+                <span className="text-xs font-bold text-emerald-800 flex items-center gap-1 mt-0.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  Paid in Full via {rawPurPaymentMethod}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="text-[11px] text-slate-500 uppercase tracking-wider font-bold">Total Inward Value</p>
+                  <p className="text-2xl font-black text-slate-900 font-mono">
+                    {money(rawPurLines.reduce((s, l) => s + (l.price * l.qty), 0))}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveRawPurchase}
+                  disabled={rawPurLines.length === 0}
+                  className="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-5 py-2.5 shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Save &amp; Inward Stock</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* View Raw Purchase Detail Modal */}
+      {viewingRawPur && (
+        <Modal
+          title={`Raw Purchase — ${viewingRawPur.invoice}`}
+          size="md"
+          onClose={() => setViewingRawPur(null)}
+        >
+          <div className="space-y-4 text-xs">
+            {/* Header info */}
+            <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider font-extrabold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
+                    Raw Inward Slip
+                  </span>
+                  <p className="font-mono font-black text-lg text-emerald-950 mt-1">{viewingRawPur.invoice}</p>
+                </div>
+                <div className="text-right">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    {viewingRawPur.paymentMethod === 'UPI' ? <CreditCard className="w-3.5 h-3.5" /> : <Wallet className="w-3.5 h-3.5" />}
+                    {viewingRawPur.paymentMethod} (Paid)
+                  </span>
+                  <p className="text-[11px] text-slate-500 font-mono mt-1">Date: {viewingRawPur.date}</p>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-emerald-200/60 flex items-center justify-between text-slate-700">
+                <span>Party: <strong className="text-slate-900">{viewingRawPur.customer || 'Raw Purchase'}</strong></span>
+                {viewingRawPur.notes && (
+                  <span className="italic text-slate-500">Note: {viewingRawPur.notes}</span>
+                )}
+              </div>
+            </div>
+
+            {/* Items table */}
+            <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-[11px] font-bold text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2">Item</th>
+                    <th className="px-3 py-2 text-center">Inward Qty</th>
+                    <th className="px-3 py-2 text-right">Cost Rate</th>
+                    <th className="px-3 py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {viewingRawPur.items?.map((item, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50">
+                      <td className="px-3 py-2 font-bold text-slate-800">{item.name}</td>
+                      <td className="px-3 py-2 text-center font-mono font-bold text-emerald-700">+{item.qty}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-600">{money(item.price)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-slate-900">{money(item.price * item.qty)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Total */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+              <span className="font-bold text-slate-600">Total Purchase Value Settled:</span>
+              <span className="font-mono font-black text-xl text-slate-900">{money(viewingRawPur.grandTotal)}</span>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm(`Delete raw purchase ${viewingRawPur.invoice}? Added items will be deducted from inventory stock.`)) {
+                    deleteSale(viewingRawPur.id);
+                    setViewingRawPur(null);
+                  }
+                }}
+                className="text-red-600 hover:text-red-700 font-bold flex items-center gap-1 text-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Record</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setViewingRawPur(null)}
+                className="btn-secondary text-xs"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </Modal>
       )}

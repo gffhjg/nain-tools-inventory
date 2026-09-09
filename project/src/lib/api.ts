@@ -482,7 +482,7 @@ export const api = {
   },
 
   async checkGstinDuplicate(gstin: string, excludeId?: string): Promise<boolean> {
-    const trimmed = gstin.trim().toUpperCase();
+    const trimmed = (gstin || '').trim().toUpperCase();
     if (!trimmed) return false;
     const db = await getDb();
     if (excludeId) {
@@ -501,39 +501,78 @@ export const api = {
 
   async createCustomer(c: Customer): Promise<void> {
     validateNonEmpty(c.name, 'Customer name');
-    if (c.gstin) {
-      const v = validateGstin(c.gstin);
+    const cleanName = c.name.trim();
+    const cleanBusinessName = (c.businessName || '').trim();
+    const cleanPhone = (c.phone || '').trim();
+    const cleanGstin = (c.gstin || '').trim().toUpperCase();
+    const cleanEmail = (c.email || '').trim().toLowerCase();
+    const cleanAddress = (c.address || '').trim();
+    const cleanState = (c.state || '').trim();
+    const cleanStateCode = (c.stateCode || '').trim();
+    const cleanNotes = (c.notes || '').trim();
+
+    if (cleanGstin) {
+      const v = validateGstin(cleanGstin);
       if (!v.valid) throw new Error(v.error);
-      if (await this.checkGstinDuplicate(c.gstin)) {
-        throw new Error(`A customer with GSTIN ${c.gstin.toUpperCase()} already exists.`);
+      if (await this.checkGstinDuplicate(cleanGstin)) {
+        throw new Error(`A customer with GSTIN ${cleanGstin} already exists.`);
       }
     }
     const db = await getDb();
     await db.query(
       `INSERT INTO customers (id, name, business_name, phone, gstin, email, address, state, state_code, notes)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [c.id, c.name, c.businessName, c.phone, c.gstin.toUpperCase(), c.email, c.address, c.state, c.stateCode, c.notes],
+      [c.id, cleanName, cleanBusinessName, cleanPhone, cleanGstin, cleanEmail, cleanAddress, cleanState, cleanStateCode, cleanNotes],
     );
   },
 
   async updateCustomer(id: string, c: Customer): Promise<void> {
     validateNonEmpty(c.name, 'Customer name');
-    if (c.gstin) {
-      const v = validateGstin(c.gstin);
+    const cleanName = c.name.trim();
+    const cleanBusinessName = (c.businessName || '').trim();
+    const cleanPhone = (c.phone || '').trim();
+    const cleanGstin = (c.gstin || '').trim().toUpperCase();
+    const cleanEmail = (c.email || '').trim().toLowerCase();
+    const cleanAddress = (c.address || '').trim();
+    const cleanState = (c.state || '').trim();
+    const cleanStateCode = (c.stateCode || '').trim();
+    const cleanNotes = (c.notes || '').trim();
+
+    if (cleanGstin) {
+      const v = validateGstin(cleanGstin);
       if (!v.valid) throw new Error(v.error);
-      if (await this.checkGstinDuplicate(c.gstin, id)) {
-        throw new Error(`A customer with GSTIN ${c.gstin.toUpperCase()} already exists.`);
+      if (await this.checkGstinDuplicate(cleanGstin, id)) {
+        throw new Error(`A customer with GSTIN ${cleanGstin} already exists.`);
       }
     }
     const db = await getDb();
+    const { rows: prevRows } = await db.query<{ name: string }>('SELECT name FROM customers WHERE id = $1', [id]);
+    const oldName = prevRows[0]?.name;
+
     await db.query(
       `UPDATE customers SET name=$1, business_name=$2, phone=$3, gstin=$4, email=$5, address=$6, state=$7, state_code=$8, notes=$9 WHERE id=$10`,
-      [c.name, c.businessName, c.phone, c.gstin.toUpperCase(), c.email, c.address, c.state, c.stateCode, c.notes, id],
+      [cleanName, cleanBusinessName, cleanPhone, cleanGstin, cleanEmail, cleanAddress, cleanState, cleanStateCode, cleanNotes, id],
     );
+
+    // Keep sales and cheques in sync if the customer's name was changed
+    if (oldName && oldName !== cleanName) {
+      await db.query('UPDATE sales SET customer=$1 WHERE customer_id=$2 OR customer=$3', [cleanName, id, oldName]);
+      await db.query('UPDATE cheques SET customer_name=$1 WHERE customer_id=$2 OR customer_name=$3', [cleanName, id, oldName]);
+    }
   },
 
   async deleteCustomer(id: string): Promise<void> {
     const db = await getDb();
+    const { rows: custRows } = await db.query<{ name: string }>('SELECT name FROM customers WHERE id = $1', [id]);
+    const custName = custRows[0]?.name || '';
+    const { rows: salesRows } = await db.query<{ count: string }>(
+      'SELECT COUNT(*)::text as count FROM sales WHERE customer_id = $1 OR customer = $2',
+      [id, custName],
+    );
+    const count = parseInt(salesRows[0]?.count || '0', 10);
+    if (count > 0) {
+      throw new Error(`Cannot delete customer "${custName || id}" because they have ${count} sales transaction(s). Archive or delete the transactions first.`);
+    }
     await db.query('DELETE FROM customers WHERE id = $1', [id]);
   },
 
@@ -550,21 +589,61 @@ export const api = {
     await db.query(
       `INSERT INTO suppliers (id, name, contact_person, phone, gstin, email, address, state, state_code, notes)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [s.id, s.name, s.contactPerson, s.phone, s.gstin, s.email, s.address, s.state, s.stateCode, s.notes],
+      [
+        s.id,
+        s.name.trim(),
+        (s.contactPerson || '').trim(),
+        (s.phone || '').trim(),
+        (s.gstin || '').trim().toUpperCase(),
+        (s.email || '').trim().toLowerCase(),
+        (s.address || '').trim(),
+        (s.state || '').trim(),
+        (s.stateCode || '').trim(),
+        (s.notes || '').trim(),
+      ],
     );
   },
 
   async updateSupplier(id: string, s: Supplier): Promise<void> {
     validateNonEmpty(s.name, 'Supplier name');
     const db = await getDb();
+    const { rows: prevRows } = await db.query<{ name: string }>('SELECT name FROM suppliers WHERE id = $1', [id]);
+    const oldName = prevRows[0]?.name;
+
     await db.query(
       `UPDATE suppliers SET name=$1, contact_person=$2, phone=$3, gstin=$4, email=$5, address=$6, state=$7, state_code=$8, notes=$9 WHERE id=$10`,
-      [s.name, s.contactPerson, s.phone, s.gstin, s.email, s.address, s.state, s.stateCode, s.notes, id],
+      [
+        s.name.trim(),
+        (s.contactPerson || '').trim(),
+        (s.phone || '').trim(),
+        (s.gstin || '').trim().toUpperCase(),
+        (s.email || '').trim().toLowerCase(),
+        (s.address || '').trim(),
+        (s.state || '').trim(),
+        (s.stateCode || '').trim(),
+        (s.notes || '').trim(),
+        id,
+      ],
     );
+
+    if (oldName && oldName !== s.name.trim()) {
+      await db.query('UPDATE purchases SET supplier=$1 WHERE supplier=$2', [s.name.trim(), oldName]);
+      await db.query('UPDATE cheques SET supplier_name=$1 WHERE supplier_id=$2 OR supplier_name=$3', [s.name.trim(), id, oldName]);
+    }
   },
 
   async deleteSupplier(id: string): Promise<void> {
     const db = await getDb();
+    const { rows: suppRows } = await db.query<{ name: string }>('SELECT name FROM suppliers WHERE id = $1', [id]);
+    const suppName = suppRows[0]?.name || '';
+    const { rows: poRows } = await db.query<{ count: string }>(
+      'SELECT COUNT(*)::text as count FROM purchases WHERE supplier = $1',
+      [suppName],
+    );
+    const count = parseInt(poRows[0]?.count || '0', 10);
+    if (count > 0) {
+      throw new Error(`Cannot delete supplier "${suppName || id}" because they have ${count} purchase transaction(s).`);
+    }
     await db.query('DELETE FROM suppliers WHERE id = $1', [id]);
   },
 

@@ -1,23 +1,29 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ArrowLeft, Phone, MapPin, FileText, IndianRupee, TrendingUp,
-  ShoppingCart, Clock, Tag, StickyNote, Landmark, CheckCircle2, AlertTriangle,
+  ShoppingCart, Clock, Tag, StickyNote, Landmark, CheckCircle2, AlertTriangle, Eye,
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
+import InvoiceDetailsModal from '@/components/InvoiceDetailsModal';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
+import type { SaleRecord } from '@/lib/types';
 
 export default function CustomerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { customers, sales, products, cheques } = useStore();
+  const { customers, sales, products, cheques, companySettings } = useStore();
+  const [viewingSale, setViewingSale] = useState<SaleRecord | null>(null);
 
   const customer = useMemo(() => customers.find((c) => c.id === id), [customers, id]);
 
   const customerSales = useMemo(
-    () => sales.filter((s) => s.customer === customer?.name).sort((a, b) => b.date.localeCompare(a.date)),
+    () =>
+      sales
+        .filter((s) => (s.customerId && s.customerId === customer?.id) || (customer?.name && s.customer.toLowerCase().trim() === customer.name.toLowerCase().trim()))
+        .sort((a, b) => b.date.localeCompare(a.date)),
     [sales, customer],
   );
 
@@ -236,6 +242,7 @@ export default function CustomerDetail() {
                 <th className="table-th text-right">Paid</th>
                 <th className="table-th text-right">Outstanding</th>
                 <th className="table-th">Status</th>
+                <th className="table-th text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -243,7 +250,13 @@ export default function CustomerDetail() {
                 <tr key={s.id} className="hover:bg-slate-50/50">
                   <td className="table-td font-medium text-slate-800">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span>{s.invoice}</span>
+                      <button
+                        onClick={() => setViewingSale(s)}
+                        className="text-brand-600 hover:text-brand-800 hover:underline font-bold text-left"
+                        title="Click to view purchase details"
+                      >
+                        {s.invoice}
+                      </button>
                       {s.convertedFromPiNumber && (
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
                           From PI: {s.convertedFromPiNumber}
@@ -266,10 +279,19 @@ export default function CustomerDetail() {
                     ) : <span className="text-slate-400">—</span>}
                   </td>
                   <td className="table-td"><StatusBadge status={s.status} /></td>
+                  <td className="table-td text-right">
+                    <button
+                      onClick={() => setViewingSale(s)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 rounded-lg transition border border-brand-200/80"
+                      title="View exact purchased items & details"
+                    >
+                      <Eye className="h-3.5 w-3.5 text-brand-600" /> View Details
+                    </button>
+                  </td>
                 </tr>
               ))}
               {customerSales.length === 0 && (
-                <tr><td colSpan={7} className="table-td text-center text-slate-400 py-8">No invoices yet</td></tr>
+                <tr><td colSpan={8} className="table-td text-center text-slate-400 py-8">No invoices yet</td></tr>
               )}
             </tbody>
           </table>
@@ -464,6 +486,15 @@ export default function CustomerDetail() {
           </table>
         </div>
       </div>
+
+      {/* Purchase Details Modal */}
+      {viewingSale && (
+        <InvoiceDetailsModal
+          sale={viewingSale}
+          onClose={() => setViewingSale(null)}
+          companySettings={companySettings}
+        />
+      )}
     </div>
   );
 }

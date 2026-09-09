@@ -37,12 +37,18 @@ const labelMap: Record<string, string> = {
 };
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
-  const tone = toneMap[status] ?? 'bg-slate-100 text-slate-600';
+  const tone = toneMap[status] ?? 'bg-slate-100 text-slate-600 border-slate-200';
   const label = labelMap[status] ?? (status.charAt(0).toUpperCase() + status.slice(1));
+  const isPulsing = status === 'in-stock' || status === 'paid' || status === 'received' || status === 'low-stock';
 
   return (
-    <span className={`badge ${tone}`}>
-      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+    <span className={`badge ${tone} shadow-xs hover:scale-105 select-none transition-all duration-200`}>
+      <span className="relative flex h-2 w-2 items-center justify-center">
+        {isPulsing && (
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40" />
+        )}
+        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-current" />
+      </span>
       {label}
     </span>
   );

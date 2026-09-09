@@ -21,7 +21,7 @@ type StoreContextValue = {
   companySettings: CompanySettings | null;
   loading: boolean;
   error: string | null;
-  addProduct: (data: ProductFormData) => Promise<void>;
+  addProduct: (data: ProductFormData) => Promise<Product>;
   importProducts: (items: Array<ProductFormData & { initialStock?: number; stock?: number }>) => Promise<number>;
   updateProduct: (id: string, data: ProductFormData & { stock?: number }) => Promise<void>;
   deleteProduct: (id: string) => Promise<void>;
@@ -29,8 +29,9 @@ type StoreContextValue = {
   updateSale: (sale: SaleRecord) => Promise<void>;
   deleteSale: (id: string) => Promise<void>;
   updateSaleStatus: (id: string, status: SaleStatus, amountPaid: number) => Promise<void>;
-  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER', invoice: string, convertedFromNumber?: string, isPoConversion?: boolean) => Promise<void>;
+  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER' | 'RAW INVOICE' | 'RAW PURCHASE', invoice: string, convertedFromNumber?: string, isPoConversion?: boolean) => Promise<void>;
   addPurchase: (po: PurchaseRecord) => Promise<void>;
+  updatePurchase: (po: PurchaseRecord) => Promise<void>;
   deletePurchase: (id: string) => Promise<void>;
   updatePurchasePayment: (id: string, paymentStatus: 'Paid' | 'Pending', amountPaid: number, paymentMethod: import('@/lib/types').PurchasePaymentMethod, chequeNo?: string, chequeBank?: string, chequeDate?: string, chequeStatus?: ChequeStatus) => Promise<void>;
   markPurchaseReceived: (id: string) => Promise<void>;
@@ -55,10 +56,12 @@ type StoreContextValue = {
 const StoreContext = createContext<StoreContextValue | null>(null);
 
 export function getSaleStockMultiplier(docType?: string, status?: string): number {
-  if (status === 'draft' || status === 'cancelled') return 0;
-  if (docType === 'PURCHASE BILL' || docType === 'CREDIT NOTE') return +1;
-  if (docType === 'PURCHASE ORDER' || docType === 'PROFORMA INVOICE') return 0;
-  if (!docType || docType === 'TAX INVOICE' || docType === 'DEBIT NOTE') return -1;
+  const normStatus = (status || '').toLowerCase();
+  const normDocType = (docType || '').toUpperCase();
+  if (normStatus === 'draft' || normStatus === 'cancelled') return 0;
+  if (normDocType === 'PURCHASE BILL' || normDocType === 'CREDIT NOTE' || normDocType === 'RAW PURCHASE') return +1;
+  if (normDocType === 'PURCHASE ORDER' || normDocType === 'PROFORMA INVOICE') return 0;
+  if (!normDocType || normDocType === 'TAX INVOICE' || normDocType === 'DEBIT NOTE' || normDocType === 'RAW INVOICE') return -1;
   return -1;
 }
 
@@ -197,11 +200,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [products, loading, addNotification]);
 
-  const addProduct = useCallback(async (data: ProductFormData) => {
+  const addProduct = useCallback(async (data: ProductFormData): Promise<Product> => {
     const id = `p${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const product = await api.createProduct(id, data);
     setProducts((prev) => [product, ...prev]);
     addNotification('success', 'Product Created', `${product.name} has been added to inventory.`);
+    return product;
   }, [addNotification]);
 
   const importProducts = useCallback(async (
@@ -247,7 +251,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSales((prev) => [sale, ...prev]);
 
     const docType = sale.documentType || 'TAX INVOICE';
-    if (docType === 'PURCHASE BILL') {
+    if (docType === 'RAW INVOICE') {
+      addNotification('success', 'Raw Invoice Recorded', `Raw Invoice ${sale.invoice} recorded. Stock deducted.`);
+    } else if (docType === 'RAW PURCHASE') {
+      addNotification('success', 'Raw Purchase Recorded', `Raw Purchase ${sale.invoice} recorded. Stock added to inventory.`);
+    } else if (docType === 'PURCHASE BILL') {
       addNotification('success', 'Purchase Bill Recorded', `Bill ${sale.invoice} recorded. Items have been added to inventory stock.`);
     } else if (docType === 'CREDIT NOTE') {
       addNotification('success', 'Credit Note Recorded', `Credit Note ${sale.invoice} recorded. Items added back to inventory stock.`);
@@ -285,7 +293,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setProducts((prev) =>
         prev.map((p) => {
           const itemQty = sale.items
-            .filter((item) => !item.isCustom && item.productId === p.id)
+            .filter((item) => !item.isCustom && (item.productId === p.id || item.name.trim().toLowerCase() === p.name.trim().toLowerCase()))
             .reduce((sum, item) => sum + item.qty, 0);
           if (itemQty === 0) return p;
           const stock = Math.max(0, p.stock + (itemQty * mult));
@@ -313,7 +321,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setProducts((prev) =>
           prev.map((p) => {
             const qty = oldSale.items
-              .filter((i) => !i.isCustom && i.productId === p.id)
+              .filter((i) => !i.isCustom && (i.productId === p.id || i.name.trim().toLowerCase() === p.name.trim().toLowerCase()))
               .reduce((sum, i) => sum + i.qty, 0);
             if (qty === 0) return p;
             const stock = Math.max(0, p.stock + (qty * multDiff));
@@ -344,7 +352,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setProducts((prev) =>
         prev.map((p) => {
           const itemQty = sale.items
-            .filter((item) => !item.isCustom && item.productId === p.id)
+            .filter((item) => !item.isCustom && (item.productId === p.id || item.name.trim().toLowerCase() === p.name.trim().toLowerCase()))
             .reduce((sum, item) => sum + item.qty, 0);
           if (itemQty === 0) return p;
           const stock = Math.max(0, p.stock + (itemQty * reverseMult));
@@ -375,8 +383,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
     setProducts((prev) =>
       prev.map((p) => {
-        const oldQty = oldMult !== 0 ? oldSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
-        const newQty = newMult !== 0 ? updatedSale.items.filter((i) => !i.isCustom && i.productId === p.id).reduce((s, i) => s + i.qty, 0) : 0;
+        const oldQty = oldMult !== 0 ? oldSale.items.filter((i) => !i.isCustom && (i.productId === p.id || i.name.trim().toLowerCase() === p.name.trim().toLowerCase())).reduce((s, i) => s + i.qty, 0) : 0;
+        const newQty = newMult !== 0 ? updatedSale.items.filter((i) => !i.isCustom && (i.productId === p.id || i.name.trim().toLowerCase() === p.name.trim().toLowerCase())).reduce((s, i) => s + i.qty, 0) : 0;
         const netChange = (newQty * newMult) - (oldQty * oldMult);
         if (netChange === 0) return p;
         const stock = Math.max(0, p.stock + netChange);
@@ -428,7 +436,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const updateSaleDocumentType = useCallback(async (
     id: string,
-    documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER',
+    documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER' | 'RAW INVOICE' | 'RAW PURCHASE',
     invoice: string,
     convertedFromNumber: string = '',
     isPoConversion: boolean = false
@@ -551,6 +559,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const revertReceivedStock = useCallback(async (po: PurchaseRecord) => {
+    const stockUpdates: { id: string; stock: number; boxCapacity: number; reorderLevel: number }[] = [];
+    setProducts((prev) =>
+      prev.map((p) => {
+        const receivedQty = po.items
+          .filter((item) => item.productId === p.id || item.name.trim().toLowerCase() === p.name.trim().toLowerCase())
+          .reduce((sum, item) => sum + item.qty, 0);
+        if (receivedQty === 0) return p;
+        const stock = Math.max(0, p.stock - receivedQty);
+        stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
+        const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
+        const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
+        return { ...p, stock, boxStatus, status: computed.status };
+      })
+    );
+    for (const u of stockUpdates) {
+      await api.updateProductStock(u.id, u.stock, u.boxCapacity, u.reorderLevel);
+    }
+  }, []);
+
   const addPurchase = useCallback(async (po: PurchaseRecord) => {
     await api.createPurchase(po);
     setPurchases((prev) => [po, ...prev]);
@@ -585,11 +613,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [addNotification]);
 
   const deletePurchase = useCallback(async (id: string) => {
+    const po = purchases.find((p) => p.id === id);
+    if (po && po.status === 'received') {
+      await revertReceivedStock(po);
+    }
     await api.deletePurchase(id);
     setPurchases((prev) => prev.filter((p) => p.id !== id));
     setCheques((prev) => prev.filter((c) => c.purchaseId !== id));
-    addNotification('info', 'Purchase Deleted', 'Purchase record removed.');
-  }, [addNotification]);
+    addNotification('info', 'Purchase Deleted', 'Purchase record removed. Stock adjusted.');
+  }, [purchases, revertReceivedStock, addNotification]);
 
   const updatePurchasePayment = useCallback(async (
     id: string,
@@ -663,9 +695,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!wasReceived && willBeReceived) {
       await applyReceivedStock(updated);
       addNotification('success', 'Inventory Updated', `PO ${po.poNumber} received. Stock added to Main Inventory.`);
+    } else if (wasReceived && !willBeReceived) {
+      await revertReceivedStock(po);
+      addNotification('info', 'Inventory Adjusted', `PO ${po.poNumber} un-received. Stock deducted from Main Inventory.`);
     }
     await api.updatePurchaseStatus(id, status);
-  }, [purchases, applyReceivedStock, addNotification]);
+  }, [purchases, applyReceivedStock, revertReceivedStock, addNotification]);
 
   const addVerification = useCallback(async (v: VerificationRecord) => {
     await api.createVerification(v);

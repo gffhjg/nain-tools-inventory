@@ -249,3 +249,13 @@ ${bodyHTML}
 </body></html>`);
   win.document.close();
 }
+
+export function nextInvoice(existing: { invoice: string }[]): string {
+  const nums = existing
+    .map((s) => parseInt(s.invoice.replace('INV-', ''), 10))
+    .filter((n) => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 2040;
+  return `INV-${max + 1}`;
+}
+
+

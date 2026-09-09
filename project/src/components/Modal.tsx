@@ -41,21 +41,25 @@ export default function Modal({ open = true, onClose, title, subtitle, children,
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
       <div
-        className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in"
+        className="fixed inset-0 bg-slate-950/60 backdrop-blur-md animate-fade-in"
         onClick={onClose}
       />
       <div
-        className={`relative z-10 w-full ${maxW} max-h-[90vh] flex flex-col animate-scale-in rounded-2xl bg-white shadow-2xl overflow-hidden my-auto`}
+        className={`relative z-10 w-full ${maxW} max-h-[90vh] flex flex-col animate-scale-in rounded-2xl bg-white shadow-2xl border border-slate-100 overflow-hidden my-auto`}
       >
+        {/* Accent top gradient line */}
+        <div className="h-1 w-full bg-gradient-to-r from-brand-500 via-indigo-500 to-brand-600 shrink-0" />
+
         {/* Header */}
         <div className="flex items-start justify-between border-b border-slate-100 px-6 py-4 shrink-0 bg-white">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+            <h2 className="text-lg font-bold text-slate-900 tracking-tight">{title}</h2>
             {subtitle && <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>}
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            className="rounded-xl p-2 text-slate-400 transition-all duration-200 hover:bg-slate-100 hover:text-slate-700 hover:rotate-90"
+            title="Close"
           >
             <X className="h-5 w-5" />
           </button>
@@ -66,7 +70,7 @@ export default function Modal({ open = true, onClose, title, subtitle, children,
 
         {/* Footer */}
         {footer && (
-          <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 px-6 py-4 shrink-0 bg-white">
+          <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 px-6 py-4 shrink-0 bg-slate-50/50">
             {footer}
           </div>
         )}

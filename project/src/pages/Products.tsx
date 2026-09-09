@@ -10,6 +10,7 @@ import { productCategories } from '@/lib/constants';
 import type { Product, VerificationRecord } from '@/lib/types';
 import { useStore } from '@/store/AppStore';
 import { downloadCSV, toCSV } from '@/utils/analytics';
+import { smartSearchMatch } from '@/utils/search';
 
 const statusFilters = ['all', 'in-stock', 'low-stock', 'out-of-stock'] as const;
 
@@ -29,7 +30,6 @@ export default function Products() {
 
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [verifyTarget, setVerifyTarget] = useState<Product | null>(null);
@@ -45,31 +45,43 @@ export default function Products() {
   }, [verifications]);
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    const filteredList = items.filter((p) => {
-      const matchesSearch =
-        p.name.toLowerCase().includes(q) ||
-        p.rackNumber.toLowerCase().includes(q) ||
-        p.supplier.toLowerCase().includes(q);
+    const hasSearch = search.trim().length > 0;
+    const scoredList: { product: Product; score: number }[] = [];
+
+    for (const p of items) {
       const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
-    const sorted = [...filteredList].sort((a, b) => {
+      if (!matchesStatus) continue;
+
+      if (!hasSearch) {
+        scoredList.push({ product: p, score: 0 });
+      } else {
+        const match = smartSearchMatch([p.name, p.rackNumber, p.supplier, p.size, p.category], search);
+        if (match.matched) {
+          scoredList.push({ product: p, score: match.score });
+        }
+      }
+    }
+
+    const sorted = [...scoredList].sort((a, b) => {
+      // If user typed a search query, prioritize best matching score first
+      if (hasSearch && Math.abs(b.score - a.score) >= 15) {
+        return b.score - a.score;
+      }
       let cmp = 0;
       switch (sortKey) {
-        case 'name': cmp = a.name.localeCompare(b.name); break;
-        case 'stock': cmp = a.stock - b.stock; break;
-        case 'supplier': cmp = a.supplier.localeCompare(b.supplier); break;
-        case 'rackNumber': cmp = a.rackNumber.localeCompare(b.rackNumber); break;
+        case 'name': cmp = a.product.name.localeCompare(b.product.name); break;
+        case 'stock': cmp = a.product.stock - b.product.stock; break;
+        case 'supplier': cmp = a.product.supplier.localeCompare(b.product.supplier); break;
+        case 'rackNumber': cmp = a.product.rackNumber.localeCompare(b.product.rackNumber); break;
         case 'lastVerification':
-          cmp = (lastVerificationDate[a.id] ?? '0000').localeCompare(lastVerificationDate[b.id] ?? '0000');
+          cmp = (lastVerificationDate[a.product.id] ?? '0000').localeCompare(lastVerificationDate[b.product.id] ?? '0000');
           break;
-        case 'reorderLevel': cmp = a.reorderLevel - b.reorderLevel; break;
-        case 'boxStatus': cmp = (boxStatusOrder[a.boxStatus] ?? 0) - (boxStatusOrder[b.boxStatus] ?? 0); break;
+        case 'reorderLevel': cmp = a.product.reorderLevel - b.product.reorderLevel; break;
+        case 'boxStatus': cmp = (boxStatusOrder[a.product.boxStatus] ?? 0) - (boxStatusOrder[b.product.boxStatus] ?? 0); break;
       }
       return sortDir === 'asc' ? cmp : -cmp;
     });
-    return sorted;
+    return sorted.map((s) => s.product);
   }, [items, search, statusFilter, sortKey, sortDir, lastVerificationDate]);
 
   const summary = useMemo(() => {
@@ -148,6 +160,10 @@ export default function Products() {
               <Download className="h-4 w-4" />
               <span className="hidden sm:inline">Export</span>
             </button>
+            <button className="btn-secondary" onClick={() => navigate('/import')}>
+              <Upload className="h-4 w-4 text-emerald-600" />
+              <span className="hidden sm:inline">Import Excel</span>
+            </button>
             <button className="btn-primary" onClick={openAdd}>
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">Add Product</span>
@@ -157,18 +173,21 @@ export default function Products() {
       />
 
       {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4 xl:grid-cols-3">
-        <div className="card p-4">
-          <p className="text-sm text-slate-500">Est. Total Pieces</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{summary.totalUnits.toLocaleString('en-IN')}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="stagger-1 card-interactive group relative overflow-hidden rounded-2xl bg-white/90 backdrop-blur-md p-5 border border-slate-200/80 shadow-xs before:absolute before:top-0 before:left-0 before:right-0 before:h-1 before:bg-gradient-to-r before:from-brand-500 before:to-indigo-500">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Est. Total Pieces</p>
+          <p className="mt-2 text-2xl font-black text-slate-900 tracking-tight">{summary.totalUnits.toLocaleString('en-IN')}</p>
+          <p className="mt-1 text-xs text-slate-500 font-medium">Across all warehouse inventory</p>
         </div>
-        <div className="card p-4">
-          <p className="text-sm text-slate-500">Low Stock</p>
-          <p className="mt-1 text-2xl font-bold text-warn-600">{summary.lowCount}</p>
+        <div className="stagger-2 card-interactive group relative overflow-hidden rounded-2xl bg-white/90 backdrop-blur-md p-5 border border-slate-200/80 shadow-xs before:absolute before:top-0 before:left-0 before:right-0 before:h-1 before:bg-gradient-to-r before:from-amber-500 before:to-orange-500">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Low Stock</p>
+          <p className="mt-2 text-2xl font-black text-amber-700 tracking-tight">{summary.lowCount} items</p>
+          <p className="mt-1 text-xs text-amber-600 font-medium">Near or below reorder level</p>
         </div>
-        <div className="card p-4">
-          <p className="text-sm text-slate-500">Out of Stock</p>
-          <p className="mt-1 text-2xl font-bold text-err-600">{summary.outCount}</p>
+        <div className="stagger-3 card-interactive group relative overflow-hidden rounded-2xl bg-white/90 backdrop-blur-md p-5 border border-slate-200/80 shadow-xs before:absolute before:top-0 before:left-0 before:right-0 before:h-1 before:bg-gradient-to-r before:from-rose-500 before:to-red-600">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Out of Stock</p>
+          <p className="mt-2 text-2xl font-black text-rose-600 tracking-tight">{summary.outCount} items</p>
+          <p className="mt-1 text-xs text-rose-500 font-medium">Urgent purchase required</p>
         </div>
       </div>
 
@@ -390,27 +409,6 @@ export default function Products() {
         </div>
       </Modal>
 
-      {/* Import modal */}
-      <Modal
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        title="Import Products"
-        subtitle="Bulk import products from an Excel spreadsheet."
-        size="md"
-        footer={<button className="btn-secondary" onClick={() => setImportOpen(false)}>Close</button>}
-      >
-        <div className="space-y-4">
-          <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 py-12">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-50 text-brand-600">
-              <Upload className="h-7 w-7" />
-            </div>
-            <p className="mt-3 text-sm font-semibold text-slate-800">Excel Import Coming Soon</p>
-            <p className="mt-1 max-w-sm text-center text-xs text-slate-500">
-              Drag and drop an .xlsx or .csv file here. The import will accept Product Name, Category, Supplier, Rack Number, Box Capacity, Purchase Price, Selling Price, Reorder Level, and Notes.
-            </p>
-          </div>
-        </div>
-      </Modal>
 
       {/* Physical Verification modal */}
       <VerificationModal

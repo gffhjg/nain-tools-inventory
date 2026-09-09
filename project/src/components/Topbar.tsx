@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Menu, Search, Bell, ChevronDown, Package, Truck, ShoppingCart, Users, Building2, Boxes, CheckCheck, Trash2, AlertTriangle, XCircle, Info, CheckCircle2, Command, X } from 'lucide-react';
 import { useStore } from '@/store/AppStore';
 import { useNotifications, type NotificationType } from '@/store/NotificationStore';
+import { smartSearchMatch } from '@/utils/search';
 
 type SearchResult = {
   id: string;
@@ -11,6 +12,7 @@ type SearchResult = {
   type: 'product' | 'sale' | 'purchase' | 'customer' | 'supplier';
   route: string;
   icon: React.ComponentType<{ className?: string }>;
+  score?: number;
 };
 
 type TopbarProps = {
@@ -61,41 +63,42 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
 
   const results = useMemo<SearchResult[]>(() => {
-    const q = searchQuery.toLowerCase().trim();
+    const q = searchQuery.trim();
     if (!q) return [];
     const matches: SearchResult[] = [];
 
     for (const p of products) {
-      const haystack = `${p.name} ${p.category} ${p.rackNumber} ${p.supplier} ${p.size}`.toLowerCase();
-      if (haystack.includes(q)) {
-        matches.push({ id: p.id, label: p.name, sublabel: `Product · Rack ${p.rackNumber} · ${p.category}`, type: 'product', route: `/products/${p.id}`, icon: Package });
+      const match = smartSearchMatch([p.name, p.category, p.rackNumber, p.supplier, p.size], q);
+      if (match.matched) {
+        matches.push({ id: p.id, label: p.name, sublabel: `Product · Rack ${p.rackNumber} · ${p.category}`, type: 'product', route: `/products/${p.id}`, icon: Package, score: match.score });
       }
     }
     for (const s of sales) {
-      const haystack = `${s.invoice} ${s.customer} ${s.phone}`.toLowerCase();
-      if (haystack.includes(q)) {
-        matches.push({ id: s.id, label: s.invoice, sublabel: `Sale Invoice · ${s.customer} · ${s.date}`, type: 'sale', route: '/sales', icon: ShoppingCart });
+      const match = smartSearchMatch([s.invoice, s.customer, s.phone], q);
+      if (match.matched) {
+        matches.push({ id: s.id, label: s.invoice, sublabel: `Sale Invoice · ${s.customer} · ${s.date}`, type: 'sale', route: '/sales', icon: ShoppingCart, score: match.score });
       }
     }
     for (const p of purchases) {
-      const haystack = `${p.poNumber} ${p.supplier} ${p.supplierInvoice}`.toLowerCase();
-      if (haystack.includes(q)) {
-        matches.push({ id: p.id, label: p.poNumber, sublabel: `Purchase Order · ${p.supplier}`, type: 'purchase', route: `/purchase/${p.id}`, icon: Truck });
+      const match = smartSearchMatch([p.poNumber, p.supplier, p.supplierInvoice], q);
+      if (match.matched) {
+        matches.push({ id: p.id, label: p.poNumber, sublabel: `Purchase Order · ${p.supplier}`, type: 'purchase', route: `/purchase/${p.id}`, icon: Truck, score: match.score });
       }
     }
     for (const c of customers) {
-      const haystack = `${c.name} ${c.phone} ${c.gstin}`.toLowerCase();
-      if (haystack.includes(q)) {
-        matches.push({ id: c.id, label: c.name, sublabel: `Customer · ${c.phone}${c.gstin ? ' · GST: ' + c.gstin : ''}`, type: 'customer', route: `/customers/${c.id}`, icon: Users });
+      const match = smartSearchMatch([c.name, c.phone, c.gstin], q);
+      if (match.matched) {
+        matches.push({ id: c.id, label: c.name, sublabel: `Customer · ${c.phone}${c.gstin ? ' · GST: ' + c.gstin : ''}`, type: 'customer', route: `/customers/${c.id}`, icon: Users, score: match.score });
       }
     }
     for (const s of suppliers) {
-      const haystack = `${s.name} ${s.phone} ${s.gstin}`.toLowerCase();
-      if (haystack.includes(q)) {
-        matches.push({ id: s.id, label: s.name, sublabel: `Supplier · ${s.phone}${s.gstin ? ' · GST: ' + s.gstin : ''}`, type: 'supplier', route: `/suppliers/${s.id}`, icon: Building2 });
+      const match = smartSearchMatch([s.name, s.phone, s.gstin], q);
+      if (match.matched) {
+        matches.push({ id: s.id, label: s.name, sublabel: `Supplier · ${s.phone}${s.gstin ? ' · GST: ' + s.gstin : ''}`, type: 'supplier', route: `/suppliers/${s.id}`, icon: Building2, score: match.score });
       }
     }
 
+    matches.sort((a, b) => (b.score || 0) - (a.score || 0));
     return matches.slice(0, 10);
   }, [searchQuery, products, sales, purchases, customers, suppliers]);
 
