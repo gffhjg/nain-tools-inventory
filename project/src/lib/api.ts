@@ -650,6 +650,22 @@ export const api = {
   // ---- Sales ----
   async getSales(): Promise<SaleRecord[]> {
     const db = await getDb();
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    // Auto-heal any completed/converted invoices that were left in 'draft' status by legacy bugs
+    try {
+      await db.query(`
+        UPDATE sales 
+        SET status = CASE WHEN status = 'draft' THEN 'pending' ELSE status END,
+            converted_at = CASE WHEN (converted_at IS NULL OR converted_at = '') THEN $1 ELSE converted_at END
+        WHERE document_type = 'TAX INVOICE' AND (
+          (converted_from_pi_number IS NOT NULL AND converted_from_pi_number != '') OR
+          (converted_from_po_number IS NOT NULL AND converted_from_po_number != '')
+        )
+      `, [today]);
+    } catch {
+      // Ignore migration error if columns are not ready yet
+    }
     const { rows } = await db.query<SaleRow>('SELECT * FROM sales ORDER BY date DESC, created_at DESC');
     const ids = rows.map((r) => r.id);
     const itemsMap = await fetchSaleItems(ids);
@@ -706,17 +722,38 @@ export const api = {
   async updateSaleStatus(id: string, status: SaleRecord['status'], amountPaid: number): Promise<void> {
     validateNonNegative(amountPaid, 'Amount paid');
     const db = await getDb();
-    await db.query('UPDATE sales SET status=$1, amount_paid=$2 WHERE id=$3', [status, amountPaid, id]);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    await db.query(
+      "UPDATE sales SET status=$1, amount_paid=$2, converted_at = CASE WHEN status = 'draft' AND $1 != 'draft' AND (converted_at IS NULL OR converted_at = '') THEN $3 ELSE converted_at END WHERE id=$4",
+      [status, amountPaid, today, id]
+    );
   },
 
-  async updateSaleDocument(id: string, documentType: string, invoice: string, convertedFromNumber: string = '', isPoConversion: boolean = false): Promise<void> {
+  async updateSaleDocument(
+    id: string,
+    documentType: string,
+    invoice: string,
+    convertedFromNumber: string = '',
+    isPoConversion: boolean = false,
+    status: SaleRecord['status'] = 'pending',
+    newDate?: string
+  ): Promise<void> {
     validateNonEmpty(invoice, 'Invoice number');
     const db = await getDb();
-    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const dateToSet = newDate || today;
     if (isPoConversion) {
-      await db.query('UPDATE sales SET document_type = $1, invoice = $2, converted_from_po_number = $3, converted_at = $4 WHERE id = $5', [documentType, invoice, convertedFromNumber, convertedFromNumber ? today : '', id]);
+      await db.query(
+        'UPDATE sales SET document_type = $1, invoice = $2, status = $3, date = $4, converted_from_po_number = $5, converted_at = $6 WHERE id = $7',
+        [documentType, invoice, status, dateToSet, convertedFromNumber, convertedFromNumber ? today : '', id]
+      );
     } else {
-      await db.query('UPDATE sales SET document_type = $1, invoice = $2, converted_from_pi_number = $3, converted_at = $4 WHERE id = $5', [documentType, invoice, convertedFromNumber, convertedFromNumber ? today : '', id]);
+      await db.query(
+        'UPDATE sales SET document_type = $1, invoice = $2, status = $3, date = $4, converted_from_pi_number = $5, converted_at = $6 WHERE id = $7',
+        [documentType, invoice, status, dateToSet, convertedFromNumber, convertedFromNumber ? today : '', id]
+      );
     }
   },
 

@@ -29,7 +29,7 @@ type StoreContextValue = {
   updateSale: (sale: SaleRecord) => Promise<void>;
   deleteSale: (id: string) => Promise<void>;
   updateSaleStatus: (id: string, status: SaleStatus, amountPaid: number) => Promise<void>;
-  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER' | 'RAW INVOICE' | 'RAW PURCHASE', invoice: string, convertedFromNumber?: string, isPoConversion?: boolean) => Promise<void>;
+  updateSaleDocumentType: (id: string, documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER' | 'RAW INVOICE' | 'RAW PURCHASE', invoice: string, convertedFromNumber?: string, isPoConversion?: boolean, overrideStatus?: SaleStatus, overrideDate?: string) => Promise<void>;
   addPurchase: (po: PurchaseRecord) => Promise<void>;
   updatePurchase: (po: PurchaseRecord) => Promise<void>;
   deletePurchase: (id: string) => Promise<void>;
@@ -439,12 +439,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     documentType: 'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PURCHASE BILL' | 'PROFORMA INVOICE' | 'PURCHASE ORDER' | 'RAW INVOICE' | 'RAW PURCHASE',
     invoice: string,
     convertedFromNumber: string = '',
-    isPoConversion: boolean = false
+    isPoConversion: boolean = false,
+    overrideStatus?: SaleStatus,
+    overrideDate?: string
   ) => {
     const oldSale = sales.find((s) => s.id === id);
     if (oldSale) {
       const oldMult = getSaleStockMultiplier(oldSale.documentType, oldSale.status);
-      const newStatus: SaleStatus = documentType === 'TAX INVOICE' && (oldSale.status === 'draft' || oldSale.documentType === 'PURCHASE ORDER') ? 'pending' : oldSale.status;
+      const newStatus: SaleStatus = overrideStatus || (
+        documentType === 'TAX INVOICE' && (oldSale.status === 'draft' || oldSale.documentType === 'PURCHASE ORDER')
+          ? (oldSale.amountPaid >= oldSale.grandTotal && oldSale.grandTotal > 0 ? 'paid' : 'pending')
+          : oldSale.status
+      );
       const newMult = getSaleStockMultiplier(documentType, newStatus);
       const multDiff = newMult - oldMult;
 
@@ -468,8 +474,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      await api.updateSaleDocument(id, documentType, invoice, convertedFromNumber, isPoConversion);
-      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const newDate = overrideDate || today;
+
+      await api.updateSaleDocument(id, documentType, invoice, convertedFromNumber, isPoConversion, newStatus, newDate);
+
       setSales((prev) =>
         prev.map((s) =>
           s.id === id
@@ -478,8 +488,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 documentType,
                 invoice,
                 status: newStatus,
+                date: newDate,
                 ...(isPoConversion ? { convertedFromPoNumber: convertedFromNumber } : { convertedFromPiNumber: convertedFromNumber }),
-                convertedAt: convertedFromNumber ? today : s.convertedAt,
+                convertedAt: convertedFromNumber ? today : (s.convertedAt || today),
               }
             : s,
         ),

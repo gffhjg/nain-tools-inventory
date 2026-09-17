@@ -5,27 +5,27 @@ type StatusBadgeProps = {
 
 const toneMap: Record<string, string> = {
   // sale statuses
-  paid: 'bg-accent-100 text-accent-700',
-  'partially-paid': 'bg-amber-100 text-amber-600',
-  pending: 'bg-warn-100 text-warn-600',
-  draft: 'bg-slate-100 text-slate-600',
-  cancelled: 'bg-err-100 text-err-600',
-  overdue: 'bg-err-100 text-err-600',
+  paid: 'bg-emerald-50 text-emerald-700 border-emerald-200/80',
+  'partially-paid': 'bg-amber-50 text-amber-700 border-amber-200/80',
+  pending: 'bg-amber-50 text-amber-700 border-amber-200/80',
+  draft: 'bg-slate-50 text-slate-600 border-slate-200/80',
+  cancelled: 'bg-rose-50 text-rose-700 border-rose-200/80',
+  overdue: 'bg-rose-50 text-rose-700 border-rose-200/80',
   // purchase statuses
-  received: 'bg-accent-100 text-accent-700',
-  ordered: 'bg-brand-100 text-brand-700',
-  'partially-received': 'bg-amber-100 text-amber-600',
+  received: 'bg-emerald-50 text-emerald-700 border-emerald-200/80',
+  ordered: 'bg-blue-50 text-blue-700 border-blue-200/80',
+  'partially-received': 'bg-amber-50 text-amber-700 border-amber-200/80',
   // stock
-  'in-stock': 'bg-accent-100 text-accent-700',
-  'low-stock': 'bg-warn-100 text-warn-600',
-  'out-of-stock': 'bg-err-100 text-err-600',
+  'in-stock': 'bg-emerald-50 text-emerald-700 border-emerald-200/80',
+  'low-stock': 'bg-amber-50 text-amber-700 border-amber-200/80',
+  'out-of-stock': 'bg-rose-50 text-rose-700 border-rose-200/80',
   // box status
-  'Full': 'bg-accent-100 text-accent-700',
-  '75% Full': 'bg-brand-100 text-brand-700',
-  'Half': 'bg-amber-100 text-amber-600',
-  'Very Low': 'bg-orange-100 text-orange-600',
-  'Almost Empty': 'bg-err-100 text-err-600',
-  'Empty': 'bg-slate-200 text-slate-600',
+  'Full': 'bg-emerald-50 text-emerald-700 border-emerald-200/80',
+  '75% Full': 'bg-blue-50 text-blue-700 border-blue-200/80',
+  'Half': 'bg-amber-50 text-amber-700 border-amber-200/80',
+  'Very Low': 'bg-orange-50 text-orange-700 border-orange-200/80',
+  'Almost Empty': 'bg-rose-50 text-rose-700 border-rose-200/80',
+  'Empty': 'bg-slate-100 text-slate-600 border-slate-200/80',
 };
 
 const labelMap: Record<string, string> = {
@@ -37,12 +37,12 @@ const labelMap: Record<string, string> = {
 };
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
-  const tone = toneMap[status] ?? 'bg-slate-100 text-slate-600 border-slate-200';
+  const tone = toneMap[status] ?? 'bg-slate-50 text-slate-600 border-slate-200/80';
   const label = labelMap[status] ?? (status.charAt(0).toUpperCase() + status.slice(1));
   const isPulsing = status === 'in-stock' || status === 'paid' || status === 'received' || status === 'low-stock';
 
   return (
-    <span className={`badge ${tone} shadow-xs hover:scale-105 select-none transition-all duration-200`}>
+    <span className={`badge ${tone} border shadow-xs hover:scale-105 select-none transition-all duration-200`}>
       <span className="relative flex h-2 w-2 items-center justify-center">
         {isPulsing && (
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40" />

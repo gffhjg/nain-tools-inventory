@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   ShoppingCart, Package, TrendingUp, AlertTriangle, Download, Truck,
   IndianRupee, XCircle, FileText, ClipboardCheck, ArrowRight, Clock,
@@ -21,11 +21,32 @@ export default function Dashboard() {
     'todaySales' | 'todayPurchases' | 'todayCollections' | 'receivables' | 'supplierPayables' | 'lowStock' | 'outOfStock' | null
   >(null);
 
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const { todayLocal, todayUtc } = useMemo(() => {
+    const d = new Date();
+    const todayLocal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const todayUtc = d.toISOString().slice(0, 10);
+    return { todayLocal, todayUtc };
+  }, []);
+
+  const isToday = useCallback(
+    (dateStr?: string) => {
+      if (!dateStr) return false;
+      const clean = dateStr.slice(0, 10);
+      return clean === todayLocal || clean === todayUtc;
+    },
+    [todayLocal, todayUtc]
+  );
+
+  const isSaleToday = useCallback(
+    (s: { date?: string; convertedAt?: string }) => {
+      return isToday(s.date) || isToday(s.convertedAt);
+    },
+    [isToday]
+  );
 
   const claimableCheques = useMemo(
-    () => (cheques || []).filter((c) => c.status === 'pending_clearance' && c.chequeDate <= todayStr),
-    [cheques, todayStr]
+    () => (cheques || []).filter((c) => c.status === 'pending_clearance' && (c.chequeDate <= todayLocal || c.chequeDate <= todayUtc)),
+    [cheques, todayLocal, todayUtc]
   );
   const claimableTotal = useMemo(
     () => claimableCheques.reduce((sum, c) => sum + c.amount, 0),
@@ -35,19 +56,19 @@ export default function Dashboard() {
   const stats = useMemo(() => {
     // Today's Sales
     const todaySalesList = sales.filter(
-      (s) => s.date === todayStr && s.status !== 'draft' && s.status !== 'cancelled'
+      (s) => isSaleToday(s) && s.status !== 'draft' && s.status !== 'cancelled'
     );
     const todaySalesTotal = todaySalesList.reduce((acc, s) => acc + s.grandTotal, 0);
 
     // Today's Purchases
     const todayPurchasesList = purchases.filter(
-      (p) => p.date === todayStr && p.status !== 'cancelled'
+      (p) => isToday(p.date) && p.status !== 'cancelled'
     );
     const todayPurchasesTotal = todayPurchasesList.reduce((acc, p) => acc + p.grandTotal, 0);
 
     // Today's Collections (Payments collected on sales today)
     const todayCollectionsTotal = sales
-      .filter((s) => s.date === todayStr && s.status !== 'cancelled')
+      .filter((s) => isSaleToday(s) && s.status !== 'cancelled')
       .reduce((acc, s) => acc + (s.amountPaid || 0), 0);
 
     // Total Revenue & Profit
@@ -89,22 +110,22 @@ export default function Dashboard() {
       lowStockCount,
       outOfStockCount,
     };
-  }, [sales, products, purchases, todayStr]);
+  }, [sales, products, purchases, isSaleToday, isToday]);
 
   // Data lists for modals
   const todaySalesItems = useMemo(
-    () => sales.filter((s) => s.date === todayStr && s.status !== 'cancelled'),
-    [sales, todayStr]
+    () => sales.filter((s) => isSaleToday(s) && s.status !== 'draft' && s.status !== 'cancelled'),
+    [sales, isSaleToday]
   );
 
   const todayPurchasesItems = useMemo(
-    () => purchases.filter((p) => p.date === todayStr && p.status !== 'cancelled'),
-    [purchases, todayStr]
+    () => purchases.filter((p) => isToday(p.date) && p.status !== 'cancelled'),
+    [purchases, isToday]
   );
 
   const todayCollectionsItems = useMemo(
-    () => sales.filter((s) => s.date === todayStr && (s.amountPaid || 0) > 0),
-    [sales, todayStr]
+    () => sales.filter((s) => isSaleToday(s) && (s.amountPaid || 0) > 0 && s.status !== 'cancelled'),
+    [sales, isSaleToday]
   );
 
   const receivablesItems = useMemo(
@@ -711,15 +732,36 @@ export default function Dashboard() {
                   ) : (
                     todaySalesItems.map((s) => (
                       <tr key={s.id} className="hover:bg-slate-50">
-                        <td className="px-3.5 py-3 font-bold text-brand-600">{s.invoice}</td>
+                        <td className="px-3.5 py-3 font-bold text-brand-600">
+                          <div className="flex items-center gap-1.5">
+                            <span>{s.invoice}</span>
+                            {s.documentType === 'PROFORMA INVOICE' && (
+                              <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[9.5px] font-extrabold text-purple-700">Quote / PI</span>
+                            )}
+                            {s.documentType === 'PURCHASE ORDER' && (
+                              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[9.5px] font-extrabold text-blue-700">Company PO</span>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-3.5 py-3 font-bold text-slate-900">{s.customer}</td>
                         <td className="px-3.5 py-3 font-mono text-slate-600">{s.date}</td>
                         <td className="px-3.5 py-3 font-black text-slate-900">{money(s.grandTotal)}</td>
                         <td className="px-3.5 py-3"><StatusBadge status={s.status} /></td>
                         <td className="px-3.5 py-3 text-right">
-                          <button onClick={() => printInvoice(s)} className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg">
-                            <Printer className="h-4 w-4" />
-                          </button>
+                          <div className="flex items-center justify-end gap-1">
+                            {(s.documentType === 'PROFORMA INVOICE' || s.documentType === 'PURCHASE ORDER') && (
+                              <button
+                                onClick={() => { setActiveModal(null); navigate('/sales?tab=orders'); }}
+                                className="px-2 py-1 rounded-md text-[11px] font-extrabold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200"
+                                title="Open in Orders & Estimates"
+                              >
+                                View Order
+                              </button>
+                            )}
+                            <button onClick={() => printInvoice(s)} className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg" title="Print">
+                              <Printer className="h-4 w-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -727,9 +769,22 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button className="btn-secondary" onClick={() => setActiveModal(null)}>Close</button>
-              <button className="btn-primary" onClick={() => { setActiveModal(null); navigate('/sales'); }}>Sales Page</button>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+              <span className="text-xs text-slate-500 font-medium">
+                💡 Quotes &amp; Purchase Orders are housed in <strong>Orders &amp; Estimates</strong> until converted into tax invoices.
+              </span>
+              <div className="flex items-center gap-2">
+                <button className="btn-secondary" onClick={() => setActiveModal(null)}>Close</button>
+                <button
+                  className="btn-secondary bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 font-bold"
+                  onClick={() => { setActiveModal(null); navigate('/sales?tab=orders'); }}
+                >
+                  View Orders &amp; Quotes
+                </button>
+                <button className="btn-primary" onClick={() => { setActiveModal(null); navigate('/sales'); }}>
+                  View All Invoices
+                </button>
+              </div>
             </div>
           </div>
         </Modal>

@@ -1,15 +1,61 @@
 import type { Product, SaleRecord, PurchaseRecord } from '@/lib/types';
 
-export type DateRange = '7d' | '30d' | '90d' | 'all';
+export type DateRange = 'today' | '3d' | '7d' | '14d' | '30d' | '90d' | 'all';
 
-export function filterByDateRange<T extends { date: string }>(items: T[], range: DateRange): T[] {
-  if (range === 'all') return items;
+export function getDaysAgo(dateStr: string): number {
+  if (!dateStr) return 0;
   const now = new Date();
-  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
+  const d = new Date(dateStr + (dateStr.length <= 10 ? 'T00:00:00' : ''));
+  const diffTime = now.getTime() - d.getTime();
+  return Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+}
+
+export function formatRelativeDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const days = getDaysAgo(dateStr);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return `${days} days ago`;
+}
+
+export function getDateRangeBounds(range: DateRange): { fromDate: string; toDate: string; days: number | null } {
+  const now = new Date();
+  const toDate = now.toISOString().slice(0, 10);
+  if (range === 'all') {
+    return { fromDate: '1970-01-01', toDate, days: null };
+  }
+  if (range === 'today') {
+    return { fromDate: toDate, toDate, days: 0 };
+  }
+  const days = range === '3d' ? 3 : range === '7d' ? 7 : range === '14d' ? 14 : range === '30d' ? 30 : 90;
   const cutoff = new Date(now);
   cutoff.setDate(cutoff.getDate() - days);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
-  return items.filter((i) => i.date >= cutoffStr);
+  const fromDate = cutoff.toISOString().slice(0, 10);
+  return { fromDate, toDate, days };
+}
+
+export function getDateRangeLabel(range: DateRange): string {
+  if (range === 'all') return 'All Time';
+  const bounds = getDateRangeBounds(range);
+  if (range === 'today') {
+    const todayObj = new Date(bounds.toDate + 'T00:00:00');
+    return `Today (${todayObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })})`;
+  }
+  const fromDateObj = new Date(bounds.fromDate + 'T00:00:00');
+  const toDateObj = new Date(bounds.toDate + 'T00:00:00');
+  const fromStr = fromDateObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  const toStr = toDateObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return `${fromStr} – ${toStr} (${bounds.days} Days)`;
+}
+
+export function filterByDateRange<T extends { date: string; convertedAt?: string }>(items: T[], range: DateRange): T[] {
+  if (range === 'all') return items;
+  const { fromDate } = getDateRangeBounds(range);
+  return items.filter((i) => {
+    if (i.date && i.date >= fromDate) return true;
+    if (i.convertedAt && i.convertedAt.slice(0, 10) >= fromDate) return true;
+    return false;
+  });
 }
 
 export function money(n: number): string {

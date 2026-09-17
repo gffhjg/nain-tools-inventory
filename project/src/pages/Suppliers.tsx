@@ -1,11 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search, FileText, Trash2, Edit2, Eye, Truck, Building2, AlertTriangle } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
-import type { Supplier } from '@/lib/types';
+import type { Supplier, PurchaseRecord } from '@/lib/types';
 
 const empty: Supplier = { id: '', name: '', contactPerson: '', phone: '', gstin: '', email: '', address: '', state: '', stateCode: '', notes: '' };
 
@@ -13,31 +13,60 @@ export default function Suppliers() {
   const { suppliers, purchases, addSupplier, updateSupplier, deleteSupplier } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [form, setForm] = useState<Supplier>(empty);
   const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null);
 
+  const purchasesBySupplier = useMemo(() => {
+    const map = new Map<string, PurchaseRecord[]>();
+    for (const p of purchases) {
+      if (p.supplier) {
+        let list = map.get(p.supplier);
+        if (!list) { list = []; map.set(p.supplier, list); }
+        list.push(p);
+      }
+    }
+    return map;
+  }, [purchases]);
+
   const enriched = useMemo(() => {
     return suppliers.map((s) => {
-      const supplierPurchases = purchases.filter((p) => p.supplier === s.name);
+      const supplierPurchases = purchasesBySupplier.get(s.name) || [];
       const totalSpent = supplierPurchases.reduce((sum, p) => sum + p.grandTotal, 0);
       const outstanding = supplierPurchases
         .filter((p) => p.paymentStatus === 'Pending')
         .reduce((sum, p) => sum + p.grandTotal, 0);
-      const lastPurchase = supplierPurchases.length > 0
-        ? supplierPurchases.sort((a, b) => b.date.localeCompare(a.date))[0]
-        : null;
-      return { ...s, totalSpent, outstanding, poCount: supplierPurchases.length, lastPurchaseDate: lastPurchase?.date ?? null };
+      let latestDate: string | null = null;
+      for (const p of supplierPurchases) {
+        if (!latestDate || (p.date && p.date > latestDate)) {
+          latestDate = p.date;
+        }
+      }
+      return { ...s, totalSpent, outstanding, poCount: supplierPurchases.length, lastPurchaseDate: latestDate };
     });
-  }, [suppliers, purchases]);
+  }, [suppliers, purchasesBySupplier]);
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
+    const q = deferredSearch.toLowerCase().trim();
     return enriched.filter(
       (s) => s.name.toLowerCase().includes(q) || s.phone.toLowerCase().includes(q) || s.gstin.toLowerCase().includes(q),
     );
-  }, [enriched, search]);
+  }, [enriched, deferredSearch]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [deferredSearch, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginatedSuppliers = useMemo(() => {
+    if (pageSize >= 99999) return filtered;
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
 
   const openAdd = () => {
     setEditing(null);
@@ -133,7 +162,7 @@ export default function Suppliers() {
 
       <div className="mt-4 card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">Company Name</th>
@@ -146,7 +175,7 @@ export default function Suppliers() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((s) => (
+              {paginatedSuppliers.map((s) => (
                 <tr key={s.id} className="cursor-pointer transition hover:bg-slate-50/50" onClick={() => navigate(`/suppliers/${s.id}`)}>
                   <td className="table-td font-semibold text-slate-800">{s.name}</td>
                   <td className="table-td text-slate-600">{s.phone}</td>
@@ -195,6 +224,58 @@ export default function Suppliers() {
               <p className="mt-3 text-sm font-medium text-slate-600">No suppliers found</p>
             </div>
           )}
+          <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-100 px-4 py-3 gap-3">
+            <div className="flex items-center gap-4 text-xs text-slate-500">
+              <p>
+                Showing{' '}
+                <span className="font-semibold text-slate-700">
+                  {filtered.length === 0 ? 0 : (page - 1) * pageSize + 1}
+                </span>{' '}
+                to{' '}
+                <span className="font-semibold text-slate-700">
+                  {Math.min(filtered.length, page * pageSize)}
+                </span>{' '}
+                of <span className="font-semibold text-slate-700">{filtered.length}</span> suppliers
+                {filtered.length !== suppliers.length && (
+                  <span className="text-slate-400 ml-1">(filtered from {suppliers.length})</span>
+                )}
+              </p>
+              <div className="flex items-center gap-1.5">
+                <span>Per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-xs focus:border-brand-500 focus:outline-none"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={250}>250</option>
+                  <option value={99999}>All</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <span className="text-xs font-semibold text-slate-600 px-2">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

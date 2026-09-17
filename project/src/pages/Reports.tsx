@@ -46,6 +46,10 @@ import {
   money,
   escapeHtml,
   nextInvoice,
+  getDateRangeBounds,
+  getDateRangeLabel,
+  getDaysAgo,
+  formatRelativeDate,
   type DateRange,
 } from '@/utils/analytics';
 
@@ -67,6 +71,7 @@ const reportTypes: { id: ReportType; label: string; icon: React.ComponentType<{ 
 
 const dateRanges: { id: DateRange; label: string }[] = [
   { id: '7d', label: '7 Days' },
+  { id: '14d', label: '14 Days' },
   { id: '30d', label: '30 Days' },
   { id: '90d', label: '90 Days' },
   { id: 'all', label: 'All Time' },
@@ -83,12 +88,8 @@ export default function Reports() {
 
   const filteredCheques = useMemo(() => {
     if (dateRange === 'all') return cheques;
-    const now = new Date();
-    const days = dateRange === '7d' ? 7 : dateRange === '30d' ? 30 : 90;
-    const cutoff = new Date(now);
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
-    return cheques.filter((c) => c.chequeDate >= cutoffStr);
+    const { fromDate } = getDateRangeBounds(dateRange);
+    return cheques.filter((c) => c.chequeDate >= fromDate);
   }, [cheques, dateRange]);
 
   const stats = useMemo(() => computeStats(products, filteredSales, filteredPurchases), [products, filteredSales, filteredPurchases]);
@@ -510,8 +511,11 @@ export default function Reports() {
               );
             })}
           </div>
-          <div className="flex items-center gap-2">
-            <Calendar className="h-4 w-4 text-slate-400" />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-50 border border-brand-200/80 text-xs font-bold text-brand-700 shadow-2xs">
+              <Calendar className="h-3.5 w-3.5 text-brand-600" />
+              <span>{getDateRangeLabel(dateRange)}</span>
+            </div>
             <div className="flex rounded-xl border border-slate-200 bg-slate-50 p-1">
               {dateRanges.map((r) => (
                 <button
@@ -519,7 +523,7 @@ export default function Reports() {
                   onClick={() => setDateRange(r.id)}
                   className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                     dateRange === r.id
-                      ? 'bg-white text-brand-600 shadow-sm'
+                      ? 'bg-white text-brand-600 shadow-sm font-bold'
                       : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
@@ -551,14 +555,38 @@ export default function Reports() {
 
       {/* Report body */}
       <div className="mt-6">
-        {activeReport === 'sales' && <SalesReport sales={filteredSales} />}
-        {activeReport === 'proforma' && <ProformaReport sales={filteredSales} companySettings={companySettings} />}
-        {activeReport === 'purchase' && <PurchaseReport purchases={filteredPurchases} />}
+        {activeReport === 'sales' && (
+          <SalesReport
+            sales={filteredSales}
+            dateRange={dateRange}
+            onSelectRange={setDateRange}
+            allSales={sales}
+          />
+        )}
+        {activeReport === 'proforma' && (
+          <ProformaReport
+            sales={filteredSales}
+            companySettings={companySettings}
+            dateRange={dateRange}
+            onSelectRange={setDateRange}
+            allSales={sales}
+          />
+        )}
+        {activeReport === 'purchase' && (
+          <PurchaseReport
+            purchases={filteredPurchases}
+            dateRange={dateRange}
+            onSelectRange={setDateRange}
+            allPurchases={purchases}
+          />
+        )}
         {activeReport === 'cheques' && (
           <ChequesReport
             cheques={filteredCheques}
             onClear={confirmChequeClearance}
             onBounce={confirmChequeBounce}
+            dateRange={dateRange}
+            onSelectRange={setDateRange}
           />
         )}
         {activeReport === 'inventory' && <InventoryReport products={products} />}
@@ -850,14 +878,37 @@ function ProformaReport({ sales, companySettings }: { sales: SaleRecord[]; compa
   );
 }
 
-/* ---------- Report sub-components ---------- */
+function SalesReport({
+  sales,
+  dateRange,
+  onSelectRange,
+  allSales,
+}: {
+  sales: SaleRecord[];
+  dateRange?: DateRange;
+  onSelectRange?: (range: DateRange) => void;
+  allSales?: SaleRecord[];
+}) {
+  const latestSaleDate = useMemo(() => {
+    if (!allSales || allSales.length === 0) return undefined;
+    const sorted = [...allSales].filter((s) => s.date).sort((a, b) => b.date.localeCompare(a.date));
+    return sorted[0]?.date;
+  }, [allSales]);
 
-function SalesReport({ sales }: { sales: SaleRecord[] }) {
-  if (sales.length === 0) return <EmptyReport />;
+  if (sales.length === 0) {
+    return (
+      <EmptyReport
+        dateRange={dateRange}
+        onSelectRange={onSelectRange}
+        latestDate={latestSaleDate}
+        entityName="sales orders"
+      />
+    );
+  }
   return (
     <div className="card overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[800px]">
+        <table className="w-full">
           <thead className="bg-slate-50/80">
             <tr>
               <th className="table-th">Invoice</th>
@@ -903,12 +954,37 @@ function SalesReport({ sales }: { sales: SaleRecord[] }) {
   );
 }
 
-function PurchaseReport({ purchases }: { purchases: PurchaseRecord[] }) {
-  if (purchases.length === 0) return <EmptyReport />;
+function PurchaseReport({
+  purchases,
+  dateRange,
+  onSelectRange,
+  allPurchases,
+}: {
+  purchases: PurchaseRecord[];
+  dateRange?: DateRange;
+  onSelectRange?: (range: DateRange) => void;
+  allPurchases?: PurchaseRecord[];
+}) {
+  const latestPurchaseDate = useMemo(() => {
+    if (!allPurchases || allPurchases.length === 0) return undefined;
+    const sorted = [...allPurchases].filter((p) => p.date).sort((a, b) => b.date.localeCompare(a.date));
+    return sorted[0]?.date;
+  }, [allPurchases]);
+
+  if (purchases.length === 0) {
+    return (
+      <EmptyReport
+        dateRange={dateRange}
+        onSelectRange={onSelectRange}
+        latestDate={latestPurchaseDate}
+        entityName="purchase orders"
+      />
+    );
+  }
   return (
     <div className="card overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[800px]">
+        <table className="w-full">
           <thead className="bg-slate-50/80">
             <tr>
               <th className="table-th">PO Number</th>
@@ -958,10 +1034,18 @@ function PurchaseReport({ purchases }: { purchases: PurchaseRecord[] }) {
 }
 
 function InventoryReport({ products }: { products: Product[] }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+  const totalPages = Math.max(1, Math.ceil(products.length / pageSize));
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return products.slice(start, start + pageSize);
+  }, [products, page, pageSize]);
+
   return (
     <div className="card overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[800px]">
+        <table className="w-full">
           <thead className="bg-slate-50/80">
             <tr>
               <th className="table-th">Product</th>
@@ -978,7 +1062,7 @@ function InventoryReport({ products }: { products: Product[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {products.map((p) => (
+            {paginated.map((p) => (
               <tr key={p.id} className="transition hover:bg-slate-50/50">
                 <td className="table-td font-semibold text-slate-800">{p.name}</td>
                 <td className="table-td text-slate-600">{p.supplier}</td>
@@ -1005,6 +1089,35 @@ function InventoryReport({ products }: { products: Product[] }) {
           </tfoot>
         </table>
       </div>
+
+      {products.length > pageSize && (
+        <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-100 px-4 py-3 gap-2">
+          <p className="text-xs text-slate-500">
+            Showing <span className="font-semibold text-slate-700">{(page - 1) * pageSize + 1}</span> to{' '}
+            <span className="font-semibold text-slate-700">{Math.min(products.length, page * pageSize)}</span> of{' '}
+            <span className="font-semibold text-slate-700">{products.length}</span> products
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="btn-secondary px-3 py-1 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <span className="text-xs font-semibold text-slate-600 px-2">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="btn-secondary px-3 py-1 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1049,7 +1162,7 @@ function ProfitReport({ sales, products }: { sales: SaleRecord[]; products: Prod
       {/* Detail table */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">Invoice</th>
@@ -1180,7 +1293,7 @@ function TopSellingReport({ topProducts }: { topProducts: { name: string; sold: 
       {/* Detail table */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[500px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">#</th>
@@ -1238,7 +1351,7 @@ function GSTReport({ sales, purchases }: { sales: SaleRecord[]; purchases: Purch
       </div>
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">Type</th>
@@ -1285,12 +1398,69 @@ function GSTReport({ sales, purchases }: { sales: SaleRecord[]; purchases: Purch
   );
 }
 
-function EmptyReport() {
+function EmptyReport({
+  dateRange,
+  onSelectRange,
+  latestDate,
+  entityName = 'transactions',
+}: {
+  dateRange?: DateRange;
+  onSelectRange?: (range: DateRange) => void;
+  latestDate?: string;
+  entityName?: string;
+} = {}) {
+  const isDateFiltered = dateRange && dateRange !== 'all';
+  const rangeLabel = dateRange ? getDateRangeLabel(dateRange) : '';
+  const daysAgo = latestDate ? getDaysAgo(latestDate) : null;
+
   return (
-    <div className="card p-12 text-center">
-      <FileText className="mx-auto h-10 w-10 text-slate-300" />
-      <p className="mt-3 text-base font-semibold text-slate-700">No data for this period</p>
-      <p className="text-sm text-slate-500">Try selecting a different date range.</p>
+    <div className="card p-10 text-center max-w-lg mx-auto my-6 border border-slate-200/90 rounded-2xl bg-white shadow-xs">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 mb-3">
+        <Calendar className="h-6 w-6" />
+      </div>
+      <p className="text-base font-bold text-slate-800">No {entityName} for this period</p>
+
+      {isDateFiltered ? (
+        <div className="mt-2.5 space-y-3 text-xs text-slate-600">
+          <p className="font-medium">
+            Active date window: <span className="font-bold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md border border-brand-200">{rangeLabel}</span>
+          </p>
+
+          {latestDate && (
+            <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl text-amber-900 text-left text-xs leading-relaxed space-y-1">
+              <span className="font-extrabold flex items-center gap-1 text-amber-950">
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                Why is this report empty?
+              </span>
+              <p>
+                Your most recent {entityName.replace(/s$/, '')} was recorded on <strong className="text-slate-900">{latestDate}</strong> ({daysAgo} days ago). It is currently outside the {dateRange === '7d' ? '7-day' : dateRange} filter window.
+              </p>
+            </div>
+          )}
+
+          {onSelectRange && (
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => onSelectRange('14d')}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-brand-600 text-white hover:bg-brand-700 shadow-sm transition flex items-center gap-1.5"
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                Show Last 14 Days (Includes recent)
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectRange('all')}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
+              >
+                Show All Time
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="mt-1 text-sm text-slate-500">Try selecting a different date range.</p>
+      )}
     </div>
   );
 }
@@ -1452,7 +1622,7 @@ function CustomerOutstandingReport({ sales, customers, companySettings }: { sale
       {selectedCust === 'all' ? (
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px]">
+            <table className="w-full">
               <thead className="bg-slate-50/80">
                 <tr>
                   <th className="table-th">Customer Name</th>
@@ -1571,7 +1741,7 @@ function CustomerOutstandingReport({ sales, customers, companySettings }: { sale
               </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[700px] text-xs">
+              <table className="w-full text-xs">
                 <thead className="bg-slate-100 font-bold text-slate-700">
                   <tr>
                     <th className="p-2.5 text-left">Date</th>
@@ -1789,7 +1959,7 @@ function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { 
       {selectedSup === 'all' ? (
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px]">
+            <table className="w-full">
               <thead className="bg-slate-50/80">
                 <tr>
                   <th className="table-th">Supplier Name</th>
@@ -1880,7 +2050,7 @@ function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { 
               </button>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[700px] text-xs">
+              <table className="w-full text-xs">
                 <thead className="bg-slate-100 font-bold text-slate-700">
                   <tr>
                     <th className="p-2.5 text-left">Date</th>
@@ -2083,7 +2253,7 @@ function ChequesReport({
       {/* Cheques Table */}
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">Cheque #</th>

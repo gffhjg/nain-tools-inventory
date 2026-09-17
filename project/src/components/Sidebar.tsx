@@ -46,24 +46,24 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       />
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-r border-slate-800/80 text-slate-200 shadow-2xl transition-transform duration-300 lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-white/95 backdrop-blur-xl border-r border-slate-200/80 text-slate-700 shadow-sm transition-transform duration-300 lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         {/* Logo */}
-        <div className="flex h-16 items-center justify-between px-5 border-b border-slate-800/60">
+        <div className="flex h-16 items-center justify-between px-5 border-b border-slate-200/70">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 text-white shadow-md shadow-brand-500/30 ring-1 ring-white/20">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-brand-600 via-indigo-600 to-brand-700 text-white shadow-md shadow-brand-500/25 ring-1 ring-brand-500/20">
               <Boxes className="h-5 w-5" />
             </div>
             <div className="leading-tight">
-              <span className="block text-base font-extrabold tracking-tight text-white">Nain Tools</span>
-              <span className="block text-[10.5px] font-semibold text-brand-300 tracking-wide uppercase">Bolt &amp; Fastener Co.</span>
+              <span className="block text-base font-extrabold tracking-tight text-slate-900">Nain Tools</span>
+              <span className="block text-[10.5px] font-bold text-brand-600 tracking-wider uppercase">Bolt &amp; Fastener Co.</span>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white lg:hidden"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 lg:hidden"
           >
             <X className="h-5 w-5" />
           </button>
@@ -71,7 +71,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Nav */}
         <nav className="mt-3 flex-1 space-y-1 px-3">
-          <p className="px-3 pb-1.5 pt-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-500">
+          <p className="px-3 pb-1.5 pt-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
             Navigation
           </p>
           {navItems.map((item) => {
@@ -85,8 +85,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 className={({ isActive }) =>
                   `group flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-xs font-bold transition-all duration-200 ${
                     isActive
-                      ? 'bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-600 text-white shadow-lg shadow-brand-600/30 ring-1 ring-white/20 translate-x-0.5'
-                      : 'text-slate-400 hover:bg-white/5 hover:text-slate-100 hover:translate-x-1'
+                      ? 'bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-700 text-white shadow-md shadow-brand-600/25 ring-1 ring-brand-500/20 translate-x-0.5'
+                      : 'text-slate-600 hover:bg-slate-100/80 hover:text-slate-950 hover:translate-x-0.5'
                   }`
                 }
               >
@@ -98,13 +98,13 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         </nav>
 
         {/* Database & System Live Indicator */}
-        <div className="p-3 border-t border-slate-800/60 m-2 rounded-xl bg-slate-950/60 border border-slate-800/40">
+        <div className="p-3 m-3 rounded-xl bg-slate-50/90 border border-slate-200/80 shadow-xs">
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
-            <span className="text-[11px] font-bold text-slate-300">Local Database Online</span>
+            <span className="text-[11px] font-bold text-slate-700">Local Database Online</span>
           </div>
           <p className="text-[10px] text-slate-500 mt-0.5 font-mono">PGlite WASM · IndexedDB</p>
         </div>

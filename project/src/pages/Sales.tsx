@@ -1,10 +1,11 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useDeferredValue } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, ShoppingCart, TrendingUp, Clock, CheckCircle2,
   Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3, X,
-  CreditCard, Calendar, Landmark, AlertOctagon, CheckSquare, XCircle, ArrowUpRight,
-  ShieldCheck, RefreshCw, FileText, Building2, PackageCheck, ShoppingBag, Zap, Wallet, Receipt
+  CreditCard, Calendar, Landmark, AlertOctagon, CheckSquare, XCircle, ArrowUpRight, ArrowRight,
+  ShieldCheck, RefreshCw, FileText, Building2, PackageCheck, ShoppingBag, Zap, Wallet, Receipt, Sparkles,
+  ChevronDown, ChevronUp, SlidersHorizontal
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -12,9 +13,19 @@ import Modal from '@/components/Modal';
 import { printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeGrandTotal, computeDiscountAmount, validateGstin } from '@/lib/constants';
-import { downloadCSV, toCSV, money } from '@/utils/analytics';
+import {
+  downloadCSV,
+  toCSV,
+  money,
+  moneyShort,
+  filterByDateRange,
+  getDateRangeLabel,
+  formatRelativeDate,
+  getDaysAgo,
+  type DateRange,
+} from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
-import type { SaleRecord, SaleStatus, InvoiceLineItem, PaymentMethod, DiscountType, Customer, ChequeRecord, ChequeStatus } from '@/lib/types';
+import type { SaleRecord, SaleStatus, InvoiceLineItem, PaymentMethod, DiscountType, Customer, ChequeRecord, ChequeStatus, Product } from '@/lib/types';
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -30,7 +41,7 @@ function addDaysToDate(dateStr: string, days: number): string {
   }
 }
 
-function addMonthsToDate(dateStr: string, months: number = 1): string {
+function addMonthsToDate(dateStr: string, months: number): string {
   try {
     const d = new Date(dateStr || new Date());
     d.setMonth(d.getMonth() + months);
@@ -51,7 +62,7 @@ function nextInvoice(existing: SaleRecord[]): string {
 function nextDebitNote(existing: SaleRecord[]): string {
   const nums = existing
     .filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'))
-    .map((s) => parseInt(s.invoice.replace('DN-', ''), 10))
+    .map((s) => parseInt(s.invoice.replace(/^DN-/, ''), 10))
     .filter((n) => !isNaN(n));
   const max = nums.length ? Math.max(...nums) : 1000;
   return `DN-${max + 1}`;
@@ -60,43 +71,94 @@ function nextDebitNote(existing: SaleRecord[]): string {
 function nextProformaInvoice(existing: SaleRecord[]): string {
   const nums = existing
     .filter((s) => s.documentType === 'PROFORMA INVOICE' || s.invoice.startsWith('PI-'))
-    .map((s) => parseInt(s.invoice.replace('PI-', ''), 10))
+    .map((s) => parseInt(s.invoice.replace(/^PI-/, ''), 10))
     .filter((n) => !isNaN(n));
   const max = nums.length ? Math.max(...nums) : 3100;
   return `PI-${max + 1}`;
 }
 
-function nextCompanyPoNumber(existing: SaleRecord[]): string {
+function nextCompanyPO(existing: SaleRecord[]): string {
   const nums = existing
-    .filter((s) => s.documentType === 'PURCHASE ORDER' || s.invoice.startsWith('CPO-') || s.invoice.startsWith('PO-'))
-    .map((s) => parseInt(s.invoice.replace(/^(CPO|PO)-/, ''), 10))
+    .filter((s) => s.documentType === 'PURCHASE ORDER' || s.invoice.startsWith('PO-'))
+    .map((s) => parseInt(s.invoice.replace(/^PO-/, ''), 10))
     .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 5000;
-  return `CPO-${max + 1}`;
+  const max = nums.length ? Math.max(...nums) : 3100;
+  return `PO-${max + 1}`;
 }
 
 function nextRawInvoiceNumber(existing: SaleRecord[]): string {
   const nums = existing
-    .filter((s) => s.documentType === 'RAW INVOICE' || s.invoice.startsWith('RAW-') || s.invoice.startsWith('RI-'))
-    .map((s) => parseInt(s.invoice.replace(/^(RAW-|RI-)/, ''), 10))
+    .filter((s) => s.documentType === 'RAW INVOICE' || s.invoice.startsWith('RAW-') || s.invoice.startsWith('CASH-'))
+    .map((s) => parseInt(s.invoice.replace(/^(RAW-|CASH-)/, ''), 10))
     .filter((n) => !isNaN(n));
   const max = nums.length ? Math.max(...nums) : 1000;
   return `RAW-${max + 1}`;
 }
+
+const SALES_TIMELINE_STEPS: { id: DateRange; label: string; shortLabel: string }[] = [
+  { id: 'today', label: 'Today', shortLabel: 'Today' },
+  { id: '3d', label: 'Past 3 Days', shortLabel: '3D' },
+  { id: '7d', label: 'Past 7 Days', shortLabel: '7D' },
+  { id: '14d', label: 'Past 14 Days', shortLabel: '14D' },
+  { id: '30d', label: 'Past 30 Days', shortLabel: '30D' },
+  { id: '90d', label: 'Past 90 Days', shortLabel: '90D' },
+  { id: 'all', label: 'All Time', shortLabel: 'All' },
+];
 
 type DraftLine = InvoiceLineItem;
 
 export default function Sales() {
   const {
     sales, products, customers, cheques,
-    updateProduct, addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
+    addProduct, updateProduct, addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
     addCustomer, updateCustomer, addCheque, updateCheque, confirmChequeClearance, confirmChequeBounce, deleteCheque,
     companySettings
   } = useStore();
   const location = useLocation();
 
-  const [activeSalesSubTab, setActiveSalesSubTab] = useState<'invoices' | 'orders' | 'cheques' | 'raw-invoices'>('invoices');
+  const [activeSalesSubTab, setActiveSalesSubTab] = useState<'invoices' | 'orders' | 'cheques' | 'raw-invoices'>(() => {
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const tabParam = searchParams.get('tab');
+      if (tabParam === 'orders' || tabParam === 'quotes') return 'orders';
+      if (tabParam === 'cheques') return 'cheques';
+      if (tabParam === 'raw-invoices') return 'raw-invoices';
+    } catch {}
+    return 'invoices';
+  });
+
+  useEffect(() => {
+    try {
+      const searchParams = new URLSearchParams(location.search);
+      const tabParam = searchParams.get('tab');
+      if (tabParam === 'orders' || tabParam === 'quotes') {
+        setActiveSalesSubTab('orders');
+      } else if (tabParam === 'invoices') {
+        setActiveSalesSubTab('invoices');
+      } else if (tabParam === 'cheques') {
+        setActiveSalesSubTab('cheques');
+      } else if (tabParam === 'raw-invoices') {
+        setActiveSalesSubTab('raw-invoices');
+      }
+    } catch {}
+  }, [location.search]);
+  const [timelineRange, setTimelineRange] = useState<DateRange>('all');
+  const [isTimelineOpen, setIsTimelineOpen] = useState<boolean>(() => {
+    return localStorage.getItem('nain_sales_timeline_open') === 'true';
+  });
+
+  const toggleTimeline = () => {
+    setIsTimelineOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem('nain_sales_timeline_open', String(next));
+      return next;
+    });
+  };
+
   const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const [salesPage, setSalesPage] = useState(1);
+  const [salesPageSize, setSalesPageSize] = useState(50);
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'paid' | 'pending' | 'partially-paid' | 'debit-note' | 'credit-note'>('all');
 
   // Pre-Sales: Orders & Estimates (PO & PI) Filter State
@@ -267,7 +329,7 @@ export default function Sales() {
 
   const [sellerGstin, setSellerGstin] = useState(companySettings?.gstin || '06CCCPK0841B1ZA');
   const [sellerPan, setSellerPan] = useState(companySettings?.pan || 'CCCPK0841B');
-  const [documentType, setDocumentType] = useState<'TAX INVOICE' | 'DEBIT NOTE' | 'CREDIT NOTE' | 'PROFORMA INVOICE' | 'PURCHASE BILL' | 'PURCHASE ORDER'>('TAX INVOICE');
+  const [documentType, setDocumentType] = useState<NonNullable<SaleRecord['documentType']>>('TAX INVOICE');
 
   useEffect(() => {
     if (companySettings) {
@@ -427,6 +489,9 @@ export default function Sales() {
 
   const filtered = useMemo(() => {
     let list = sales.filter((s) => s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE');
+    if (timelineRange !== 'all') {
+      list = filterByDateRange(list, timelineRange);
+    }
     if (activeFilterTab === 'paid') {
       list = list.filter((s) => s.status === 'paid');
     } else if (activeFilterTab === 'pending') {
@@ -439,7 +504,7 @@ export default function Sales() {
       list = list.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'));
     }
 
-    const q = search.toLowerCase().trim();
+    const q = deferredSearch.toLowerCase().trim();
     if (!q) return list;
     return list.filter(
       (s) =>
@@ -448,36 +513,79 @@ export default function Sales() {
         s.phone.toLowerCase().includes(q) ||
         (s.items && s.items.some((i) => i.name.toLowerCase().includes(q)))
     );
-  }, [sales, search, activeFilterTab]);
+  }, [sales, deferredSearch, activeFilterTab, timelineRange]);
+
+  useEffect(() => {
+    setSalesPage(1);
+  }, [deferredSearch, activeFilterTab, timelineRange, salesPageSize]);
+
+  const timelineFilteredInvoices = useMemo(() => {
+    let list = sales.filter((s) => s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE');
+    if (timelineRange !== 'all') {
+      list = filterByDateRange(list, timelineRange);
+    }
+    return list;
+  }, [sales, timelineRange]);
+
+  const timelineSummary = useMemo(() => {
+    const total = timelineFilteredInvoices.reduce((s, r) => s + r.grandTotal, 0);
+    return {
+      count: timelineFilteredInvoices.length,
+      total,
+      label: getDateRangeLabel(timelineRange),
+    };
+  }, [timelineFilteredInvoices, timelineRange]);
+
+  const latestPurchaseDate = useMemo(() => {
+    const valid = sales
+      .filter((s) => s.date && s.status !== 'cancelled' && s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'RAW PURCHASE')
+      .map((s) => s.date)
+      .sort((a, b) => b.localeCompare(a));
+    return valid[0] || null;
+  }, [sales]);
+
+  const sliderIndex = SALES_TIMELINE_STEPS.findIndex((s) => s.id === timelineRange);
+
+  const totalSalesPages = Math.max(1, Math.ceil(filtered.length / salesPageSize));
+  const paginatedSales = useMemo(() => {
+    if (salesPageSize >= 99999) return filtered;
+    const start = (salesPage - 1) * salesPageSize;
+    return filtered.slice(start, start + salesPageSize);
+  }, [filtered, salesPage, salesPageSize]);
 
   const statusCounts = useMemo(() => {
-    const activeInvoices = sales.filter((s) => s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE');
+    const activeInvoices = timelineFilteredInvoices;
     const paid = activeInvoices.filter((s) => s.status === 'paid').length;
     const pending = activeInvoices.filter((s) => s.status === 'pending').length;
     const partial = activeInvoices.filter((s) => s.status === 'partially-paid').length;
     const debitNote = activeInvoices.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-')).length;
     const creditNote = activeInvoices.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-')).length;
     return { paid, pending, partial, debitNote, creditNote, all: activeInvoices.length };
-  }, [sales]);
+  }, [timelineFilteredInvoices]);
 
   const summary = useMemo(() => {
-    const activeInvoices = sales.filter((s) => s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE');
+    const activeInvoices = timelineRange === 'all'
+      ? sales.filter((s) => s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE')
+      : timelineFilteredInvoices;
     const total = activeInvoices.reduce((s, r) => s + r.grandTotal, 0);
     const paid = activeInvoices.filter((s) => s.status === 'paid').reduce((s, r) => s + r.grandTotal, 0);
     const outstanding = activeInvoices
       .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
       .reduce((s, r) => s + (r.grandTotal - (r.amountPaid || 0)), 0);
 
-    const dnList = sales.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'));
+    const dnList = activeInvoices.filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'));
     const dnCount = dnList.length;
     const dnTotal = dnList.reduce((s, r) => s + r.grandTotal, 0);
 
-    const cnList = sales.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'));
+    const cnList = activeInvoices.filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'));
     const cnCount = cnList.length;
     const cnTotal = cnList.reduce((s, r) => s + r.grandTotal, 0);
 
-    return { total, paid, outstanding, count: activeInvoices.length, dnCount, dnTotal, dnList, cnCount, cnTotal, cnList };
-  }, [sales]);
+    const allTimeInvoices = sales.filter((s) => s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE');
+    const allTimeTotal = allTimeInvoices.reduce((s, r) => s + r.grandTotal, 0);
+
+    return { total, paid, outstanding, count: activeInvoices.length, dnCount, dnTotal, dnList, cnCount, cnTotal, cnList, allTimeTotal };
+  }, [sales, timelineRange, timelineFilteredInvoices]);
 
   // Raw Sales (Counter / Cash & UPI Sales without GST bill)
   const rawSalesList = useMemo(
@@ -681,7 +789,7 @@ export default function Sales() {
   const openNewCompanyPO = () => {
     resetForm();
     setDocumentType('PURCHASE ORDER');
-    setCustomInvoiceNumber(nextCompanyPoNumber(sales));
+    setCustomInvoiceNumber(nextCompanyPO(sales));
     setPaymentStatusType('pay-later');
     setPaymentMethod('Credit / Pay Later');
     setExpectedDeliveryDate(addDaysToDate(todayISO(), 15));
@@ -775,8 +883,6 @@ export default function Sales() {
         notes: 'Auto-created via Raw Sale Counter Entry',
         image: '',
         hsnCode: '7318150',
-        stock: initialStock,
-        boxStatusMode: 'auto',
       });
 
       // 2. Add line item directly to rawInvoiceLines
@@ -841,7 +947,7 @@ export default function Sales() {
       discount: 0,
       discountType: 'amount',
       gstRate: 0,
-      gstType: 'local',
+      gstType: 'exempt',
       cgstAmount: 0,
       sgstAmount: 0,
       igstAmount: 0,
@@ -871,7 +977,11 @@ export default function Sales() {
     setPhone(sale.phone);
     setAddress(sale.customerAddress || '');
     setCustomerGstin(sale.customerGstin || '');
-    setDate(sale.date);
+    if (sale.status === 'draft' || sale.documentType === 'PROFORMA INVOICE') {
+      setDate(sale.date && sale.date === todayISO() ? sale.date : todayISO());
+    } else {
+      setDate(sale.date);
+    }
     setExpectedDeliveryDate(sale.expectedDeliveryDate || '');
     setPiExpirationDate(sale.piExpirationDate || addMonthsToDate(sale.date || todayISO(), 1));
     setLines(sale.items.map((i) => ({ ...i })));
@@ -1019,8 +1129,6 @@ export default function Sales() {
         notes: 'Auto-created via Tax Invoice Entry',
         image: '',
         hsnCode: '7318150',
-        stock: initialStock,
-        boxStatusMode: 'auto',
       });
 
       setLines((prev) => [
@@ -1401,9 +1509,12 @@ export default function Sales() {
 
     if (editingSaleId) {
       const existingSale = sales.find((s) => s.id === editingSaleId);
+      const isCompletingDraft = existingSale && (existingSale.status === 'draft' || existingSale.documentType === 'PROFORMA INVOICE') && finalStatus !== 'draft';
       const updatedSale: SaleRecord = {
         ...newSale,
         id: editingSaleId,
+        date: isCompletingDraft && (!date || date < todayISO()) ? todayISO() : newSale.date,
+        convertedAt: isCompletingDraft ? todayISO() : (existingSale?.convertedAt || ''),
         convertedFromPoNumber: existingSale?.convertedFromPoNumber,
         convertedFromPiNumber: existingSale?.convertedFromPiNumber,
       };
@@ -1492,6 +1603,7 @@ export default function Sales() {
     const origDocNo = convertTargetSale.invoice;
     const isPo = convertTargetSale.documentType === 'PURCHASE ORDER' || convertTargetSale.invoice.startsWith('PO-') || convertTargetSale.invoice.startsWith('CPO-');
     await updateSaleDocumentType(convertTargetSale.id, 'TAX INVOICE', newInvoiceNo, origDocNo, isPo);
+    const today = todayISO();
     setViewing((prev) =>
       prev && prev.id === convertTargetSale.id
         ? {
@@ -1499,6 +1611,8 @@ export default function Sales() {
             documentType: 'TAX INVOICE',
             invoice: newInvoiceNo,
             status: 'pending',
+            date: today,
+            convertedAt: today,
             ...(isPo ? { convertedFromPoNumber: origDocNo } : { convertedFromPiNumber: origDocNo }),
           }
         : prev,
@@ -1763,12 +1877,23 @@ export default function Sales() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
                   <ShoppingCart className="h-5 w-5" />
                 </div>
-                <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
-                  All Sales
+                <span className={`text-[10.5px] font-extrabold px-2 py-0.5 rounded-md ${
+                  timelineRange === 'all'
+                    ? 'text-brand-700 bg-brand-50'
+                    : 'text-brand-800 bg-brand-100 border border-brand-200'
+                }`}>
+                  {timelineRange === 'all' ? 'All Sales' : timelineSummary.label}
                 </span>
               </div>
               <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(summary.total)}</p>
-              <p className="mt-1 text-xs text-slate-500 font-semibold">Total Revenue ({statusCounts.all})</p>
+              <div className="mt-1 flex items-center justify-between text-xs text-slate-500 font-semibold">
+                <span>Total Revenue ({statusCounts.all})</span>
+                {timelineRange !== 'all' && (
+                  <span className="text-[10px] text-slate-400 font-medium" title={`All-time Total: ${money(summary.allTimeTotal)}`}>
+                    All: {moneyShort(summary.allTimeTotal)}
+                  </span>
+                )}
+              </div>
             </div>
 
             <div
@@ -1788,7 +1913,9 @@ export default function Sales() {
                 </span>
               </div>
               <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(summary.paid)}</p>
-              <p className="mt-1 text-xs text-slate-500 font-semibold">Collected Payments</p>
+              <p className="mt-1 text-xs text-slate-500 font-semibold">
+                {timelineRange === 'all' ? 'Collected Payments' : `Collected (${timelineSummary.label})`}
+              </p>
             </div>
 
             <div
@@ -1856,6 +1983,189 @@ export default function Sales() {
 
           {/* Sales List Table */}
           <div className="card p-6 space-y-4">
+            {/* Collapsible Purchase & Sales Timeline Slider */}
+            {!isTimelineOpen ? (
+              /* Compact Collapsed Bar (Minimalist, 0 clutter for daily work) */
+              <div className="flex items-center justify-between px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 backdrop-blur-xs shadow-2xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+                    <Calendar className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-bold text-slate-800">
+                      Timeline Filter:
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-md font-extrabold text-[11px] ${
+                      timelineRange === 'all'
+                        ? 'bg-slate-100 text-slate-700'
+                        : 'bg-brand-50 text-brand-700 border border-brand-200'
+                    }`}>
+                      {timelineSummary.label}
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-semibold">
+                      ({timelineSummary.count} invoices · {money(timelineSummary.total)})
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {timelineRange !== 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => setTimelineRange('all')}
+                      className="px-2 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-slate-100 transition"
+                      title="Reset timeline to All Time"
+                    >
+                      Reset All
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={toggleTimeline}
+                    className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition flex items-center gap-1.5"
+                    title="Expand purchase date slider"
+                  >
+                    <SlidersHorizontal className="w-3 h-3 text-slate-500" />
+                    <span>Timeline Slider</span>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Expanded View (Full interactive slider with Collapse button) */
+              <div className="rounded-2xl border border-brand-200/80 bg-gradient-to-br from-brand-50/50 via-white to-slate-50/70 p-4 shadow-2xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-xs">
+                      <Calendar className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                          Purchase Timeline Tracker
+                        </h3>
+                        <span className="rounded-md bg-brand-100 px-2 py-0.5 text-[10.5px] font-extrabold text-brand-800 border border-brand-200">
+                          {timelineSummary.label}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        Slide to track purchases by timeframe · <strong className="text-slate-800">{timelineSummary.count} invoices</strong> ({money(timelineSummary.total)})
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    {timelineRange !== 'all' && (
+                      <button
+                        type="button"
+                        onClick={() => setTimelineRange('all')}
+                        className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-white border border-slate-200 transition shadow-2xs flex items-center gap-1"
+                      >
+                        <RefreshCw className="w-3 h-3 text-slate-400" />
+                        <span>Show All Time</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={toggleTimeline}
+                      className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition shadow-2xs flex items-center gap-1 cursor-pointer"
+                      title="Collapse slider to save screen space"
+                    >
+                      <span>Collapse</span>
+                      <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Slider Track and Thumb */}
+                <div className="px-1 pt-1 pb-1">
+                  <input
+                    type="range"
+                    min={0}
+                    max={SALES_TIMELINE_STEPS.length - 1}
+                    step={1}
+                    value={sliderIndex >= 0 ? sliderIndex : SALES_TIMELINE_STEPS.length - 1}
+                    onChange={(e) => setTimelineRange(SALES_TIMELINE_STEPS[Number(e.target.value)].id)}
+                    className="w-full accent-brand-600 cursor-pointer h-2.5 bg-slate-200 rounded-lg appearance-none transition-all shadow-inner"
+                    title="Slide to track when sales/orders were purchased"
+                  />
+
+                  {/* Milestone Buttons below slider */}
+                  <div className="mt-2 grid grid-cols-7 gap-1">
+                    {SALES_TIMELINE_STEPS.map((step) => {
+                      const isActive = timelineRange === step.id;
+                      return (
+                        <button
+                          key={step.id}
+                          type="button"
+                          onClick={() => setTimelineRange(step.id)}
+                          className={`flex flex-col items-center py-1.5 px-1 rounded-xl transition-all text-center ${
+                            isActive
+                              ? 'bg-brand-600 text-white font-extrabold shadow-sm scale-105'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80 font-semibold'
+                          }`}
+                        >
+                          <span className="text-[11.5px] leading-none">{step.shortLabel}</span>
+                          <span className={`mt-0.5 text-[9.5px] hidden sm:inline ${isActive ? 'text-brand-100' : 'text-slate-400'}`}>
+                            {step.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Helpful notice if 0 orders found in selected range or if orders/quotes exist */}
+                {timelineRange !== 'all' && timelineFilteredInvoices.length === 0 && (
+                  <div className="space-y-2">
+                    {orderQuoteList.length > 0 && (
+                      <div className="p-3 rounded-xl bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border-2 border-blue-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-blue-950 shadow-xs">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-8 w-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                            <ShoppingBag className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="font-extrabold text-blue-900 text-sm">
+                              Looking for your {money(orderQuoteTotalValue)} sale?
+                            </span>
+                            <p className="text-[11.5px] text-blue-800 font-medium">
+                              It is saved in <strong className="text-blue-900">Orders &amp; Estimates (PO &amp; PI)</strong> ({orderQuoteList.length} total). Tax invoices only show finalized bills.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSalesSubTab('orders')}
+                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shrink-0 transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span>Open Orders &amp; Estimates ({money(orderQuoteTotalValue)})</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {latestPurchaseDate && (
+                      <div className="p-2.5 rounded-xl bg-amber-50/90 border border-amber-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-950">
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>
+                            0 tax invoices in this window. Most recent customer invoice was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago).
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setTimelineRange('14d')}
+                          className="px-3 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700 font-bold text-[11px] shrink-0 transition shadow-2xs"
+                        >
+                          Slide to 14 Days (Includes 09 Sep)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               {/* Status Tabs */}
               <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
@@ -1933,7 +2243,7 @@ export default function Sales() {
                   <tr>
                     <th className="px-4 py-3 font-bold text-slate-600">Invoice #</th>
                     <th className="px-4 py-3 font-bold text-slate-600">Customer</th>
-                    <th className="px-4 py-3 font-bold text-slate-600">Date</th>
+                    <th className="px-4 py-3 font-bold text-slate-600">Purchased / Date</th>
                     <th className="px-4 py-3 font-bold text-slate-600">Products</th>
                     <th className="px-4 py-3 font-bold text-slate-600">Total</th>
                     <th className="px-4 py-3 font-bold text-slate-600">Payment Status</th>
@@ -1943,12 +2253,65 @@ export default function Sales() {
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-sm text-slate-400">
-                        No sales invoices found matching current filter.
+                      <td colSpan={7} className="py-12 text-center text-sm text-slate-500">
+                        <div className="max-w-md mx-auto space-y-3">
+                          <Clock className="w-8 h-8 text-slate-300 mx-auto mb-1" />
+                          <p className="font-bold text-slate-700">No sales invoices found matching current filter</p>
+                          
+                          {orderQuoteList.length > 0 && (
+                            <div className="text-blue-900 bg-blue-50/95 p-3.5 rounded-xl border border-blue-200 text-left shadow-2xs">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                                <div>
+                                  <p className="font-bold text-xs text-blue-950">
+                                    Looking for today's {money(orderQuoteTotalValue)} sale?
+                                  </p>
+                                  <p className="text-[11px] text-blue-800 mt-0.5 font-medium">
+                                    It is currently saved under <strong>Orders &amp; Estimates (PO &amp; PI)</strong>.
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveSalesSubTab('orders')}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shrink-0 shadow-xs flex items-center gap-1 cursor-pointer"
+                                >
+                                  <span>View in Orders ({money(orderQuoteTotalValue)})</span>
+                                  <ArrowRight className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {timelineRange !== 'all' && (
+                            <div className="text-xs text-slate-500 space-y-2">
+                              <p>Active period: <span className="font-bold text-brand-700">{timelineSummary.label}</span></p>
+                              {latestPurchaseDate && (
+                                <p className="text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
+                                  Your latest order was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago). Slide to 14 Days to view it!
+                                </p>
+                              )}
+                              <div className="flex items-center justify-center gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setTimelineRange('14d')}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-600 text-white hover:bg-brand-700 shadow-xs"
+                                >
+                                  Slide to 14 Days
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setTimelineRange('all')}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                >
+                                  Reset to All Time
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ) : (
-                    filtered.map((s) => (
+                    paginatedSales.map((s) => (
                       <tr key={s.id} className="hover:bg-slate-50/80">
                         <td className="px-4 py-3 font-bold text-brand-600">
                           <div className="flex items-center gap-1.5">
@@ -1965,7 +2328,36 @@ export default function Sales() {
                           <p className="font-bold text-slate-900">{s.customer}</p>
                           {s.phone && <p className="text-[11px] text-slate-500 font-mono">{s.phone}</p>}
                         </td>
-                        <td className="px-4 py-3 text-slate-600 font-mono">{s.date}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-semibold text-slate-800 font-mono">{s.date}</span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setViewing(s)}
+                                className="inline-flex items-center gap-1 text-[10px] font-bold text-brand-700 bg-brand-50 hover:bg-brand-100 border border-brand-200/70 px-1.5 py-0.5 rounded w-fit transition shadow-2xs"
+                                title="Click to track purchase lifecycle"
+                              >
+                                <Clock className="w-2.5 h-2.5 text-brand-600" />
+                                {formatRelativeDate(s.date)}
+                              </button>
+                              {s.date !== todayISO() && (
+                                <button
+                                  type="button"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    const today = todayISO();
+                                    await updateSale({ ...s, date: today });
+                                  }}
+                                  className="text-[9.5px] font-extrabold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded transition cursor-pointer"
+                                  title="Sold today? Click to set invoice date to Today"
+                                >
+                                  ⚡ Today
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-slate-700 font-semibold font-mono">
                           {s.items && s.items.length > 0 ? s.items.length : s.itemCount}
                         </td>
@@ -2099,6 +2491,57 @@ export default function Sales() {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Interactive Pagination Controls */}
+            <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-100 pt-3 gap-3">
+              <div className="flex items-center gap-4 text-xs text-slate-500">
+                <p>
+                  Showing{' '}
+                  <span className="font-semibold text-slate-700">
+                    {filtered.length === 0 ? 0 : (salesPage - 1) * salesPageSize + 1}
+                  </span>{' '}
+                  to{' '}
+                  <span className="font-semibold text-slate-700">
+                    {Math.min(filtered.length, salesPage * salesPageSize)}
+                  </span>{' '}
+                  of <span className="font-semibold text-slate-700">{filtered.length}</span> invoices
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <span>Per page:</span>
+                  <select
+                    value={salesPageSize}
+                    onChange={(e) => setSalesPageSize(Number(e.target.value))}
+                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-xs focus:border-brand-500 focus:outline-none"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={250}>250</option>
+                    <option value={99999}>All</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setSalesPage((p) => Math.max(1, p - 1))}
+                  disabled={salesPage <= 1}
+                  className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="text-xs font-semibold text-slate-600 px-2">
+                  Page {salesPage} of {totalSalesPages}
+                </span>
+                <button
+                  onClick={() => setSalesPage((p) => Math.min(totalSalesPages, p + 1))}
+                  disabled={salesPage >= totalSalesPages}
+                  className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </div>
         </>
@@ -2306,7 +2749,7 @@ export default function Sales() {
 
             {/* Table of Orders & Quotes */}
             <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full text-left text-xs min-w-[960px]">
+              <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-slate-700 border-b border-slate-200">
                   <tr>
                     <th className="px-4 py-3 font-bold">Document Type &amp; Ref</th>
@@ -3218,9 +3661,24 @@ export default function Sales() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {documentType === 'PURCHASE ORDER' ? 'PO Received Date' : 'Invoice Date'}
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-700">
+                    {documentType === 'PURCHASE ORDER' ? 'PO Received Date' : 'Invoice Date'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const today = todayISO();
+                      setDate(today);
+                      if (documentType === 'PROFORMA INVOICE') {
+                        setPiExpirationDate(addMonthsToDate(today, 1));
+                      }
+                    }}
+                    className="text-[10.5px] font-extrabold text-brand-600 hover:text-brand-700 hover:underline cursor-pointer"
+                  >
+                    ⚡ Set Today
+                  </button>
+                </div>
                 <input
                   type="date"
                   value={date}
@@ -3854,7 +4312,7 @@ export default function Sales() {
 
               {lines.length > 0 ? (
                 <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
-                  <table className="w-full text-left text-xs min-w-[700px]">
+                  <table className="w-full text-left text-xs">
                     <thead className="bg-slate-100">
                       <tr>
                         <th className="px-3 py-2.5 font-bold text-slate-600">Product</th>

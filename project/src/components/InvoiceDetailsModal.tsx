@@ -14,11 +14,13 @@ import {
   Truck,
   RefreshCw,
   PackageCheck,
+  Clock,
+  ShoppingCart,
 } from 'lucide-react';
 import Modal from '@/components/Modal';
 import StatusBadge from '@/components/StatusBadge';
 import { printInvoice } from '@/components/PrintableInvoice';
-import { money, nextInvoice } from '@/utils/analytics';
+import { money, nextInvoice, formatRelativeDate, getDaysAgo } from '@/utils/analytics';
 import { computeDiscountAmount } from '@/lib/constants';
 import { useStore } from '@/store/AppStore';
 import type { SaleRecord, CompanySettings } from '@/lib/types';
@@ -32,11 +34,26 @@ type InvoiceDetailsModalProps = {
 export default function InvoiceDetailsModal({ sale, onClose, companySettings }: InvoiceDetailsModalProps) {
   if (!sale) return null;
 
-  const { sales, updateSaleDocumentType } = useStore();
+  const { sales, updateSale, updateSaleDocumentType } = useStore();
   const [currentSale, setCurrentSale] = useState<SaleRecord>(sale);
   const [convertModalOpen, setConvertModalOpen] = useState(false);
   const [customInvoiceNumber, setCustomInvoiceNumber] = useState('');
   const [isConverting, setIsConverting] = useState(false);
+  const [isUpdatingDate, setIsUpdatingDate] = useState(false);
+
+  const handleUpdateDateToToday = async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    setIsUpdatingDate(true);
+    try {
+      const updated = { ...currentSale, date: today };
+      await updateSale(updated);
+      setCurrentSale(updated);
+    } catch (err) {
+      alert(`Failed to update date: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsUpdatingDate(false);
+    }
+  };
 
   useEffect(() => {
     setCurrentSale(sale);
@@ -56,11 +73,15 @@ export default function InvoiceDetailsModal({ sale, onClose, companySettings }: 
     try {
       const origDocNo = currentSale.invoice;
       await updateSaleDocumentType(currentSale.id, 'TAX INVOICE', invoiceNoToUse.trim(), origDocNo, isPo);
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       setCurrentSale((prev) => ({
         ...prev,
         documentType: 'TAX INVOICE',
         invoice: invoiceNoToUse.trim(),
         status: 'pending',
+        date: today,
+        convertedAt: today,
         ...(isPo ? { convertedFromPoNumber: origDocNo } : { convertedFromPiNumber: origDocNo }),
       }));
       setConvertModalOpen(false);
@@ -178,6 +199,121 @@ export default function InvoiceDetailsModal({ sale, onClose, companySettings }: 
               </span>
             </div>
           )}
+
+          {/* Purchase & Fulfillment Lifecycle Stepper */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-brand-50/70 via-slate-50 to-emerald-50/50 border border-slate-200/90 shadow-2xs">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3.5">
+              <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <Clock className="h-4 w-4 text-brand-600" />
+                Purchase & Order Lifecycle Tracker
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10.5px] font-bold text-brand-700 bg-brand-100/80 border border-brand-200 px-2.5 py-0.5 rounded-full">
+                  Purchased {formatRelativeDate(currentSale.date)} ({currentSale.date})
+                </span>
+                {currentSale.date !== new Date().toISOString().slice(0, 10) && (
+                  <button
+                    type="button"
+                    disabled={isUpdatingDate}
+                    onClick={handleUpdateDateToToday}
+                    className="text-[10.5px] font-extrabold text-white bg-emerald-600 hover:bg-emerald-700 px-2.5 py-0.5 rounded-full transition shadow-xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                    title={`If this was sold today, click to update its date to Today (${new Date().toISOString().slice(0, 10)})`}
+                  >
+                    <span>⚡ Move Date to Today</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="relative pt-1 pb-1">
+              {/* Connected progress bar */}
+              <div className="absolute top-5 left-8 right-8 h-1 bg-slate-200 rounded-full z-0">
+                <div
+                  className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                  style={{
+                    width:
+                      currentSale.status === 'paid'
+                        ? '100%'
+                        : currentSale.status === 'partially-paid'
+                        ? '75%'
+                        : '50%',
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-4 gap-2 relative z-10 text-center">
+                {/* Step 1: Order / Purchase Placed */}
+                <div className="flex flex-col items-center">
+                  <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xs ring-4 ring-white">
+                    <ShoppingCart className="w-4 h-4" />
+                  </div>
+                  <span className="mt-1.5 text-[11px] font-extrabold text-slate-800">Purchased</span>
+                  <span className="text-[10px] text-slate-600 font-mono font-semibold">{currentSale.date}</span>
+                  <span className="text-[9.5px] text-emerald-700 font-bold">{formatRelativeDate(currentSale.date)}</span>
+                </div>
+
+                {/* Step 2: Invoice Issued */}
+                <div className="flex flex-col items-center">
+                  <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xs ring-4 ring-white">
+                    <FileText className="w-4 h-4" />
+                  </div>
+                  <span className="mt-1.5 text-[11px] font-extrabold text-slate-800">Invoiced</span>
+                  <span className="text-[10px] text-brand-600 font-mono font-bold">{currentSale.invoice}</span>
+                  <span className="text-[9.5px] text-slate-500 font-semibold">{currentSale.documentType || 'Tax Invoice'}</span>
+                </div>
+
+                {/* Step 3: Payment Status */}
+                <div className="flex flex-col items-center">
+                  <div
+                    className={`w-8 h-8 rounded-full flex items-center justify-center shadow-xs ring-4 ring-white ${
+                      currentSale.status === 'paid'
+                        ? 'bg-emerald-600 text-white'
+                        : currentSale.status === 'partially-paid'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-amber-500 text-white'
+                    }`}
+                  >
+                    <CreditCard className="w-4 h-4" />
+                  </div>
+                  <span className="mt-1.5 text-[11px] font-extrabold text-slate-800">Payment</span>
+                  <span className="text-[10px] font-bold text-slate-700">{currentSale.paymentMethod || 'Cash'}</span>
+                  <span
+                    className={`text-[9.5px] font-extrabold ${
+                      currentSale.status === 'paid'
+                        ? 'text-emerald-700'
+                        : currentSale.status === 'partially-paid'
+                        ? 'text-blue-700'
+                        : 'text-amber-700'
+                    }`}
+                  >
+                    {currentSale.status === 'paid'
+                      ? 'Fully Paid'
+                      : currentSale.status === 'partially-paid'
+                      ? `Paid ${money(currentSale.amountPaid || 0)}`
+                      : currentSale.dueDate
+                      ? `Due ${currentSale.dueDate}`
+                      : 'Pending'}
+                  </span>
+                </div>
+
+                {/* Step 4: Fulfillment / Stock */}
+                <div className="flex flex-col items-center">
+                  <div
+                    className={`w-8 h-8 rounded-full flex items-center justify-center shadow-xs ring-4 ring-white ${
+                      isPi && !isConverted ? 'bg-purple-600 text-white' : 'bg-emerald-600 text-white'
+                    }`}
+                  >
+                    <Truck className="w-4 h-4" />
+                  </div>
+                  <span className="mt-1.5 text-[11px] font-extrabold text-slate-800">Fulfillment</span>
+                  <span className="text-[10px] text-slate-600 font-bold">{totalUnits} units</span>
+                  <span className="text-[9.5px] text-slate-500 font-semibold">
+                    {isPi && !isConverted ? 'Quote Active' : 'Stock Dispatched'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Top Info Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

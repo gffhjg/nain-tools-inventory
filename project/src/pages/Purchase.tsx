@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useDeferredValue } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
@@ -80,6 +80,9 @@ export default function Purchase() {
   const location = useLocation();
   const [activePurchaseSubTab, setActivePurchaseSubTab] = useState<'bills' | 'raw-purchases'>('bills');
   const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [activeTab, setActiveTab] = useState<'all' | 'bills' | 'credit-notes' | 'suggestions'>('all');
 
   // Raw Purchases (Cash / UPI Inward Counter Purchases) State
@@ -310,7 +313,7 @@ export default function Purchase() {
   }, [purchases, sales]);
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
+    const q = deferredSearch.toLowerCase().trim();
     return combinedRecords.filter((rec) => {
       if (activeTab === 'bills' && rec.typeLabel !== 'PURCHASE BILL') return false;
       if (activeTab === 'credit-notes' && rec.typeLabel !== 'CREDIT NOTE') return false;
@@ -322,7 +325,18 @@ export default function Purchase() {
         rec.items.some((i) => i.name.toLowerCase().includes(q))
       );
     });
-  }, [combinedRecords, search, activeTab]);
+  }, [combinedRecords, deferredSearch, activeTab]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [deferredSearch, activeTab, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginatedPurchases = useMemo(() => {
+    if (pageSize >= 99999) return filtered;
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
 
   const summary = useMemo(() => {
     const totalInward = combinedRecords.reduce((s, r) => s + r.grandTotal, 0);
@@ -774,8 +788,6 @@ export default function Purchase() {
         notes: 'Auto-created via Raw Purchase Inward Entry',
         image: '',
         hsnCode: rawNewProdHsn.trim() || '7318150',
-        stock: 0,
-        boxStatusMode: 'auto',
       });
 
       // 2. Add line item directly to active Raw Purchase lines
@@ -830,7 +842,7 @@ export default function Purchase() {
       discount: 0,
       discountType: 'amount',
       gstRate: 0,
-      gstType: 'local',
+      gstType: 'exempt',
       cgstAmount: 0,
       sgstAmount: 0,
       igstAmount: 0,
@@ -1404,7 +1416,7 @@ export default function Purchase() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px]">
+                <table className="w-full">
                   <thead className="bg-slate-50/80">
                     <tr>
                       <th className="table-th">Product & Size</th>
@@ -1477,7 +1489,7 @@ export default function Purchase() {
       ) : (
         <div className="mt-4 card overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px]">
+            <table className="w-full">
               <thead className="bg-slate-50/80">
                 <tr>
                   <th className="table-th">Doc Number</th>
@@ -1490,7 +1502,7 @@ export default function Purchase() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((rec) => {
+                {paginatedPurchases.map((rec) => {
                   const isPO = rec.kind === 'po';
                   const isCN = rec.typeLabel === 'CREDIT NOTE';
                   const isDN = rec.typeLabel === 'DEBIT NOTE';
@@ -1625,15 +1637,56 @@ export default function Purchase() {
               </tbody>
             </table>
           </div>
-          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
-            <p className="text-sm text-slate-500">
-              Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{' '}
-              <span className="font-semibold text-slate-700">{combinedRecords.length}</span> records
-            </p>
-            <div className="flex items-center gap-1">
-              <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Previous</button>
-              <button className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white">1</button>
-              <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Next</button>
+          <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-100 px-4 py-3 gap-3">
+            <div className="flex items-center gap-4 text-xs text-slate-500">
+              <p>
+                Showing{' '}
+                <span className="font-semibold text-slate-700">
+                  {filtered.length === 0 ? 0 : (page - 1) * pageSize + 1}
+                </span>{' '}
+                to{' '}
+                <span className="font-semibold text-slate-700">
+                  {Math.min(filtered.length, page * pageSize)}
+                </span>{' '}
+                of <span className="font-semibold text-slate-700">{filtered.length}</span> records
+                {filtered.length !== combinedRecords.length && (
+                  <span className="text-slate-400 ml-1">(filtered from {combinedRecords.length})</span>
+                )}
+              </p>
+              <div className="flex items-center gap-1.5">
+                <span>Per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-xs focus:border-brand-500 focus:outline-none"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={250}>250</option>
+                  <option value={99999}>All</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <span className="text-xs font-semibold text-slate-600 px-2">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
             </div>
           </div>
         </div>

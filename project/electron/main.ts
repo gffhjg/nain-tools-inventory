@@ -18,6 +18,8 @@ function createWindow() {
     },
   });
 
+  mainWindow.maximize();
+
   // In production, load the built Vite app
   const isDev = process.env.NODE_ENV === 'development';
   if (isDev) {
@@ -78,6 +80,11 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// Hardware acceleration flags for fluid 60-120fps rendering on Windows
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 app.whenReady().then(createWindow);
 

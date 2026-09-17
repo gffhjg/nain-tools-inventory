@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useDeferredValue } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Menu, Search, Bell, ChevronDown, Package, Truck, ShoppingCart, Users, Building2, Boxes, CheckCheck, Trash2, AlertTriangle, XCircle, Info, CheckCircle2, Command, X } from 'lucide-react';
 import { useStore } from '@/store/AppStore';
@@ -51,6 +51,7 @@ function timeAgo(ts: number): string {
 export default function Topbar({ onMenuClick }: TopbarProps) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredQuery = useDeferredValue(searchQuery);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -63,7 +64,7 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
 
   const results = useMemo<SearchResult[]>(() => {
-    const q = searchQuery.trim();
+    const q = deferredQuery.trim();
     if (!q) return [];
     const matches: SearchResult[] = [];
 
@@ -100,7 +101,7 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
 
     matches.sort((a, b) => (b.score || 0) - (a.score || 0));
     return matches.slice(0, 10);
-  }, [searchQuery, products, sales, purchases, customers, suppliers]);
+  }, [deferredQuery, products, sales, purchases, customers, suppliers]);
 
   // Handle global Ctrl+K / Cmd+K listener
   useEffect(() => {

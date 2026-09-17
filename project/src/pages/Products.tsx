@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search, Filter, Download, Edit2, Trash2, Package, AlertTriangle, ImageOff, ClipboardCheck, History as HistoryIcon, Upload, ArrowUp, ArrowDown } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
@@ -25,8 +25,12 @@ export default function Products() {
   const { products: items, verifications, addProduct, updateProduct, deleteProduct, addVerification } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
   const [statusFilter, setStatusFilter] = useState<(typeof statusFilters)[number]>('all');
   const [formOpen, setFormOpen] = useState(false);
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(50);
 
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
@@ -45,7 +49,7 @@ export default function Products() {
   }, [verifications]);
 
   const filtered = useMemo(() => {
-    const hasSearch = search.trim().length > 0;
+    const hasSearch = deferredSearch.trim().length > 0;
     const scoredList: { product: Product; score: number }[] = [];
 
     for (const p of items) {
@@ -55,7 +59,7 @@ export default function Products() {
       if (!hasSearch) {
         scoredList.push({ product: p, score: 0 });
       } else {
-        const match = smartSearchMatch([p.name, p.rackNumber, p.supplier, p.size, p.category], search);
+        const match = smartSearchMatch([p.name, p.rackNumber, p.supplier, p.size, p.category], deferredSearch);
         if (match.matched) {
           scoredList.push({ product: p, score: match.score });
         }
@@ -82,7 +86,19 @@ export default function Products() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return sorted.map((s) => s.product);
-  }, [items, search, statusFilter, sortKey, sortDir, lastVerificationDate]);
+  }, [items, deferredSearch, statusFilter, sortKey, sortDir, lastVerificationDate]);
+
+  // Reset page when filter or search changes
+  useEffect(() => {
+    setPage(1);
+  }, [deferredSearch, statusFilter, sortKey, sortDir, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginatedProducts = useMemo(() => {
+    if (pageSize >= 9999) return filtered;
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
 
   const summary = useMemo(() => {
     const totalUnits = items.reduce((s, p) => s + p.stock, 0);
@@ -231,7 +247,7 @@ export default function Products() {
       {/* Table */}
       <div className="mt-4 card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th w-10"><input type="checkbox" className="rounded border-slate-300" /></th>
@@ -246,7 +262,7 @@ export default function Products() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((p) => (
+              {paginatedProducts.map((p) => (
                 <tr key={p.id} className="transition hover:bg-slate-50/50">
                   <td className="table-td"><input type="checkbox" className="rounded border-slate-300" /></td>
                   <td className="table-td">
@@ -333,16 +349,85 @@ export default function Products() {
             <p className="text-sm text-slate-400">Try adjusting your search or filters.</p>
           </div>
         )}
-        {/* Pagination */}
-        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
-          <p className="text-sm text-slate-500">
-            Showing <span className="font-semibold text-slate-700">{filtered.length}</span> of{' '}
-            <span className="font-semibold text-slate-700">{items.length}</span> products
-          </p>
-          <div className="flex items-center gap-1">
-            <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Previous</button>
-            <button className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white">1</button>
-            <button className="btn-secondary px-3 py-1.5 text-xs" disabled>Next</button>
+        {/* Interactive Pagination */}
+        <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-100 px-4 py-3 gap-3">
+          <div className="flex items-center gap-4 text-xs text-slate-500">
+            <p>
+              Showing{' '}
+              <span className="font-semibold text-slate-700">
+                {filtered.length === 0 ? 0 : (page - 1) * pageSize + 1}
+              </span>{' '}
+              to{' '}
+              <span className="font-semibold text-slate-700">
+                {Math.min(filtered.length, page * pageSize)}
+              </span>{' '}
+              of <span className="font-semibold text-slate-700">{filtered.length}</span> products
+              {filtered.length !== items.length && (
+                <span className="text-slate-400 ml-1">(filtered from {items.length})</span>
+              )}
+            </p>
+            <div className="flex items-center gap-1.5">
+              <span>Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-xs focus:border-brand-500 focus:outline-none"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={250}>250</option>
+                <option value={99999}>All</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, idx) => {
+                let pageNum: number;
+                if (totalPages <= 5) {
+                  pageNum = idx + 1;
+                } else if (page <= 3) {
+                  pageNum = idx + 1;
+                } else if (page >= totalPages - 2) {
+                  pageNum = totalPages - 4 + idx;
+                } else {
+                  pageNum = page - 2 + idx;
+                }
+                const isActive = pageNum === page;
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setPage(pageNum)}
+                    className={`h-7 min-w-7 rounded-lg px-2 text-xs font-bold transition ${
+                      isActive
+                        ? 'bg-brand-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+              {totalPages > 5 && page < totalPages - 2 && (
+                <span className="px-1 text-xs text-slate-400">…</span>
+              )}
+            </div>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
           </div>
         </div>
       </div>

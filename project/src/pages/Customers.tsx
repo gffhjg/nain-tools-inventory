@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search, FileText, Trash2, Edit2, Eye, Users, AlertTriangle, MessageCircle, DollarSign, CheckCircle2, IndianRupee, Landmark } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
@@ -6,7 +6,7 @@ import Modal from '@/components/Modal';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
 import { indianStates, getStateCode, validateGstin } from '@/lib/constants';
-import type { Customer, SaleStatus, PaymentMethod, ChequeRecord } from '@/lib/types';
+import type { Customer, SaleStatus, PaymentMethod, ChequeRecord, SaleRecord } from '@/lib/types';
 
 const empty: Customer = { id: '', name: '', businessName: '', phone: '', gstin: '', email: '', address: '', state: '', stateCode: '', notes: '' };
 
@@ -15,6 +15,9 @@ export default function Customers() {
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [filterOutstanding, setFilterOutstanding] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
@@ -35,29 +38,66 @@ export default function Customers() {
   const [payChequeDate, setPayChequeDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [filterTab, setFilterTab] = useState<'all' | 'overdue' | 'clear'>('all');
 
+  const salesByCustomer = useMemo(() => {
+    const map = new Map<string, SaleRecord[]>();
+    for (const s of sales) {
+      if (s.customerId) {
+        let list = map.get(s.customerId);
+        if (!list) { list = []; map.set(s.customerId, list); }
+        list.push(s);
+      }
+      if (s.customer && s.customer !== s.customerId) {
+        let list = map.get(s.customer);
+        if (!list) { list = []; map.set(s.customer, list); }
+        list.push(s);
+      }
+    }
+    return map;
+  }, [sales]);
+
   const enriched = useMemo(() => {
     return customers.map((c) => {
-      const customerSales = sales.filter((s) => (s.customerId && s.customerId === c.id) || s.customer === c.name);
+      const listById = c.id ? salesByCustomer.get(c.id) : undefined;
+      const listByName = c.name ? salesByCustomer.get(c.name) : undefined;
+      let customerSales = listById || listByName || [];
+      if (listById && listByName && listById !== listByName) {
+        const idSet = new Set(listById.map((s) => s.id));
+        customerSales = [...listById, ...listByName.filter((s) => !idSet.has(s.id))];
+      }
       const totalPurchases = customerSales.reduce((s, r) => s + r.grandTotal, 0);
       const outstanding = customerSales
         .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
         .reduce((s, r) => s + (r.grandTotal - r.amountPaid), 0);
-      const lastSale = customerSales.length > 0
-        ? customerSales.sort((a, b) => b.date.localeCompare(a.date))[0]
-        : null;
-      return { ...c, totalPurchases, outstanding, saleCount: customerSales.length, lastSaleDate: lastSale?.date ?? null };
+      let latestDate: string | null = null;
+      for (const s of customerSales) {
+        if (!latestDate || (s.date && s.date > latestDate)) {
+          latestDate = s.date;
+        }
+      }
+      return { ...c, totalPurchases, outstanding, saleCount: customerSales.length, lastSaleDate: latestDate };
     });
-  }, [customers, sales]);
+  }, [customers, salesByCustomer]);
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
+    const q = deferredSearch.toLowerCase().trim();
     return enriched.filter((c) => {
       if (filterTab === 'overdue' && c.outstanding <= 0) return false;
       if (filterTab === 'clear' && (c.outstanding > 0 || c.saleCount === 0)) return false;
       if (!q) return true;
       return c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.gstin.toLowerCase().includes(q);
     });
-  }, [enriched, search, filterTab]);
+  }, [enriched, deferredSearch, filterTab]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [deferredSearch, filterTab, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginatedCustomers = useMemo(() => {
+    if (pageSize >= 99999) return filtered;
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
 
   const totalOutstandingAll = useMemo(
     () => enriched.reduce((acc, c) => acc + c.outstanding, 0),
@@ -379,7 +419,7 @@ export default function Customers() {
                   </td>
                 </tr>
               ) : (
-                filtered.map((c) => (
+                paginatedCustomers.map((c) => (
                   <tr key={c.id} className="hover:bg-slate-50/80">
                     <td className="px-4 py-3">
                       <p className="font-bold text-slate-900">{c.name}</p>
@@ -448,6 +488,60 @@ export default function Customers() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Interactive Pagination */}
+        <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-100 pt-3 gap-3">
+          <div className="flex items-center gap-4 text-xs text-slate-500">
+            <p>
+              Showing{' '}
+              <span className="font-semibold text-slate-700">
+                {filtered.length === 0 ? 0 : (page - 1) * pageSize + 1}
+              </span>{' '}
+              to{' '}
+              <span className="font-semibold text-slate-700">
+                {Math.min(filtered.length, page * pageSize)}
+              </span>{' '}
+              of <span className="font-semibold text-slate-700">{filtered.length}</span> customers
+              {filtered.length !== customers.length && (
+                <span className="text-slate-400 ml-1">(filtered from {customers.length})</span>
+              )}
+            </p>
+            <div className="flex items-center gap-1.5">
+              <span>Per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-xs focus:border-brand-500 focus:outline-none"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={250}>250</option>
+                <option value={99999}>All</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <span className="text-xs font-semibold text-slate-600 px-2">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="btn-secondary px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
 

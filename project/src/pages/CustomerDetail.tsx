@@ -232,7 +232,7 @@ export default function CustomerDetail() {
           <span className="badge bg-slate-100 text-slate-600">{customerSales.length}</span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">Invoice</th>
@@ -459,7 +459,7 @@ export default function CustomerDetail() {
           <h3 className="font-semibold text-slate-800">Price History — What They Paid</h3>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[600px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">Date</th>

@@ -170,7 +170,7 @@ export default function SupplierDetail() {
           <span className="badge bg-slate-100 text-slate-600">{supplierPurchases.length}</span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">PO Number</th>
@@ -369,7 +369,7 @@ export default function SupplierDetail() {
           <h3 className="font-semibold text-slate-800">Purchase Price History — What We Paid</h3>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[600px]">
+          <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
                 <th className="table-th">Date</th>
