@@ -435,6 +435,10 @@ async function migrateSchema(db: PGlite): Promise<void> {
     { table: 'suppliers', column: 'email', type: 'text', default: "''" },
     { table: 'suppliers', column: 'state', type: 'text', default: "''" },
     { table: 'suppliers', column: 'state_code', type: 'text', default: "''" },
+    { table: 'company_settings', column: 'firm_code', type: 'text', default: "'NT1'" },
+    { table: 'company_settings', column: 'tag_color', type: 'text', default: "'brand'" },
+    { table: 'sales', column: 'firm_id', type: 'integer', default: "1" },
+    { table: 'purchases', column: 'firm_id', type: 'integer', default: "1" },
   ];
   try {
     const { rows: colRows } = await db.query<{ table_name: string; column_name: string }>(
@@ -453,6 +457,21 @@ async function migrateSchema(db: PGlite): Promise<void> {
           // Column might already exist or table doesn't exist yet — skip
         }
       }
+    }
+
+    // Ensure both Firm 1 and Firm 2 exist in company_settings
+    try {
+      await db.exec(`
+        INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, firm_code, tag_color)
+        VALUES (1, 'Nain Tools & Bolt Co.', '24ABCDE1234F1Z5', 'ABCDE1234F', 'Plot 42, GIDC Industrial Estate, Jamnagar, Gujarat 361004', '+91 288 255 1234', 'sales@naintools.in', 'Gujarat', '24', 'HDFC Bank, Jamnagar Branch', '50200012345678', 'HDFC0001234', 'Jamnagar GIDC', 'NT1', 'brand')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, firm_code, tag_color)
+        VALUES (2, 'Nain Fasteners & Hardware Co.', '24FGHIJ5678K1Z2', 'FGHIJ5678K', 'Shop 12, Fastener Market, Jamnagar, Gujarat 361001', '+91 288 255 5678', 'info@nainfasteners.in', 'Gujarat', '24', 'State Bank of India, Jamnagar', '30987654321', 'SBIN0001234', 'Main Branch', 'NT2', 'emerald')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    } catch {
+      // non-fatal if table not initialized yet
     }
   } catch (err) {
     console.error('Error during schema column migration:', err);
@@ -482,9 +501,16 @@ export async function getDb(): Promise<PGlite> {
       await populateRealInventory(db);
     } catch (err) {
       console.error('Error in populateRealInventory:', err);
-      const { rows } = await db.query<{ count: string }>('SELECT COUNT(*)::text as count FROM products');
-      if (parseInt(rows[0]?.count || '0', 10) === 0) {
-        await db.exec(SEED_SQL);
+      try {
+        const { rows: disabledRows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'disable_demo_seed'");
+        if (disabledRows.length === 0 || disabledRows[0].value !== 'true') {
+          const { rows } = await db.query<{ count: string }>('SELECT COUNT(*)::text as count FROM products');
+          if (parseInt(rows[0]?.count || '0', 10) === 0) {
+            await db.exec(SEED_SQL);
+          }
+        }
+      } catch {
+        // ignore
       }
     }
 

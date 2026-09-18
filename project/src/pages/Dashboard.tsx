@@ -15,7 +15,7 @@ import { printInvoice } from '@/components/PrintableInvoice';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { products, sales, purchases, verifications, customers, suppliers, cheques, loading, refreshData } = useStore();
+  const { products, sales, purchases, verifications, customers, suppliers, cheques, companySettings, loading, refreshData } = useStore();
 
   const [activeModal, setActiveModal] = useState<
     'todaySales' | 'todayPurchases' | 'todayCollections' | 'receivables' | 'supplierPayables' | 'lowStock' | 'outOfStock' | null
@@ -175,10 +175,10 @@ export default function Dashboard() {
         />
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => refreshData(true)}
+            onClick={() => refreshData()}
             disabled={loading}
             className="btn-secondary"
-            title="Sync / Reload Inventory Data"
+            title="Reload Inventory Data"
           >
             <RefreshCw className={`h-4 w-4 text-slate-600 ${loading ? 'animate-spin text-brand-600' : ''}`} />
             <span className="hidden sm:inline">Refresh Data</span>
@@ -203,28 +203,6 @@ export default function Dashboard() {
           </Link>
         </div>
       </div>
-
-      {/* Sync / Empty State Banner */}
-      {!loading && products.length === 0 && (
-        <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-fade-in shadow-xs">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black">
-              <Boxes className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-amber-950 text-base">Excel Fastener Inventory Ready to Load</h3>
-              <p className="text-sm text-amber-800">Your 997 items, 2,085 purchases, and 44 sales from Excel are ready to populate.</p>
-            </div>
-          </div>
-          <button
-            onClick={() => refreshData(true)}
-            className="btn-primary bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-2 whitespace-nowrap"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Sync All Data Now
-          </button>
-        </div>
-      )}
 
       {/* Cheque Deposit & Claimable Alert Banner */}
       {claimableCheques.length > 0 && (
@@ -559,7 +537,7 @@ export default function Dashboard() {
                                 </a>
                               )}
                               <button
-                                onClick={() => printInvoice(s)}
+                                onClick={() => printInvoice(s, undefined, companySettings)}
                                 className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
                                 title="Print Invoice"
                               >
@@ -758,7 +736,7 @@ export default function Dashboard() {
                                 View Order
                               </button>
                             )}
-                            <button onClick={() => printInvoice(s)} className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg" title="Print">
+                            <button onClick={() => printInvoice(s, undefined, companySettings)} className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg" title="Print">
                               <Printer className="h-4 w-4" />
                             </button>
                           </div>

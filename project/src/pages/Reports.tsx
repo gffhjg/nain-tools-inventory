@@ -567,9 +567,6 @@ export default function Reports() {
           <ProformaReport
             sales={filteredSales}
             companySettings={companySettings}
-            dateRange={dateRange}
-            onSelectRange={setDateRange}
-            allSales={sales}
           />
         )}
         {activeReport === 'purchase' && (
@@ -585,8 +582,6 @@ export default function Reports() {
             cheques={filteredCheques}
             onClear={confirmChequeClearance}
             onBounce={confirmChequeBounce}
-            dateRange={dateRange}
-            onSelectRange={setDateRange}
           />
         )}
         {activeReport === 'inventory' && <InventoryReport products={products} />}

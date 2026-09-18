@@ -218,6 +218,7 @@ export type Supplier = {
 };
 
 export type CompanySettings = {
+  id?: number;
   companyName: string;
   gstin: string;
   pan: string;
@@ -231,4 +232,7 @@ export type CompanySettings = {
   bankIfsc: string;
   bankBranch: string;
   logo: string;
+  firmCode?: string;
+  tagColor?: string;
+  isDefault?: boolean;
 };

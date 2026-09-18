@@ -280,17 +280,23 @@ function mapSupplier(r: SupplierRow): Supplier {
 }
 
 type CompanySettingsRow = {
+  id: number;
   company_name: string; gstin: string; pan: string; address: string; phone: string;
   email: string; state: string; state_code: string;
   bank_name: string; bank_account: string; bank_ifsc: string; bank_branch: string; logo: string;
+  firm_code?: string; tag_color?: string;
 };
 
 function mapCompanySettings(r: CompanySettingsRow): CompanySettings {
+  const firmId = r.id || 1;
   return {
+    id: firmId,
     companyName: r.company_name, gstin: r.gstin, pan: r.pan, address: r.address,
     phone: r.phone, email: r.email, state: r.state, stateCode: r.state_code,
     bankName: r.bank_name, bankAccount: r.bank_account, bankIfsc: r.bank_ifsc,
     bankBranch: r.bank_branch, logo: r.logo || '',
+    firmCode: r.firm_code || (firmId === 1 ? 'NT1' : 'NT2'),
+    tagColor: r.tag_color || (firmId === 1 ? 'brand' : 'emerald'),
   };
 }
 
@@ -309,6 +315,59 @@ function validateNonEmpty(value: string, field: string): void {
 export const api = {
   async forceRepopulateInventory(): Promise<void> {
     const db = await getDb();
+    await populateRealInventory(db, true);
+  },
+
+  async isDemoSeedDisabled(): Promise<boolean> {
+    try {
+      const db = await getDb();
+      const { rows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'disable_demo_seed'");
+      return rows.length > 0 && rows[0].value === 'true';
+    } catch {
+      return false;
+    }
+  },
+
+  async wipeAllData(preserveCompanySettings = true): Promise<void> {
+    const db = await getDb();
+    await db.exec('BEGIN;');
+    try {
+      await db.exec(`
+        DELETE FROM cheques;
+        DELETE FROM sale_items;
+        DELETE FROM purchase_items;
+        DELETE FROM verifications;
+        DELETE FROM sales;
+        DELETE FROM purchases;
+        DELETE FROM products;
+        DELETE FROM customers;
+        DELETE FROM suppliers;
+        DELETE FROM categories;
+      `);
+      if (!preserveCompanySettings) {
+        await db.exec('DELETE FROM company_settings;');
+      }
+      await db.exec(`
+        INSERT INTO _meta (key, value) VALUES ('disable_demo_seed', 'true')
+        ON CONFLICT (key) DO UPDATE SET value = 'true';
+        INSERT INTO _meta (key, value) VALUES ('excel_inventory_imported', 'true')
+        ON CONFLICT (key) DO UPDATE SET value = 'true';
+      `);
+      await db.exec('COMMIT;');
+    } catch (err) {
+      await db.exec('ROLLBACK;');
+      throw err;
+    }
+  },
+
+  async restoreDemoData(): Promise<void> {
+    const db = await getDb();
+    await db.exec(`
+      INSERT INTO _meta (key, value) VALUES ('disable_demo_seed', 'false')
+      ON CONFLICT (key) DO UPDATE SET value = 'false';
+      INSERT INTO _meta (key, value) VALUES ('excel_inventory_imported', 'false')
+      ON CONFLICT (key) DO UPDATE SET value = 'false';
+    `);
     await populateRealInventory(db, true);
   },
 
@@ -966,23 +1025,83 @@ export const api = {
     );
   },
 
-  // ---- Company Settings ----
-  async getCompanySettings(): Promise<CompanySettings> {
+  // ---- Company & Multi-Firm Settings ----
+  async getFirmProfiles(): Promise<CompanySettings[]> {
     const db = await getDb();
-    const { rows } = await db.query<CompanySettingsRow>('SELECT * FROM company_settings WHERE id = 1');
+    const { rows } = await db.query<CompanySettingsRow>('SELECT * FROM company_settings ORDER BY id ASC');
     if (rows.length === 0) {
-      await db.query('INSERT INTO company_settings (id) VALUES (1)');
-      const { rows: fresh } = await db.query<CompanySettingsRow>('SELECT * FROM company_settings WHERE id = 1');
-      return mapCompanySettings(fresh[0]);
+      await db.query(`
+        INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, firm_code, tag_color)
+        VALUES (1, 'Nain Tools & Bolt Co.', '24ABCDE1234F1Z5', 'ABCDE1234F', 'Plot 42, GIDC Industrial Estate, Jamnagar, Gujarat 361004', '+91 288 255 1234', 'sales@naintools.in', 'Gujarat', '24', 'HDFC Bank, Jamnagar Branch', '50200012345678', 'HDFC0001234', 'Jamnagar GIDC', 'NT1', 'brand');
+        INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, firm_code, tag_color)
+        VALUES (2, 'Nain Fasteners & Hardware Co.', '24FGHIJ5678K1Z2', 'FGHIJ5678K', 'Shop 12, Fastener Market, Jamnagar, Gujarat 361001', '+91 288 255 5678', 'info@nainfasteners.in', 'Gujarat', '24', 'State Bank of India, Jamnagar', '30987654321', 'SBIN0001234', 'Main Branch', 'NT2', 'emerald');
+      `);
+      const { rows: fresh } = await db.query<CompanySettingsRow>('SELECT * FROM company_settings ORDER BY id ASC');
+      return fresh.map(mapCompanySettings);
+    }
+    if (rows.length === 1) {
+      await db.query(`
+        INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, firm_code, tag_color)
+        VALUES (2, 'Nain Fasteners & Hardware Co.', '24FGHIJ5678K1Z2', 'FGHIJ5678K', 'Shop 12, Fastener Market, Jamnagar, Gujarat 361001', '+91 288 255 5678', 'info@nainfasteners.in', 'Gujarat', '24', 'State Bank of India, Jamnagar', '30987654321', 'SBIN0001234', 'Main Branch', 'NT2', 'emerald')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+      const { rows: fresh } = await db.query<CompanySettingsRow>('SELECT * FROM company_settings ORDER BY id ASC');
+      return fresh.map(mapCompanySettings);
+    }
+    return rows.map(mapCompanySettings);
+  },
+
+  async getCompanySettings(firmId = 1): Promise<CompanySettings> {
+    const db = await getDb();
+    const { rows } = await db.query<CompanySettingsRow>('SELECT * FROM company_settings WHERE id = $1', [firmId]);
+    if (rows.length === 0) {
+      const all = await this.getFirmProfiles();
+      return all.find((f) => f.id === firmId) || all[0];
     }
     return mapCompanySettings(rows[0]);
   },
 
   async updateCompanySettings(s: CompanySettings): Promise<void> {
+    const firmId = s.id || 1;
     const db = await getDb();
     await db.query(
-      `UPDATE company_settings SET company_name=$1, gstin=$2, pan=$3, address=$4, phone=$5, email=$6, state=$7, state_code=$8, bank_name=$9, bank_account=$10, bank_ifsc=$11, bank_branch=$12, logo=$13, updated_at=now() WHERE id=1`,
-      [s.companyName, s.gstin.toUpperCase(), s.pan, s.address, s.phone, s.email, s.state, s.stateCode, s.bankName, s.bankAccount, s.bankIfsc, s.bankBranch, s.logo],
+      `INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, logo, firm_code, tag_color, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
+       ON CONFLICT (id) DO UPDATE SET
+         company_name = EXCLUDED.company_name,
+         gstin = EXCLUDED.gstin,
+         pan = EXCLUDED.pan,
+         address = EXCLUDED.address,
+         phone = EXCLUDED.phone,
+         email = EXCLUDED.email,
+         state = EXCLUDED.state,
+         state_code = EXCLUDED.state_code,
+         bank_name = EXCLUDED.bank_name,
+         bank_account = EXCLUDED.bank_account,
+         bank_ifsc = EXCLUDED.bank_ifsc,
+         bank_branch = EXCLUDED.bank_branch,
+         logo = EXCLUDED.logo,
+         firm_code = COALESCE(EXCLUDED.firm_code, company_settings.firm_code),
+         tag_color = COALESCE(EXCLUDED.tag_color, company_settings.tag_color),
+         updated_at = now()`,
+      [
+        firmId,
+        s.companyName,
+        s.gstin.toUpperCase(),
+        s.pan,
+        s.address,
+        s.phone,
+        s.email,
+        s.state,
+        s.stateCode,
+        s.bankName,
+        s.bankAccount,
+        s.bankIfsc,
+        s.bankBranch,
+        s.logo || '',
+        s.firmCode || (firmId === 1 ? 'NT1' : 'NT2'),
+        s.tagColor || (firmId === 1 ? 'brand' : 'emerald'),
+      ],
     );
   },
 

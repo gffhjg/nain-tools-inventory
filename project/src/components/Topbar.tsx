@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useDeferredValue } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Menu, Search, Bell, ChevronDown, Package, Truck, ShoppingCart, Users, Building2, Boxes, CheckCheck, Trash2, AlertTriangle, XCircle, Info, CheckCircle2, Command, X } from 'lucide-react';
+import { Menu, Search, Bell, ChevronDown, Package, Truck, ShoppingCart, Users, Building2, Boxes, CheckCheck, Trash2, AlertTriangle, XCircle, Info, CheckCircle2, Command, X, Check, Settings as SettingsIcon } from 'lucide-react';
 import { useStore } from '@/store/AppStore';
 import { useNotifications, type NotificationType } from '@/store/NotificationStore';
 import { smartSearchMatch } from '@/utils/search';
@@ -60,8 +60,8 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
   const searchRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const paletteInputRef = useRef<HTMLInputElement>(null);
-  const { products, sales, purchases, customers, suppliers } = useStore();
-  const { notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
+  const { products, sales, purchases, customers, suppliers, companySettings, firmProfiles, activeFirmId, switchActiveFirm } = useStore();
+  const { notifications, unreadCount, markAsRead, markAllAsRead, deleteNotification, clearAll } = useNotifications();
 
   const results = useMemo<SearchResult[]>(() => {
     const q = deferredQuery.trim();
@@ -320,21 +320,27 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
           </button>
 
           {notifOpen && (
-            <div className="absolute right-0 top-full z-30 mt-2 w-80 animate-scale-in origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card">
+            <div className="absolute right-0 top-full z-30 mt-2 w-88 animate-scale-in origin-top-right overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
               {/* Header */}
-              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 bg-slate-50/60">
                 <div className="flex items-center gap-2">
-                  <Bell className="h-4 w-4 text-slate-500" />
-                  <h3 className="text-sm font-semibold text-slate-800">Notifications</h3>
-                  {unreadCount > 0 && (
-                    <span className="rounded-full bg-err-50 px-2 py-0.5 text-xs font-semibold text-err-600">{unreadCount} new</span>
+                  <Bell className="h-4 w-4 text-slate-600" />
+                  <h3 className="text-sm font-bold text-slate-800">Notifications</h3>
+                  {unreadCount > 0 ? (
+                    <span className="rounded-full bg-err-500 text-white px-2 py-0.5 text-[11px] font-bold shadow-xs">
+                      {unreadCount} new
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-slate-200/80 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                      All read
+                    </span>
                   )}
                 </div>
-                {notifications.length > 0 && (
+                {notifications.length > 0 && unreadCount > 0 && (
                   <button
                     onClick={markAllAsRead}
-                    className="flex items-center gap-1 text-xs font-medium text-brand-600 transition hover:text-brand-700"
-                    title="Mark all as read"
+                    className="flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700 transition"
+                    title="Mark all notifications as read"
                   >
                     <CheckCheck className="h-3.5 w-3.5" />
                     Mark all read
@@ -343,34 +349,81 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
               </div>
 
               {/* List */}
-              <div className="max-h-80 overflow-y-auto">
+              <div className="max-h-84 overflow-y-auto">
                 {notifications.length === 0 ? (
-                  <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
-                    <Bell className="h-8 w-8 text-slate-200" />
-                    <p className="text-sm text-slate-400">No notifications</p>
+                  <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                      <Bell className="h-5 w-5" />
+                    </div>
+                    <p className="text-sm font-medium text-slate-600">No notifications</p>
+                    <p className="text-xs text-slate-400">You're all caught up!</p>
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-50">
+                  <div className="divide-y divide-slate-100">
                     {notifications.map((n) => {
                       const Icon = notifIcon[n.type];
                       return (
-                        <button
+                        <div
                           key={n.id}
                           onClick={() => handleNotifClick(n.id)}
-                          className={`flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-slate-50 ${!n.read ? 'bg-brand-50/30' : ''}`}
+                          className={`group relative flex w-full items-start gap-3 p-3.5 text-left transition cursor-pointer ${
+                            !n.read
+                              ? 'bg-amber-50/30 hover:bg-amber-50/60 border-l-4 border-amber-500'
+                              : 'bg-white hover:bg-slate-50/90 border-l-4 border-transparent'
+                          }`}
                         >
                           <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${notifTone[n.type]}`}>
                             <Icon className="h-4 w-4" />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium text-slate-800">{n.title}</p>
-                              {!n.read && <span className="h-2 w-2 shrink-0 rounded-full bg-err-500" />}
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <p className={`text-xs truncate ${!n.read ? 'font-bold text-slate-900' : 'font-medium text-slate-600'}`}>
+                                  {n.title}
+                                </p>
+                                {/* The unread red mark: ONLY shown when !n.read */}
+                                {!n.read && (
+                                  <span
+                                    className="inline-block h-2 w-2 shrink-0 rounded-full bg-err-500 ring-2 ring-err-200"
+                                    title="New unread notification"
+                                  />
+                                )}
+                              </div>
+                              <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(n.timestamp)}</span>
                             </div>
-                            <p className="mt-0.5 text-xs text-slate-500">{n.message}</p>
-                            <p className="mt-1 text-xs text-slate-400">{timeAgo(n.timestamp)}</p>
+                            <p className={`mt-0.5 text-xs line-clamp-2 leading-relaxed ${!n.read ? 'text-slate-800' : 'text-slate-500'}`}>
+                              {n.message}
+                            </p>
                           </div>
-                        </button>
+
+                          {/* Action icons on hover: Mark read and Dismiss */}
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition shrink-0 self-center">
+                            {!n.read && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  markAsRead(n.id);
+                                }}
+                                title="Mark as read (remove mark)"
+                                className="rounded-md p-1.5 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600 transition"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteNotification(n.id);
+                              }}
+                              title="Dismiss notification"
+                              className="rounded-md p-1.5 text-slate-400 hover:bg-err-50 hover:text-err-600 transition"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
                       );
                     })}
                   </div>
@@ -379,7 +432,7 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
 
               {/* Footer */}
               {notifications.length > 0 && (
-                <div className="border-t border-slate-100 px-4 py-2.5">
+                <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-4 py-2.5">
                   <button
                     onClick={clearAll}
                     className="flex items-center gap-1.5 text-xs font-medium text-slate-500 transition hover:text-err-600"
@@ -387,6 +440,9 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
                     <Trash2 className="h-3.5 w-3.5" />
                     Clear all
                   </button>
+                  <span className="text-[11px] text-slate-400">
+                    {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
+                  </span>
                 </div>
               )}
             </div>
@@ -398,39 +454,158 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
         <div className="relative">
           <button
             onClick={() => setProfileOpen((v) => !v)}
-            className="flex items-center gap-2.5 rounded-xl p-1.5 pr-2 transition hover:bg-slate-100"
+            className="flex items-center gap-2.5 rounded-xl p-1.5 pr-2 transition hover:bg-slate-100 border border-transparent hover:border-slate-200"
+            title="Switch Firm Profile"
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-sm font-bold text-white">
-              NT
+            <div className={`flex h-9 w-9 items-center justify-center rounded-lg text-xs font-black text-white shadow-xs ${
+              activeFirmId === 2 ? 'bg-gradient-to-br from-emerald-600 to-teal-700' : 'bg-gradient-to-br from-brand-600 to-indigo-700'
+            }`}>
+              {companySettings?.firmCode || (companySettings?.companyName ? companySettings.companyName.slice(0, 2).toUpperCase() : `F${activeFirmId}`)}
             </div>
-            <div className="hidden text-left leading-tight sm:block">
-              <p className="text-sm font-semibold text-slate-800">Tanishq Nain</p>
-              <p className="text-xs text-slate-500">Owner</p>
+            <div className="hidden text-left leading-tight sm:block max-w-[140px]">
+              <p className="text-xs font-bold text-slate-900 truncate">
+                {companySettings?.companyName || 'Nain Tools & Bolt Co.'}
+              </p>
+              <div className="flex items-center gap-1 mt-0.5">
+                <span className={`inline-block h-1.5 w-1.5 rounded-full ${activeFirmId === 2 ? 'bg-emerald-500' : 'bg-brand-500'}`} />
+                <p className="text-[10px] font-semibold text-slate-500">Firm {activeFirmId} Active</p>
+              </div>
             </div>
-            <ChevronDown className="hidden h-4 w-4 text-slate-400 sm:block" />
+            <ChevronDown className="hidden h-3.5 w-3.5 text-slate-400 sm:block" />
           </button>
 
           {profileOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setProfileOpen(false)} />
-              <div className="absolute right-0 top-full z-20 mt-2 w-56 animate-scale-in origin-top-right rounded-xl border border-slate-200 bg-white p-1.5 shadow-card">
-                <div className="border-b border-slate-100 px-3 py-2.5">
-                  <p className="text-sm font-semibold text-slate-800">Tanishq Nain</p>
-                  <p className="text-xs text-slate-500">tanishq@naintools.in</p>
+              <div className="absolute right-0 top-full z-20 mt-2 w-80 animate-scale-in origin-top-right rounded-2xl border border-slate-200 bg-white p-2 shadow-xl divide-y divide-slate-100">
+                {/* 1. User Header (Owner identity) */}
+                <div className="p-2.5 pb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-600 to-indigo-700 text-sm font-bold text-white shadow-xs">
+                      TN
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-bold text-slate-900 truncate">Tanishq Nain</p>
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">Owner</span>
+                      </div>
+                      <p className="text-xs text-slate-500 truncate">tanishq@naintools.in</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="py-1">
-                  <button className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-50">
+
+                {/* 2. Dual Firm Profiles Switcher (Shared Inventory) */}
+                <div className="py-2">
+                  <div className="flex items-center justify-between px-2.5 py-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                      Switch Firm Profile
+                    </span>
+                    <span className="text-[10px] font-semibold text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded">
+                      Shared Stock
+                    </span>
+                  </div>
+
+                  <div className="mt-1 space-y-1">
+                    {firmProfiles.map((firm) => {
+                      const isActive = firm.id === activeFirmId;
+                      const isFirm2 = firm.id === 2;
+                      return (
+                        <button
+                          key={firm.id}
+                          onClick={() => {
+                            switchActiveFirm(firm.id!);
+                            setProfileOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between gap-2.5 rounded-xl p-2.5 text-left transition ${
+                            isActive
+                              ? 'bg-brand-50/90 border border-brand-200 text-brand-950 font-semibold shadow-2xs'
+                              : 'hover:bg-slate-50 border border-transparent text-slate-700'
+                          }`}
+                          title={`Switch to ${firm.companyName}`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-black text-white ${
+                              isFirm2 ? 'bg-emerald-600' : 'bg-brand-600'
+                            }`}>
+                              {firm.firmCode || `F${firm.id}`}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold truncate">
+                                {firm.companyName}
+                              </p>
+                              <p className="text-[10px] font-mono text-slate-500 truncate">
+                                {firm.gstin ? `GST: ${firm.gstin}` : `Firm ${firm.id} (Configurable)`}
+                              </p>
+                            </div>
+                          </div>
+                          {isActive ? (
+                            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white shadow-xs">
+                              <Check className="h-3 w-3" />
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 shrink-0 font-medium">Switch</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 3. Working User Options */}
+                <div className="py-1.5">
+                  <button
+                    onClick={() => {
+                      navigate('/settings?tab=profile');
+                      setProfileOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Users className="h-3.5 w-3.5 text-slate-500" />
                     My Profile
                   </button>
-                  <button className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-50">
-                    Account Settings
+                  <button
+                    onClick={() => {
+                      navigate('/settings?tab=business');
+                      setProfileOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Building2 className="h-3.5 w-3.5 text-slate-500" />
+                    Firm Profiles &amp; GSTINs
                   </button>
-                  <button className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-50">
+                  <button
+                    onClick={() => {
+                      navigate('/settings?tab=security');
+                      setProfileOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <SettingsIcon className="h-3.5 w-3.5 text-slate-500" />
+                    Account Settings &amp; Backup
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNotifOpen(true);
+                      setProfileOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Bell className="h-3.5 w-3.5 text-slate-500" />
                     Notifications
                   </button>
                 </div>
-                <div className="border-t border-slate-100 pt-1">
-                  <button className="w-full rounded-lg px-3 py-2 text-left text-sm font-medium text-err-600 hover:bg-err-50">
+
+                {/* 4. Sign Out */}
+                <div className="p-1.5 pt-1">
+                  <button
+                    onClick={() => {
+                      setProfileOpen(false);
+                      if (window.confirm('Do you want to reload the application session?')) {
+                        window.location.reload();
+                      }
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 transition"
+                  >
                     Sign out
                   </button>
                 </div>

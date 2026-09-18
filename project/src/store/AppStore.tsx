@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { api } from '@/lib/api';
+import { getDb } from '@/lib/db';
 import { withComputed } from '@/lib/constants';
 import { useNotifications } from '@/store/NotificationStore';
 import type {
@@ -19,6 +20,9 @@ type StoreContextValue = {
   suppliers: Supplier[];
   cheques: ChequeRecord[];
   companySettings: CompanySettings | null;
+  firmProfiles: CompanySettings[];
+  activeFirmId: number;
+  switchActiveFirm: (id: number) => void;
   loading: boolean;
   error: string | null;
   addProduct: (data: ProductFormData) => Promise<Product>;
@@ -51,6 +55,8 @@ type StoreContextValue = {
   deleteCheque: (id: string) => Promise<void>;
   updateCompanySettings: (s: CompanySettings) => Promise<void>;
   refreshData: (forcePopulate?: boolean) => Promise<void>;
+  wipeAllData: (preserveCompanySettings?: boolean) => Promise<void>;
+  restoreDemoData: () => Promise<void>;
 };
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -73,12 +79,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [cheques, setCheques] = useState<ChequeRecord[]>([]);
+  const [activeFirmId, setActiveFirmId] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('nain-tools-active-firm-id');
+      return saved ? parseInt(saved, 10) : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const [firmProfiles, setFirmProfiles] = useState<CompanySettings[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { addNotification } = useNotifications();
+  const { addNotification, clearAll: clearAllNotifications } = useNotifications();
   const notifiedStockRef = useRef<Set<string>>(new Set());
   const notifiedChequesRef = useRef<Set<string>>(new Set());
+
+  const switchActiveFirm = useCallback((id: number) => {
+    setActiveFirmId(id);
+    try {
+      localStorage.setItem('nain-tools-active-firm-id', id.toString());
+    } catch {
+      // ignore
+    }
+    setFirmProfiles((prev) => {
+      const active = prev.find((f) => f.id === id);
+      if (active) setCompanySettings(active);
+      return prev;
+    });
+  }, []);
 
   const refreshData = useCallback(async (forcePopulate = false) => {
     try {
@@ -86,19 +115,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (forcePopulate) {
         await api.forceRepopulateInventory();
       }
-      let p = await api.getProducts();
-      if (p.length < 900) {
-        await api.forceRepopulateInventory();
-        p = await api.getProducts();
-      }
-      const [s, po, v, c, sup, chqs, cs] = await Promise.all([
+      const p = await api.getProducts();
+      const [s, po, v, c, sup, chqs, firms] = await Promise.all([
         api.getSales(),
         api.getPurchases(),
         api.getVerifications(),
         api.getCustomers(),
         api.getSuppliers(),
         api.getCheques().catch(() => []),
-        api.getCompanySettings().catch(() => null),
+        api.getFirmProfiles().catch(() => []),
       ]);
       setProducts(p);
       setSales(s);
@@ -107,35 +132,85 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCustomers(c);
       setSuppliers(sup);
       setCheques(chqs);
-      if (cs) setCompanySettings(cs);
+      setFirmProfiles(firms);
+      const active = firms.find((f) => f.id === activeFirmId) || firms[0] || null;
+      if (active) setCompanySettings(active);
       setError(null);
       console.log(`[AppStore] refreshData complete: ${p.length} products, ${po.length} purchases, ${s.length} sales`);
     } catch (err) {
       console.error('[AppStore] refreshData error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load data');
+      setError(err instanceof Error ? err.message : 'Failed to refresh data');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeFirmId]);
+
+  const wipeAllData = useCallback(async (preserveCompanySettings = true) => {
+    try {
+      setLoading(true);
+      await api.wipeAllData(preserveCompanySettings);
+      setProducts([]);
+      setSales([]);
+      setPurchases([]);
+      setVerifications([]);
+      setCustomers([]);
+      setSuppliers([]);
+      setCheques([]);
+      clearAllNotifications();
+      notifiedStockRef.current.clear();
+      notifiedChequesRef.current.clear();
+      if (!preserveCompanySettings) {
+        setCompanySettings(null);
+      }
+      setError(null);
+      console.log('[AppStore] wipeAllData complete.');
+    } catch (err) {
+      console.error('[AppStore] wipeAllData error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to wipe data');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [clearAllNotifications]);
+
+  const restoreDemoData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const db = await getDb();
+      await db.exec("DELETE FROM _meta WHERE key = 'data_wipe_executed';");
+      await api.restoreDemoData();
+      await refreshData();
+      console.log('[AppStore] restoreDemoData complete.');
+    } catch (err) {
+      console.error('[AppStore] restoreDemoData error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to restore demo data');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshData]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        let p = await api.getProducts();
-        if (p.length < 900) {
-          console.log('[AppStore] Products count < 900, populating full Excel inventory...');
-          await api.forceRepopulateInventory();
-          p = await api.getProducts();
+        const db = await getDb();
+        const { rows: wipeRows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'data_wipe_executed'");
+        if (wipeRows.length === 0 || wipeRows[0].value !== 'true') {
+          console.log('[AppStore] Executing complete data wipe as requested...');
+          await api.wipeAllData(true);
+          await db.exec("INSERT INTO _meta (key, value) VALUES ('data_wipe_executed', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true';");
         }
-        const [s, po, v, c, sup, chqs, cs] = await Promise.all([
+
+        const p = await api.getProducts();
+        const [s, po, v, c, sup, chqs, firms] = await Promise.all([
           api.getSales(),
           api.getPurchases(),
           api.getVerifications(),
           api.getCustomers(),
           api.getSuppliers(),
           api.getCheques().catch(() => []),
-          api.getCompanySettings().catch(() => null),
+          api.getFirmProfiles().catch(() => []),
         ]);
         if (cancelled) return;
         setProducts(p);
@@ -145,7 +220,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setCustomers(c);
         setSuppliers(sup);
         setCheques(chqs);
-        if (cs) setCompanySettings(cs);
+        setFirmProfiles(firms);
+        const active = firms.find((f) => f.id === activeFirmId) || firms[0] || null;
+        if (active) setCompanySettings(active);
         setLoading(false);
         console.log(`[AppStore] Initial load complete: ${p.length} products, ${po.length} purchases, ${s.length} sales`);
       } catch (err) {
@@ -174,6 +251,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           'info',
           isOverdue ? 'Cheque Overdue for Deposit' : 'Cheque Claimable Today',
           `Cheque #${chq.chequeNumber} (${chq.bankName}) for ${chq.customerName} (₹${chq.amount.toLocaleString('en-IN')}) is ${isOverdue ? 'overdue since ' + chq.chequeDate : 'ready to claim/deposit today'}.`,
+          `cheque:${key}`,
         );
       }
     }
@@ -187,10 +265,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (notifiedStockRef.current.has(key)) continue;
       if (p.status === 'out-of-stock') {
         notifiedStockRef.current.add(key);
-        addNotification('out-of-stock', 'Out of Stock', `${p.name} is completely out of stock. Reorder immediately.`);
+        addNotification(
+          'out-of-stock',
+          'Out of Stock',
+          `${p.name} is completely out of stock. Reorder immediately.`,
+          `stock:${p.id}:out-of-stock`,
+        );
       } else if (p.status === 'low-stock') {
         notifiedStockRef.current.add(key);
-        addNotification('low-stock', 'Low Stock Alert', `${p.name} is running low (${p.stock} pieces, reorder at ${p.reorderLevel}).`);
+        addNotification(
+          'low-stock',
+          'Low Stock Alert',
+          `${p.name} is running low (${p.stock} pieces, reorder at ${p.reorderLevel}).`,
+          `stock:${p.id}:low-stock`,
+        );
       }
       // Clean up keys for products no longer in a bad state
       if (p.status === 'in-stock') {
@@ -880,13 +968,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const updateCompanySettings = useCallback(async (s: CompanySettings) => {
     await api.updateCompanySettings(s);
-    setCompanySettings(s);
-  }, []);
+    const firms = await api.getFirmProfiles();
+    setFirmProfiles(firms);
+    const targetId = s.id || activeFirmId;
+    const active = firms.find((f) => f.id === targetId) || firms[0] || s;
+    if (active) setCompanySettings(active);
+  }, [activeFirmId]);
 
   return (
     <StoreContext.Provider
       value={{
         products, sales, purchases, verifications, customers, suppliers, cheques, companySettings,
+        firmProfiles, activeFirmId, switchActiveFirm,
         loading, error, refreshData,
         addProduct, importProducts, updateProduct, deleteProduct,
         addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
@@ -895,7 +988,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         addCustomer, updateCustomer, deleteCustomer,
         addSupplier, updateSupplier, deleteSupplier,
         addCheque, updateCheque, confirmChequeClearance, confirmChequeBounce, deleteCheque,
-        updateCompanySettings,
+        updateCompanySettings, wipeAllData, restoreDemoData,
       }}
     >
       {children}

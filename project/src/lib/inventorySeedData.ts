@@ -27,10 +27,12 @@ function sqlEscape(str: any): string {
 export async function populateRealInventory(db: PGlite, force = false): Promise<void> {
   // Check if real inventory already imported
   try {
+    const { rows: disabledRows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'disable_demo_seed'");
+    if (!force && disabledRows.length > 0 && disabledRows[0].value === 'true') {
+      return;
+    }
     const { rows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'excel_inventory_imported'");
-    const { rows: prodRows } = await db.query<{ count: string }>("SELECT COUNT(*)::text as count FROM products");
-    const count = parseInt(prodRows[0]?.count || '0', 10);
-    if (!force && rows.length > 0 && rows[0].value === 'true' && count >= 900) {
+    if (!force && rows.length > 0 && rows[0].value === 'true') {
       return;
     }
   } catch (e) {
@@ -108,6 +110,8 @@ export async function populateRealInventory(db: PGlite, force = false): Promise<
     await db.exec(`
       INSERT INTO _meta (key, value) VALUES ('excel_inventory_imported', 'true')
       ON CONFLICT (key) DO UPDATE SET value = 'true';
+      INSERT INTO _meta (key, value) VALUES ('disable_demo_seed', 'false')
+      ON CONFLICT (key) DO UPDATE SET value = 'false';
     `);
 
     await db.exec('COMMIT;');

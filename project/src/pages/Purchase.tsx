@@ -4,7 +4,7 @@ import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
   Trash2, Minus, Printer, CheckCircle2, Package, X, AlertTriangle, Sparkles,
   ShoppingCart, ArrowRight, Landmark, CreditCard, Calendar,
-  Zap, Wallet, Receipt
+  Zap, Wallet, Receipt, SlidersHorizontal, ChevronDown, ChevronUp, RefreshCw
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -12,7 +12,18 @@ import Modal from '@/components/Modal';
 import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeDiscountAmount, computeGrandTotal, productCategories } from '@/lib/constants';
-import { downloadCSV, toCSV, money } from '@/utils/analytics';
+import {
+  downloadCSV,
+  toCSV,
+  money,
+  moneyShort,
+  filterByDateRange,
+  getDateRangeLabel,
+  getDateRangeBounds,
+  getDaysAgo,
+  formatRelativeDate,
+  type DateRange,
+} from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
 import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType, Product, ChequeStatus, Supplier } from '@/lib/types';
 
@@ -74,11 +85,34 @@ function nextRawPurchaseNumber(existingSales: SaleRecord[]): string {
 
 type DraftLine = PurchaseLineItem;
 
+const PURCHASE_TIMELINE_STEPS: { id: DateRange; label: string; shortLabel: string }[] = [
+  { id: 'today', label: 'Today', shortLabel: 'Today' },
+  { id: '3d', label: 'Past 3 Days', shortLabel: '3D' },
+  { id: '7d', label: 'Past 7 Days', shortLabel: '7D' },
+  { id: '14d', label: 'Past 14 Days', shortLabel: '14D' },
+  { id: '30d', label: 'Past 30 Days', shortLabel: '30D' },
+  { id: '90d', label: 'Past 90 Days', shortLabel: '90D' },
+  { id: 'all', label: 'All Time', shortLabel: 'All' },
+];
+
 export default function Purchase() {
   const { purchases, products, suppliers, sales, addPurchase, updatePurchase, deletePurchase, addSale, addProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [activePurchaseSubTab, setActivePurchaseSubTab] = useState<'bills' | 'raw-purchases'>('bills');
+  const [timelineRange, setTimelineRange] = useState<DateRange>('all');
+  const [isTimelineOpen, setIsTimelineOpen] = useState<boolean>(() => {
+    return localStorage.getItem('nain_purchase_timeline_open') === 'true';
+  });
+
+  const toggleTimeline = () => {
+    setIsTimelineOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem('nain_purchase_timeline_open', String(next));
+      return next;
+    });
+  };
+
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const [page, setPage] = useState(1);
@@ -312,24 +346,51 @@ export default function Purchase() {
     return list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   }, [purchases, sales]);
 
-  const filtered = useMemo(() => {
-    const q = deferredSearch.toLowerCase().trim();
-    return combinedRecords.filter((rec) => {
-      if (activeTab === 'bills' && rec.typeLabel !== 'PURCHASE BILL') return false;
-      if (activeTab === 'credit-notes' && rec.typeLabel !== 'CREDIT NOTE') return false;
+  const timelineFilteredPurchases = useMemo(() => {
+    if (timelineRange === 'all') return combinedRecords;
+    return filterByDateRange(combinedRecords, timelineRange);
+  }, [combinedRecords, timelineRange]);
 
-      if (!q) return true;
-      return (
+  const timelineSummary = useMemo(() => {
+    const total = timelineFilteredPurchases.reduce((s, r) => s + r.grandTotal, 0);
+    return {
+      count: timelineFilteredPurchases.length,
+      total,
+      label: getDateRangeLabel(timelineRange),
+    };
+  }, [timelineFilteredPurchases, timelineRange]);
+
+  const latestPurchaseDate = useMemo(() => {
+    const valid = combinedRecords
+      .filter((s) => s.date)
+      .map((s) => s.date)
+      .sort((a, b) => b.localeCompare(a));
+    return valid[0] || null;
+  }, [combinedRecords]);
+
+  const sliderIndex = PURCHASE_TIMELINE_STEPS.findIndex((s) => s.id === timelineRange);
+
+  const filtered = useMemo(() => {
+    let list = timelineFilteredPurchases;
+    if (activeTab === 'bills') {
+      list = list.filter((rec) => rec.typeLabel === 'PURCHASE BILL');
+    } else if (activeTab === 'credit-notes') {
+      list = list.filter((rec) => rec.typeLabel === 'CREDIT NOTE');
+    }
+
+    const q = deferredSearch.toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(
+      (rec) =>
         rec.docNumber.toLowerCase().includes(q) ||
         rec.supplier.toLowerCase().includes(q) ||
-        rec.items.some((i) => i.name.toLowerCase().includes(q))
-      );
-    });
-  }, [combinedRecords, deferredSearch, activeTab]);
+        (rec.items && rec.items.some((i) => i.name.toLowerCase().includes(q)))
+    );
+  }, [timelineFilteredPurchases, deferredSearch, activeTab]);
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, activeTab, pageSize]);
+  }, [deferredSearch, activeTab, timelineRange, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const paginatedPurchases = useMemo(() => {
@@ -338,7 +399,7 @@ export default function Purchase() {
     return filtered.slice(start, start + pageSize);
   }, [filtered, page, pageSize]);
 
-  const summary = useMemo(() => {
+  const allTimeSummary = useMemo(() => {
     const totalInward = combinedRecords.reduce((s, r) => s + r.grandTotal, 0);
     const totalPB = combinedRecords
       .filter((r) => r.typeLabel === 'PURCHASE BILL')
@@ -350,6 +411,27 @@ export default function Purchase() {
     const countCN = combinedRecords.filter((r) => r.typeLabel === 'CREDIT NOTE').length;
     return { totalInward, totalPB, countPB, totalCN, countCN };
   }, [combinedRecords]);
+
+  const summary = useMemo(() => {
+    const activeRecords = timelineRange === 'all' ? combinedRecords : timelineFilteredPurchases;
+    const totalInward = activeRecords.reduce((s, r) => s + r.grandTotal, 0);
+    const totalPB = activeRecords
+      .filter((r) => r.typeLabel === 'PURCHASE BILL')
+      .reduce((s, r) => s + r.grandTotal, 0);
+    const countPB = activeRecords.filter((r) => r.typeLabel === 'PURCHASE BILL').length;
+    const totalCN = activeRecords
+      .filter((r) => r.typeLabel === 'CREDIT NOTE')
+      .reduce((s, r) => s + r.grandTotal, 0);
+    const countCN = activeRecords.filter((r) => r.typeLabel === 'CREDIT NOTE').length;
+    return {
+      totalInward,
+      totalPB,
+      countPB,
+      totalCN,
+      countCN,
+      allTimeTotalInward: allTimeSummary.totalInward,
+    };
+  }, [combinedRecords, timelineFilteredPurchases, timelineRange, allTimeSummary]);
 
   const statCards = [
     { label: 'Total Purchase Value', value: `₹${summary.totalInward.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Truck, tone: 'bg-brand-50 text-brand-600' },
@@ -1252,14 +1334,25 @@ export default function Purchase() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600 font-bold shadow-xs group-hover:scale-110 group-hover:rotate-6 transition-all duration-300">
               <Truck className="h-5 w-5" />
             </div>
-            <span className="text-[10.5px] font-extrabold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-md">
-              All Inward
+            <span className={`text-[10.5px] font-extrabold px-2 py-0.5 rounded-md ${
+              timelineRange === 'all'
+                ? 'text-brand-700 bg-brand-50'
+                : 'text-brand-800 bg-brand-100 border border-brand-200'
+            }`}>
+              {timelineRange === 'all' ? 'All Inward' : timelineSummary.label}
             </span>
           </div>
           <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
-            ₹{summary.totalInward.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {money(summary.totalInward)}
           </p>
-          <p className="mt-1 text-xs text-slate-500 font-semibold">Total Purchase Value</p>
+          <div className="mt-1 flex items-center justify-between text-xs text-slate-500 font-semibold">
+            <span>Total Purchase Value</span>
+            {timelineRange !== 'all' && (
+              <span className="text-[10px] text-slate-400 font-medium" title={`All-time Total: ${money(summary.allTimeTotalInward)}`}>
+                All: {moneyShort(summary.allTimeTotalInward)}
+              </span>
+            )}
+          </div>
         </div>
 
         <div
@@ -1275,14 +1368,14 @@ export default function Purchase() {
               <PackageCheck className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
-              Purchase Bills
+              {summary.countPB} Bills
             </span>
           </div>
           <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
-            {summary.countPB}
+            {money(summary.totalPB)}
           </p>
           <p className="mt-1 text-xs text-slate-500 font-semibold">
-            ₹{summary.totalPB.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Inward
+            {timelineRange === 'all' ? 'Purchase Bills' : `Inward (${timelineSummary.label})`}
           </p>
         </div>
 
@@ -1299,14 +1392,14 @@ export default function Purchase() {
               <FileText className="h-5 w-5" />
             </div>
             <span className="text-[10.5px] font-extrabold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md">
-              Credit Notes
+              {summary.countCN} Notes
             </span>
           </div>
           <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
-            {summary.countCN}
+            {money(summary.totalCN)}
           </p>
           <p className="mt-1 text-xs text-slate-500 font-semibold">
-            ₹{summary.totalCN.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Adjustments
+            {timelineRange === 'all' ? 'Credit Notes' : `Adjustments (${timelineSummary.label})`}
           </p>
         </div>
 
@@ -1333,6 +1426,156 @@ export default function Purchase() {
         </div>
       </div>
 
+      {/* Collapsible Purchase & Inward Timeline Slider */}
+      <div className="mt-4">
+        {!isTimelineOpen ? (
+          /* Compact Collapsed Bar (Minimalist, 0 clutter for daily work) */
+          <div className="flex items-center justify-between px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 backdrop-blur-xs shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+                <Calendar className="h-3.5 w-3.5" />
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-bold text-slate-800">
+                  Timeline Filter:
+                </span>
+                <span className={`px-2 py-0.5 rounded-md font-extrabold text-[11px] ${
+                  timelineRange === 'all'
+                    ? 'bg-slate-100 text-slate-700'
+                    : 'bg-brand-50 text-brand-700 border border-brand-200'
+                }`}>
+                  {timelineSummary.label}
+                </span>
+                <span className="text-[11px] text-slate-500 font-semibold">
+                  ({timelineSummary.count} bills · {money(timelineSummary.total)})
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {timelineRange !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => setTimelineRange('all')}
+                  className="px-2 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-slate-100 transition cursor-pointer"
+                  title="Reset timeline to All Time"
+                >
+                  Reset All
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={toggleTimeline}
+                className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition flex items-center gap-1.5 cursor-pointer"
+                title="Expand purchase date slider"
+              >
+                <SlidersHorizontal className="w-3 h-3 text-slate-500" />
+                <span>Timeline Slider</span>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Expanded View (Full interactive slider with Collapse button) */
+          <div className="rounded-2xl border border-brand-200/80 bg-gradient-to-br from-brand-50/50 via-white to-slate-50/70 p-4 shadow-2xs space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-xs">
+                  <Calendar className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                      Purchase &amp; Inward Timeline Tracker
+                    </h3>
+                    <span className="rounded-md bg-brand-100 px-2 py-0.5 text-[10.5px] font-extrabold text-brand-800 border border-brand-200">
+                      {timelineSummary.label}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    Slide to track purchases by timeframe · <strong className="text-slate-800">{timelineSummary.count} bills</strong> ({money(timelineSummary.total)})
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                {timelineRange !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setTimelineRange('all')}
+                    className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-white border border-slate-200 transition shadow-2xs flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3 text-slate-400" />
+                    <span>Show All Time</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={toggleTimeline}
+                  className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition shadow-2xs flex items-center gap-1 cursor-pointer"
+                  title="Collapse slider to save screen space"
+                >
+                  <span>Collapse</span>
+                  <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                </button>
+              </div>
+            </div>
+
+            {/* Slider Track and Thumb */}
+            <div className="px-1 pt-1 pb-1">
+              <input
+                type="range"
+                min={0}
+                max={PURCHASE_TIMELINE_STEPS.length - 1}
+                step={1}
+                value={sliderIndex >= 0 ? sliderIndex : PURCHASE_TIMELINE_STEPS.length - 1}
+                onChange={(e) => setTimelineRange(PURCHASE_TIMELINE_STEPS[Number(e.target.value)].id)}
+                className="w-full accent-brand-600 cursor-pointer h-2.5 bg-slate-200 rounded-lg appearance-none transition-all shadow-inner"
+                title="Slide to track when purchases/bills were recorded"
+              />
+
+              {/* Milestone Buttons below slider */}
+              <div className="mt-2 grid grid-cols-7 gap-1">
+                {PURCHASE_TIMELINE_STEPS.map((step) => {
+                  const isActive = timelineRange === step.id;
+                  return (
+                    <button
+                      key={step.id}
+                      type="button"
+                      onClick={() => setTimelineRange(step.id)}
+                      className={`flex flex-col items-center py-1.5 px-1 rounded-xl transition-all text-center cursor-pointer ${
+                        isActive
+                          ? 'bg-brand-600 text-white font-extrabold shadow-sm scale-105'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80 font-semibold'
+                      }`}
+                    >
+                      <span className="text-[11.5px] leading-none">{step.shortLabel}</span>
+                      <span className={`mt-0.5 text-[9.5px] hidden sm:inline ${isActive ? 'text-brand-100' : 'text-slate-400'}`}>
+                        {step.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Helpful notice if 0 bills found in range */}
+            {timelineRange !== 'all' && timelineFilteredPurchases.length === 0 && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-center justify-between">
+                <span>No purchase bills found in the selected timeframe ({timelineSummary.label}).</span>
+                <button
+                  type="button"
+                  onClick={() => setTimelineRange('all')}
+                  className="font-bold underline text-amber-900 hover:text-amber-950 cursor-pointer"
+                >
+                  Show All Time
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="sticky top-[8.5rem] z-10 mt-4 -mx-4 px-4 py-3 bg-slate-50/90 backdrop-blur-md rounded-lg lg:-mx-8 lg:px-8">
         <div className="card p-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="relative max-w-sm flex-1">
@@ -1347,7 +1590,7 @@ export default function Purchase() {
           </div>
           <div className="flex items-center gap-1 overflow-x-auto bg-slate-100 p-1 rounded-xl border border-slate-200">
             {[
-              { id: 'all', label: `All Inward (${combinedRecords.length})` },
+              { id: 'all', label: `All Inward (${timelineFilteredPurchases.length})` },
               { id: 'bills', label: `Purchase Bills (${summary.countPB})` },
               { id: 'credit-notes', label: `Credit Notes (${summary.countCN})` },
               { id: 'suggestions', label: `Restock Suggestions (${lowStockItems.length})`, highlight: lowStockItems.length > 0 },
@@ -1496,144 +1739,187 @@ export default function Purchase() {
                   <th className="table-th">Type</th>
                   <th className="table-th">Supplier</th>
                   <th className="table-th">Products</th>
-                  <th className="table-th">Date</th>
+                  <th className="table-th">Purchased / Date</th>
                   <th className="table-th text-right">Grand Total</th>
                   <th className="table-th text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {paginatedPurchases.map((rec) => {
-                  const isPO = rec.kind === 'po';
-                  const isCN = rec.typeLabel === 'CREDIT NOTE';
-                  const isDN = rec.typeLabel === 'DEBIT NOTE';
-                  return (
-                    <tr
-                      key={rec.id}
-                      className="cursor-pointer transition hover:bg-slate-50/50"
-                      onClick={() => {
-                        if (isPO) navigate(`/purchase/${rec.id}`);
-                        else setPbViewing(rec.raw);
-                      }}
-                    >
-                      <td className="table-td font-semibold text-brand-600">{rec.docNumber}</td>
-                      <td className="table-td">
-                        <span
-                          className={`badge font-bold ${
-                            isCN
-                              ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                              : isDN
-                              ? 'bg-amber-100 text-amber-700 border border-amber-200'
-                              : isPO
-                              ? 'bg-blue-100 text-blue-700 border border-blue-200'
-                              : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
-                          }`}
-                        >
-                          {rec.typeLabel}
-                        </span>
-                      </td>
-                      <td className="table-td font-medium text-slate-800">{rec.supplier}</td>
-                      <td className="table-td">
-                        <div className="space-y-0.5">
-                          {rec.items.slice(0, 2).map((it, idx) => (
-                            <div key={idx} className="text-xs text-slate-600">
-                              <span className="font-medium text-slate-800">{it.name}</span>
-                              {' '}
-                              <span className="text-slate-400">({it.qty.toLocaleString('en-IN')} pcs)</span>
+                {paginatedPurchases.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-12 text-center text-sm text-slate-500">
+                      <div className="max-w-md mx-auto space-y-3">
+                        <Clock className="w-8 h-8 text-slate-300 mx-auto mb-1" />
+                        <p className="font-bold text-slate-700">No purchase records found matching current filter</p>
+                        {timelineRange !== 'all' && (
+                          <div className="text-xs text-slate-500 space-y-2">
+                            <p>Active period: <span className="font-bold text-brand-700">{timelineSummary.label}</span></p>
+                            {latestPurchaseDate && (
+                              <p className="text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
+                                Your latest purchase was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago). Slide to 14 Days to view it!
+                              </p>
+                            )}
+                            <div className="flex items-center justify-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => setTimelineRange('14d')}
+                                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-600 text-white hover:bg-brand-700 shadow-xs cursor-pointer"
+                              >
+                                Slide to 14 Days
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTimelineRange('all')}
+                                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 cursor-pointer"
+                              >
+                                Reset to All Time
+                              </button>
                             </div>
-                          ))}
-                          {rec.items.length > 2 && (
-                            <div className="text-xs text-brand-600">+{rec.items.length - 2} more…</div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="table-td text-slate-600">
-                        <div>
-                          <span>{rec.date}</span>
-                          {isPO && (rec.raw as PurchaseRecord).dueDate && (
-                            <span className="block text-[10px] text-amber-700 font-semibold">
-                              Due: {(rec.raw as PurchaseRecord).dueDate}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="table-td text-right">
-                        <div className="font-semibold tabular-nums text-slate-900">
-                          ₹{rec.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </div>
-                        {isPO && (
-                          <div className="mt-0.5 flex items-center justify-end gap-1">
-                            {rec.paymentStatus === 'Paid' ? (
-                              <span className="text-[10px] font-bold text-accent-700 bg-accent-50 px-1.5 py-0.5 rounded">
-                                {rec.paymentMethod === 'Cheque' ? `Cheque #${(rec.raw as PurchaseRecord).chequeNo || ''}` : 'Paid'}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedPurchases.map((rec) => {
+                    const isPO = rec.kind === 'po';
+                    const isCN = rec.typeLabel === 'CREDIT NOTE';
+                    const isDN = rec.typeLabel === 'DEBIT NOTE';
+                    return (
+                      <tr
+                        key={rec.id}
+                        className="cursor-pointer transition hover:bg-slate-50/50"
+                        onClick={() => {
+                          if (isPO) navigate(`/purchase/${rec.id}`);
+                          else setPbViewing(rec.raw);
+                        }}
+                      >
+                        <td className="table-td font-semibold text-brand-600">{rec.docNumber}</td>
+                        <td className="table-td">
+                          <span
+                            className={`badge font-bold ${
+                              isCN
+                                ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                                : isDN
+                                ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                                : isPO
+                                ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                                : 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                            }`}
+                          >
+                            {rec.typeLabel}
+                          </span>
+                        </td>
+                        <td className="table-td font-medium text-slate-800">{rec.supplier}</td>
+                        <td className="table-td">
+                          <div className="space-y-0.5">
+                            {rec.items.slice(0, 2).map((it, idx) => (
+                              <div key={idx} className="text-xs text-slate-600">
+                                <span className="font-medium text-slate-800">{it.name}</span>
+                                {' '}
+                                <span className="text-slate-400">({it.qty.toLocaleString('en-IN')} pcs)</span>
+                              </div>
+                            ))}
+                            {rec.items.length > 2 && (
+                              <div className="text-xs text-brand-600">+{rec.items.length - 2} more…</div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="table-td text-slate-600">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-semibold text-slate-800 font-mono">{rec.date}</span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-brand-700 bg-brand-50 border border-brand-200/70 px-1.5 py-0.5 rounded w-fit shadow-2xs">
+                                <Clock className="w-2.5 h-2.5 text-brand-600" />
+                                {formatRelativeDate(rec.date)}
                               </span>
-                            ) : (
-                              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
-                                Pending Credit
+                            </div>
+                            {isPO && (rec.raw as PurchaseRecord).dueDate && (
+                              <span className="block text-[10px] text-amber-700 font-semibold">
+                                Due: {(rec.raw as PurchaseRecord).dueDate}
                               </span>
                             )}
                           </div>
-                        )}
-                      </td>
-                      <td className="table-td" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1">
-                          {isPO && rec.paymentStatus === 'Pending' && (
+                        </td>
+                        <td className="table-td text-right">
+                          <div className="font-semibold tabular-nums text-slate-900">
+                            ₹{rec.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                          {isPO && (
+                            <div className="mt-0.5 flex items-center justify-end gap-1">
+                              {rec.paymentStatus === 'Paid' ? (
+                                <span className="text-[10px] font-bold text-accent-700 bg-accent-50 px-1.5 py-0.5 rounded">
+                                  {rec.paymentMethod === 'Cheque' ? `Cheque #${(rec.raw as PurchaseRecord).chequeNo || ''}` : 'Paid'}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                                  Pending Credit
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="table-td" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1">
+                            {isPO && rec.paymentStatus === 'Pending' && (
+                              <button
+                                onClick={() => {
+                                  setPayTargetPO(rec.raw);
+                                  const paidAlready = rec.raw.amountPaid || 0;
+                                  const rem = Math.max(0, rec.raw.grandTotal - paidAlready);
+                                  setRecordPayAmount(String(rem));
+                                }}
+                                className="rounded-lg p-2 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition"
+                                title="Record Payment to Supplier"
+                              >
+                                <CreditCard className="h-4 w-4" />
+                              </button>
+                            )}
                             <button
                               onClick={() => {
-                                setPayTargetPO(rec.raw);
-                                const paidAlready = rec.raw.amountPaid || 0;
-                                const rem = Math.max(0, rec.raw.grandTotal - paidAlready);
-                                setRecordPayAmount(String(rem));
+                                if (isPO) navigate(`/purchase/${rec.id}`);
+                                else setPbViewing(rec.raw);
                               }}
-                              className="rounded-lg p-2 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition"
-                              title="Record Payment to Supplier"
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+                              title="View Details"
                             >
-                              <CreditCard className="h-4 w-4" />
+                              <Eye className="h-4 w-4" />
                             </button>
-                          )}
-                          <button
-                            onClick={() => {
-                              if (isPO) navigate(`/purchase/${rec.id}`);
-                              else setPbViewing(rec.raw);
-                            }}
-                            className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                            title="View Details"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (isPO) handlePrint(rec.raw);
-                              else printInvoice(rec.raw, undefined, companySettings);
-                            }}
-                            className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
-                            title="Print Document"
-                          >
-                            <Printer className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              const isReceivedPo = isPO && (rec.raw as any).status === 'received';
-                              const promptMsg = isPO
-                                ? `Are you sure you want to delete ${rec.docNumber}?${isReceivedPo ? ' Received items will be deducted from inventory stock.' : ''}`
-                                : `Are you sure you want to delete Purchase Bill ${rec.docNumber}? Added items will be deducted from inventory stock.`;
-                              if (window.confirm(promptMsg)) {
-                                if (isPO) {
-                                  deletePurchase(rec.id);
-                                } else {
-                                  deleteSale(rec.id);
+                            <button
+                              onClick={() => {
+                                if (isPO) handlePrint(rec.raw);
+                                else printInvoice(rec.raw, undefined, companySettings);
+                              }}
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
+                              title="Print Document"
+                            >
+                              <Printer className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const isReceivedPo = isPO && (rec.raw as any).status === 'received';
+                                const promptMsg = isPO
+                                  ? `Are you sure you want to delete ${rec.docNumber}?${isReceivedPo ? ' Received items will be deducted from inventory stock.' : ''}`
+                                  : `Are you sure you want to delete Purchase Bill ${rec.docNumber}? Added items will be deducted from inventory stock.`;
+                                if (window.confirm(promptMsg)) {
+                                  if (isPO) {
+                                    deletePurchase(rec.id);
+                                  } else {
+                                    deleteSale(rec.id);
+                                  }
                                 }
-                              }
-                            }}
-                            className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
-                            title="Delete Document"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                              }}
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-err-50 hover:text-err-600"
+                              title="Delete Document"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
