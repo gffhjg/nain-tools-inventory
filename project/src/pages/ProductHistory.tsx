@@ -121,7 +121,6 @@ export default function ProductHistory() {
 
   const detailRows = [
     { label: 'Product Name', value: product.name, icon: Package },
-    { label: 'Category', value: product.category, icon: Tag },
     { label: 'Supplier', value: product.supplier, icon: Truck },
     { label: 'Rack Number', value: product.rackNumber, icon: MapPin },
     { label: 'Purchase Price', value: money(product.cost), icon: IndianRupee },
@@ -138,7 +137,7 @@ export default function ProductHistory() {
     <div className="animate-fade-in">
       <PageHeader
         title={product.name}
-        subtitle={`${product.category} · Rack ${product.rackNumber} · ${product.supplier}`}
+        subtitle={`Rack ${product.rackNumber} · ${product.supplier}`}
         actions={
           <>
             <button className="btn-secondary" onClick={() => navigate('/products')}>

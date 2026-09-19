@@ -69,9 +69,9 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
     const matches: SearchResult[] = [];
 
     for (const p of products) {
-      const match = smartSearchMatch([p.name, p.category, p.rackNumber, p.supplier, p.size], q);
+      const match = smartSearchMatch([p.name, p.rackNumber, p.supplier, p.hsnCode], q);
       if (match.matched) {
-        matches.push({ id: p.id, label: p.name, sublabel: `Product · Rack ${p.rackNumber} · ${p.category}`, type: 'product', route: `/products/${p.id}`, icon: Package, score: match.score });
+        matches.push({ id: p.id, label: p.name, sublabel: `Product · Rack ${p.rackNumber}`, type: 'product', route: `/products/${p.id}`, icon: Package, score: match.score });
       }
     }
     for (const s of sales) {

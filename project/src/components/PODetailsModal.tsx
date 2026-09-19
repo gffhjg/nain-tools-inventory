@@ -106,7 +106,6 @@ export default function PODetailsModal({ po, onClose, companySettings }: PODetai
                 <tr>
                   <th className="py-2.5 px-3 text-center w-10">#</th>
                   <th className="py-2.5 px-3 text-left">Product Name</th>
-                  <th className="py-2.5 px-3 text-left">Category / Spec</th>
                   <th className="py-2.5 px-3 text-center">HSN</th>
                   <th className="py-2.5 px-3 text-right">Qty</th>
                   <th className="py-2.5 px-3 text-right">Cost Rate (₹)</th>
@@ -124,7 +123,6 @@ export default function PODetailsModal({ po, onClose, companySettings }: PODetai
                     <tr key={idx} className="hover:bg-slate-50/60 transition">
                       <td className="py-2.5 px-3 text-center text-slate-400 font-mono">{idx + 1}</td>
                       <td className="py-2.5 px-3 font-bold text-slate-900">{item.name}</td>
-                      <td className="py-2.5 px-3 text-slate-600">{item.category || item.size || '—'}</td>
                       <td className="py-2.5 px-3 text-center font-mono text-slate-600">{item.hsnCode || '—'}</td>
                       <td className="py-2.5 px-3 text-right font-extrabold text-slate-900 font-mono">{item.qty}</td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-700">{money(item.cost)}</td>

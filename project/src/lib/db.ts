@@ -8,10 +8,10 @@ const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS products (
   id text PRIMARY KEY,
   name text NOT NULL,
-  category text NOT NULL DEFAULT 'Other',
+  category text DEFAULT 'General',
   supplier text NOT NULL DEFAULT '',
   rack_number text NOT NULL DEFAULT '',
-  size text NOT NULL DEFAULT '',
+  size text DEFAULT 'Standard',
   cost numeric NOT NULL DEFAULT 0,
   price numeric NOT NULL DEFAULT 0,
   stock integer NOT NULL DEFAULT 0,
@@ -457,6 +457,16 @@ async function migrateSchema(db: PGlite): Promise<void> {
           // Column might already exist or table doesn't exist yet — skip
         }
       }
+    }
+
+    // Drop NOT NULL constraints on category and size in existing databases so updates never fail
+    try {
+      await db.exec(`
+        ALTER TABLE products ALTER COLUMN category DROP NOT NULL;
+        ALTER TABLE products ALTER COLUMN size DROP NOT NULL;
+      `);
+    } catch {
+      // Non-fatal if already nullable or unsupported
     }
 
     // Ensure both Firm 1 and Firm 2 exist in company_settings

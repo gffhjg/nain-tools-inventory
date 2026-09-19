@@ -28,6 +28,23 @@ export default function Products() {
   const deferredSearch = useDeferredValue(search);
   const [statusFilter, setStatusFilter] = useState<(typeof statusFilters)[number]>('all');
   const [formOpen, setFormOpen] = useState(false);
+  const [hasProductDraft, setHasProductDraft] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('nain_product_form_draft');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && (parsed.name?.trim() || parsed.supplier?.trim() || parsed.price > 0 || parsed.cost > 0)) {
+          setHasProductDraft(true);
+          return;
+        }
+      }
+      setHasProductDraft(false);
+    } catch {
+      setHasProductDraft(false);
+    }
+  }, [formOpen]);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(50);
@@ -59,7 +76,7 @@ export default function Products() {
       if (!hasSearch) {
         scoredList.push({ product: p, score: 0 });
       } else {
-        const match = smartSearchMatch([p.name, p.rackNumber, p.supplier, p.size, p.category], deferredSearch);
+        const match = smartSearchMatch([p.name, p.rackNumber, p.supplier, p.hsnCode], deferredSearch);
         if (match.matched) {
           scoredList.push({ product: p, score: match.score });
         }
@@ -137,6 +154,10 @@ export default function Products() {
         await updateProduct(editing.id, data);
       } else {
         await addProduct(data);
+        try {
+          localStorage.removeItem('nain_product_form_draft');
+        } catch {}
+        setHasProductDraft(false);
       }
       setFormOpen(false);
       setEditing(null);
@@ -180,9 +201,20 @@ export default function Products() {
               <Upload className="h-4 w-4 text-emerald-600" />
               <span className="hidden sm:inline">Import Excel</span>
             </button>
-            <button className="btn-primary" onClick={openAdd}>
+            <button
+              className={`btn-primary flex items-center gap-1.5 shadow-sm ${
+                hasProductDraft ? 'ring-2 ring-amber-400/80 bg-gradient-to-r from-amber-600 to-brand-600' : ''
+              }`}
+              onClick={openAdd}
+            >
               <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">Add Product</span>
+              <span className="hidden sm:inline">{hasProductDraft ? 'Resume Product (Draft)' : 'Add Product'}</span>
+              <span className="sm:hidden">{hasProductDraft ? 'Draft' : 'Add'}</span>
+              {hasProductDraft && (
+                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 animate-pulse">
+                  DRAFT
+                </span>
+              )}
             </button>
           </>
         }
@@ -440,21 +472,39 @@ export default function Products() {
         subtitle={editing ? `Updating ${editing.name}` : 'Fill in the details below to add a product to your catalog.'}
         size="lg"
         footer={
-          <>
-            <button
-              className="btn-secondary"
-              onClick={() => { setFormOpen(false); setEditing(null); }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              form="product-form"
-              className="btn-primary"
-            >
-              {editing ? 'Save Changes' : 'Add Product'}
-            </button>
-          </>
+          <div className="flex items-center justify-between w-full">
+            {!editing && hasProductDraft ? (
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    localStorage.removeItem('nain_product_form_draft');
+                  } catch {}
+                  setHasProductDraft(false);
+                  setFormOpen(false);
+                  setEditing(null);
+                }}
+                className="btn-secondary text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+              >
+                Discard Draft
+              </button>
+            ) : <div />}
+            <div className="flex gap-2">
+              <button
+                className="btn-secondary"
+                onClick={() => { setFormOpen(false); setEditing(null); }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                form="product-form"
+                className="btn-primary"
+              >
+                {editing ? 'Save Changes' : 'Add Product'}
+              </button>
+            </div>
+          </div>
         }
       >
         <ProductForm

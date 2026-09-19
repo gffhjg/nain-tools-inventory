@@ -9,6 +9,7 @@ import {
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
+import { ActiveItemSpotlight, FastItemEntryBar } from '@/components/ActiveItemSpotlight';
 import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeDiscountAmount, computeGrandTotal, productCategories } from '@/lib/constants';
@@ -22,6 +23,7 @@ import {
   getDateRangeBounds,
   getDaysAgo,
   formatRelativeDate,
+  incrementInvoiceNumber,
   type DateRange,
 } from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
@@ -40,50 +42,133 @@ function todayISO() {
 }
 
 function nextPONumber(existing: PurchaseRecord[]): string {
-  const nums = existing
-    .map((p) => parseInt(p.poNumber.replace('PO-', ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 3100;
-  return `PO-${max + 1}`;
+  const existingNumbers = new Set(existing.map((p) => p.poNumber.trim().toLowerCase()));
+  try {
+    const lastEntered = localStorage.getItem('nain_last_entered_po_number');
+    if (lastEntered && lastEntered.trim()) {
+      let candidate = incrementInvoiceNumber(lastEntered.trim());
+      let attempts = 0;
+      while (existingNumbers.has(candidate.toLowerCase()) && attempts < 1000) {
+        candidate = incrementInvoiceNumber(candidate);
+        attempts++;
+      }
+      return candidate;
+    }
+  } catch {}
+
+  if (existing.length > 0 && existing[0]?.poNumber) {
+    let candidate = incrementInvoiceNumber(existing[0].poNumber);
+    let attempts = 0;
+    while (existingNumbers.has(candidate.toLowerCase()) && attempts < 1000) {
+      candidate = incrementInvoiceNumber(candidate);
+      attempts++;
+    }
+    return candidate;
+  }
+  return 'PO-3101';
+}
+
+function getNextPurchaseDocNumber(existingSales: SaleRecord[], docType: string, defaultPrefix: string, fallback: string): string {
+  const existingInvoices = new Set(existingSales.map((s) => s.invoice.trim().toLowerCase()));
+  const storageKey = `nain_last_entered_${docType.replace(/\s+/g, '_').toLowerCase()}_no`;
+
+  try {
+    const lastEntered = localStorage.getItem(storageKey) || (docType === 'PURCHASE BILL' ? localStorage.getItem('nain_last_entered_purchase_bill_no') : null);
+    if (lastEntered && lastEntered.trim()) {
+      let candidate = incrementInvoiceNumber(lastEntered.trim());
+      let attempts = 0;
+      while (existingInvoices.has(candidate.toLowerCase()) && attempts < 1000) {
+        candidate = incrementInvoiceNumber(candidate);
+        attempts++;
+      }
+      return candidate;
+    }
+  } catch {}
+
+  const matching = existingSales.filter((s) => (s.documentType || 'PURCHASE BILL') === docType);
+  if (matching.length > 0 && matching[0]?.invoice) {
+    let candidate = incrementInvoiceNumber(matching[0].invoice);
+    let attempts = 0;
+    while (existingInvoices.has(candidate.toLowerCase()) && attempts < 1000) {
+      candidate = incrementInvoiceNumber(candidate);
+      attempts++;
+    }
+    return candidate;
+  }
+
+  return fallback;
 }
 
 function nextPurchaseBill(existingSales: SaleRecord[]): string {
-  const nums = existingSales
-    .filter((s) => s.documentType === 'PURCHASE BILL' || s.invoice.startsWith('PI-') || s.invoice.startsWith('PB-'))
-    .map((s) => parseInt(s.invoice.replace(/^(PI|PB)-/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 3100;
-  return `PI-${max + 1}`;
+  return getNextPurchaseDocNumber(existingSales, 'PURCHASE BILL', 'PB-', 'PB-3101');
 }
 
 function nextCreditNote(existingSales: SaleRecord[]): string {
-  const nums = existingSales
-    .filter((s) => s.documentType === 'CREDIT NOTE' || s.invoice.startsWith('CN-'))
-    .map((s) => parseInt(s.invoice.replace(/^CN-/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 1000;
-  return `CN-${max + 1}`;
+  return getNextPurchaseDocNumber(existingSales, 'CREDIT NOTE', 'CN-', 'CN-1001');
 }
 
 function nextDebitNote(existingSales: SaleRecord[]): string {
-  const nums = existingSales
-    .filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'))
-    .map((s) => parseInt(s.invoice.replace(/^DN-/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 1000;
-  return `DN-${max + 1}`;
+  return getNextPurchaseDocNumber(existingSales, 'DEBIT NOTE', 'DN-', 'DN-1001');
 }
 
 function nextRawPurchaseNumber(existingSales: SaleRecord[]): string {
-  const nums = existingSales
-    .filter((s) => s.documentType === 'RAW PURCHASE' || s.invoice.startsWith('RP-') || s.invoice.startsWith('RAW-P-'))
-    .map((s) => parseInt(s.invoice.replace(/^(RP-|RAW-P-)/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 1000;
-  return `RP-${max + 1}`;
+  return getNextPurchaseDocNumber(existingSales, 'RAW PURCHASE', 'RP-', 'RP-1001');
 }
 
 type DraftLine = PurchaseLineItem;
+
+const PB_DRAFT_STORAGE_KEY = 'nain_purchase_bill_draft';
+const PO_DRAFT_STORAGE_KEY = 'nain_purchase_order_draft';
+
+interface PurchaseBillDraftData {
+  pbSupplierId: string;
+  pbSupplier: string;
+  pbPhone: string;
+  pbAddress: string;
+  pbGstin: string;
+  pbCustomBillNumber: string;
+  pbDate: string;
+  pbPoNumber: string;
+  pbPoDate: string;
+  pbTransportMode: string;
+  pbVehicleNumber: string;
+  pbEwayBill: string;
+  pbVendorCode: string;
+  pbBankName: string;
+  pbBankAccount: string;
+  pbBankIfsc: string;
+  pbSellerGstin: string;
+  pbSellerPan: string;
+  pbApplyGst: boolean;
+  pbGstRate: number;
+  pbGstTaxType: 'local' | 'central';
+  pbDiscount: number;
+  pbDiscountType: DiscountType;
+  pbFreightCharges: string;
+  pbLines: InvoiceLineItem[];
+  pbDocumentType: 'PURCHASE BILL' | 'CREDIT NOTE' | 'DEBIT NOTE';
+  savedAt: number;
+}
+
+interface PurchaseOrderDraftData {
+  supplier: string;
+  supplierInvoice: string;
+  phone: string;
+  date: string;
+  expectedDelivery: string;
+  notes: string;
+  poStatus: 'draft' | 'ordered' | 'partially-received' | 'received' | 'cancelled';
+  lines: DraftLine[];
+  paymentStatus: 'Paid' | 'Pending';
+  paymentMethod: PurchasePaymentMethod;
+  poDueDate: string;
+  poPaymentTerms: string;
+  poChequeNo: string;
+  poChequeBank: string;
+  poChequeDate: string;
+  poChequeStatus: ChequeStatus;
+  savedAt: number;
+}
 
 const PURCHASE_TIMELINE_STEPS: { id: DateRange; label: string; shortLabel: string }[] = [
   { id: 'today', label: 'Today', shortLabel: 'Today' },
@@ -128,6 +213,26 @@ export default function Purchase() {
   const [rawPurNote, setRawPurNote] = useState('');
   const [rawPurPaymentMethod, setRawPurPaymentMethod] = useState<'Cash' | 'UPI'>('Cash');
   const [rawPurLines, setRawPurLines] = useState<InvoiceLineItem[]>([]);
+  const [activeRawPurLineProductId, setActiveRawPurLineProductId] = useState<string | null>(null);
+  const [justAddedRawPurLineId, setJustAddedRawPurLineId] = useState<string | null>(null);
+
+  const activeRawPurLineItem = useMemo(() => {
+    if (activeRawPurLineProductId) {
+      const found = rawPurLines.find((l) => l.productId === activeRawPurLineProductId);
+      if (found) return found;
+    }
+    return rawPurLines.length > 0 ? rawPurLines[0] : null;
+  }, [rawPurLines, activeRawPurLineProductId]);
+
+  const activeRawPurProduct = useMemo(() => {
+    if (!activeRawPurLineItem) return null;
+    return products.find((p) => p.id === activeRawPurLineItem.productId) || null;
+  }, [activeRawPurLineItem, products]);
+
+  const activeRawPurLineIndex = useMemo(() => {
+    if (!activeRawPurLineItem) return -1;
+    return rawPurLines.findIndex((l) => l.productId === activeRawPurLineItem.productId);
+  }, [rawPurLines, activeRawPurLineItem]);
   const [rawPurProductSearch, setRawPurProductSearch] = useState('');
   const [rawPurCategory, setRawPurCategory] = useState('All');
   const [viewingRawPur, setViewingRawPur] = useState<SaleRecord | null>(null);
@@ -152,6 +257,26 @@ export default function Purchase() {
   const [notes, setNotes] = useState('');
   const [poStatus, setPoStatus] = useState<'draft' | 'ordered' | 'partially-received' | 'received' | 'cancelled'>('received');
   const [lines, setLines] = useState<DraftLine[]>([]);
+  const [activePoLineProductId, setActivePoLineProductId] = useState<string | null>(null);
+  const [justAddedPoLineId, setJustAddedPoLineId] = useState<string | null>(null);
+
+  const activePoLineItem = useMemo(() => {
+    if (activePoLineProductId) {
+      const found = lines.find((l) => l.productId === activePoLineProductId);
+      if (found) return found;
+    }
+    return lines.length > 0 ? lines[0] : null;
+  }, [lines, activePoLineProductId]);
+
+  const activePoProduct = useMemo(() => {
+    if (!activePoLineItem) return null;
+    return products.find((p) => p.id === activePoLineItem.productId) || null;
+  }, [activePoLineItem, products]);
+
+  const activePoLineIndex = useMemo(() => {
+    if (!activePoLineItem) return -1;
+    return lines.findIndex((l) => l.productId === activePoLineItem.productId);
+  }, [lines, activePoLineItem]);
   const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Pending'>('Paid');
   const [paymentMethod, setPaymentMethod] = useState<PurchasePaymentMethod>('Bank Transfer');
   const [poDueDate, setPoDueDate] = useState('');
@@ -238,6 +363,26 @@ export default function Purchase() {
   const [pbDiscountType, setPbDiscountType] = useState<DiscountType>('percent');
   const [pbFreightCharges, setPbFreightCharges] = useState<string>('');
   const [pbLines, setPbLines] = useState<InvoiceLineItem[]>([]);
+  const [activePbLineProductId, setActivePbLineProductId] = useState<string | null>(null);
+  const [justAddedPbLineId, setJustAddedPbLineId] = useState<string | null>(null);
+
+  const activePbLineItem = useMemo(() => {
+    if (activePbLineProductId) {
+      const found = pbLines.find((l) => l.productId === activePbLineProductId);
+      if (found) return found;
+    }
+    return pbLines.length > 0 ? pbLines[0] : null;
+  }, [pbLines, activePbLineProductId]);
+
+  const activePbProduct = useMemo(() => {
+    if (!activePbLineItem) return null;
+    return products.find((p) => p.id === activePbLineItem.productId) || null;
+  }, [activePbLineItem, products]);
+
+  const activePbLineIndex = useMemo(() => {
+    if (!activePbLineItem) return -1;
+    return pbLines.findIndex((l) => l.productId === activePbLineItem.productId);
+  }, [pbLines, activePbLineItem]);
   const [pbProductSearch, setPbProductSearch] = useState('');
   const [pbCategory, setPbCategory] = useState('All');
   const [pbViewing, setPbViewing] = useState<SaleRecord | null>(null);
@@ -258,6 +403,14 @@ export default function Purchase() {
   const pbNumber = pbCustomBillNumber.trim() || autoPbNumber;
 
   const poNumber = useMemo(() => nextPONumber(purchases), [purchases]);
+
+  const [hasPbDraft, setHasPbDraft] = useState(false);
+  const [restoredFromPbDraft, setRestoredFromPbDraft] = useState(false);
+  const [pbDraftSavedAt, setPbDraftSavedAt] = useState<number | null>(null);
+
+  const [hasPoDraft, setHasPoDraft] = useState(false);
+  const [restoredFromPoDraft, setRestoredFromPoDraft] = useState(false);
+  const [poDraftSavedAt, setPoDraftSavedAt] = useState<number | null>(null);
 
   const filteredPbSuppliers = useMemo(() => {
     return smartFilterItems(
@@ -499,14 +652,12 @@ export default function Purchase() {
     return smartFilterItems(
       products,
       productSearch,
-      (p) => [p.name, p.size, p.category, p.rackNumber],
+      (p) => [p.name, p.rackNumber, p.hsnCode, p.supplier],
       {
-        activeCategory: poCategory,
-        getCategory: (p) => p.category,
         maxResults: 100,
       }
     );
-  }, [productSearch, products, poCategory]);
+  }, [productSearch, products]);
 
 
 
@@ -533,6 +684,8 @@ export default function Purchase() {
     setNotes('');
     setPoStatus('received');
     setLines([]);
+    setActivePoLineProductId(null);
+    setJustAddedPoLineId(null);
     setPaymentStatus('Paid');
     setPaymentMethod('Bank Transfer');
     setPoDueDate('');
@@ -555,7 +708,11 @@ export default function Purchase() {
   ];
 
   const openNewPurchase = () => {
-    resetForm();
+    const restored = restorePoDraftIfExists();
+    if (!restored) {
+      resetForm();
+      setRestoredFromPoDraft(false);
+    }
     setModalOpen(true);
   };
 
@@ -565,17 +722,30 @@ export default function Purchase() {
     if (s && !phone) setPhone(s.phone);
   };
 
-  const addLine = (productId: string) => {
+  const addLine = (productId: string, initialQty?: number, initialCost?: number) => {
     const product = products.find((p) => p.id === productId);
     if (!product) return;
+    setActivePoLineProductId(productId);
+    setJustAddedPoLineId(productId);
     setLines((prev) => {
       const existing = prev.find((l) => l.productId === productId);
       if (existing) {
-        return prev.map((l) => (l.productId === productId ? { ...l, qty: l.qty + 1 } : l));
+        const updated = {
+          ...existing,
+          qty: existing.qty + (initialQty || 1),
+          cost: initialCost !== undefined ? initialCost : existing.cost,
+        };
+        return [updated, ...prev.filter((l) => l.productId !== productId)];
       }
       return [
+        {
+          productId: product.id,
+          name: product.name,
+          cost: initialCost !== undefined ? initialCost : product.cost,
+          qty: initialQty || 1,
+          gstRate: GST_RATE,
+        },
         ...prev,
-        { productId: product.id, name: product.name, cost: product.cost, qty: 1, gstRate: GST_RATE },
       ];
     });
   };
@@ -589,8 +759,9 @@ export default function Purchase() {
     const reorderVal = parseInt(newProdReorder, 10) || 100;
     const newTempId = `new_p${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
+    setActivePoLineProductId(newTempId);
+    setJustAddedPoLineId(newTempId);
     setLines((prev) => [
-      ...prev,
       {
         productId: newTempId,
         name: newProdName.trim(),
@@ -598,14 +769,13 @@ export default function Purchase() {
         qty: qtyVal,
         gstRate: GST_RATE,
         isNewProduct: true,
-        category: newProdCategory.trim() || 'Fasteners',
         rackNumber: newProdRack.trim() || 'General',
-        size: newProdSize.trim(),
         sellingPrice: priceVal,
         boxCapacity: boxCapVal,
         reorderLevel: reorderVal,
         hsnCode: newProdHsn.trim() || '7318150',
       },
+      ...prev,
     ]);
 
     resetNewProductForm();
@@ -617,8 +787,8 @@ export default function Purchase() {
     );
   };
 
-  const setQty = (productId: string, raw: string) => {
-    const qty = parseInt(raw, 10);
+  const setQty = (productId: string, raw: string | number) => {
+    const qty = typeof raw === 'number' ? raw : parseInt(raw, 10);
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, qty: isNaN(qty) ? 0 : Math.max(0, qty) } : l)),
     );
@@ -633,6 +803,12 @@ export default function Purchase() {
   const updatePoLineName = (productId: string, name: string) => {
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, name } : l)),
+    );
+  };
+
+  const updatePoLineHsn = (productId: string, hsnCode: string) => {
+    setLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, hsnCode } : l)),
     );
   };
 
@@ -710,14 +886,12 @@ export default function Purchase() {
     return smartFilterItems(
       products,
       pbProductSearch,
-      (p) => [p.name, p.size, p.category, p.rackNumber],
+      (p) => [p.name, p.rackNumber, p.hsnCode, p.supplier],
       {
-        activeCategory: pbCategory,
-        getCategory: (p) => p.category,
         maxResults: 100,
       }
     );
-  }, [pbProductSearch, products, pbCategory]);
+  }, [pbProductSearch, products]);
 
   const resetPbForm = () => {
     setPbSupplierId('');
@@ -745,15 +919,270 @@ export default function Purchase() {
     setPbDiscountType('percent');
     setPbFreightCharges('');
     setPbLines([]);
+    setActivePbLineProductId(null);
+    setJustAddedPbLineId(null);
     setPbProductSearch('');
     setPbCategory('All');
     setPbDocumentType('PURCHASE BILL');
   };
 
-  const openNewPurchaseBill = () => {
+  const clearPbDraft = () => {
+    try {
+      localStorage.removeItem(PB_DRAFT_STORAGE_KEY);
+    } catch {}
+    setHasPbDraft(false);
+    setRestoredFromPbDraft(false);
+    setPbDraftSavedAt(null);
     resetPbForm();
-    setPbDocumentType('PURCHASE BILL');
     setPbCustomBillNumber(nextPurchaseBill(sales));
+  };
+
+  const restorePbDraftIfExists = (): boolean => {
+    try {
+      const raw = localStorage.getItem(PB_DRAFT_STORAGE_KEY);
+      if (!raw) return false;
+      const draft: PurchaseBillDraftData = JSON.parse(raw);
+      if (!draft) return false;
+
+      const hasContent = Boolean(
+        (draft.pbSupplier && draft.pbSupplier.trim()) ||
+        (Array.isArray(draft.pbLines) && draft.pbLines.length > 0) ||
+        (draft.pbPhone && draft.pbPhone.trim()) ||
+        (draft.pbAddress && draft.pbAddress.trim()) ||
+        (draft.pbPoNumber && draft.pbPoNumber.trim())
+      );
+      if (!hasContent) return false;
+
+      setPbSupplierId(draft.pbSupplierId || '');
+      setPbSupplier(draft.pbSupplier || '');
+      setPbPhone(draft.pbPhone || '');
+      setPbAddress(draft.pbAddress || '');
+      setPbGstin(draft.pbGstin || '');
+      setPbCustomBillNumber(draft.pbCustomBillNumber || nextPurchaseBill(sales));
+      setPbDate(draft.pbDate || todayISO());
+      setPbPoNumber(draft.pbPoNumber || '');
+      setPbPoDate(draft.pbPoDate || '');
+      setPbTransportMode(draft.pbTransportMode || '');
+      setPbVehicleNumber(draft.pbVehicleNumber || '');
+      setPbEwayBill(draft.pbEwayBill || '');
+      setPbVendorCode(draft.pbVendorCode || '');
+      setPbBankName(draft.pbBankName || companySettings?.bankName || 'HDFC BANK');
+      setPbBankAccount(draft.pbBankAccount || companySettings?.bankAccount || '50200088182531');
+      setPbBankIfsc(draft.pbBankIfsc || companySettings?.bankIfsc || 'HDFC0002034');
+      setPbSellerGstin(draft.pbSellerGstin || companySettings?.gstin || '06CCCPK0841B1ZA');
+      setPbSellerPan(draft.pbSellerPan || companySettings?.pan || 'CCCPK0841B');
+      setPbApplyGst(draft.pbApplyGst !== false);
+      setPbGstRate(typeof draft.pbGstRate === 'number' ? draft.pbGstRate : 18);
+      setPbGstTaxType(draft.pbGstTaxType || 'local');
+      setPbDiscount(typeof draft.pbDiscount === 'number' ? draft.pbDiscount : 0);
+      setPbDiscountType(draft.pbDiscountType || 'percent');
+      setPbFreightCharges(draft.pbFreightCharges || '');
+      setPbLines(Array.isArray(draft.pbLines) ? draft.pbLines : []);
+      setPbDocumentType(draft.pbDocumentType || 'PURCHASE BILL');
+      setRestoredFromPbDraft(true);
+      setPbDraftSavedAt(draft.savedAt || Date.now());
+      setHasPbDraft(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const clearPoDraft = () => {
+    try {
+      localStorage.removeItem(PO_DRAFT_STORAGE_KEY);
+    } catch {}
+    setHasPoDraft(false);
+    setRestoredFromPoDraft(false);
+    setPoDraftSavedAt(null);
+    resetForm();
+  };
+
+  const restorePoDraftIfExists = (): boolean => {
+    try {
+      const raw = localStorage.getItem(PO_DRAFT_STORAGE_KEY);
+      if (!raw) return false;
+      const draft: PurchaseOrderDraftData = JSON.parse(raw);
+      if (!draft) return false;
+
+      const hasContent = Boolean(
+        (draft.supplier && draft.supplier.trim()) ||
+        (Array.isArray(draft.lines) && draft.lines.length > 0) ||
+        (draft.phone && draft.phone.trim()) ||
+        (draft.supplierInvoice && draft.supplierInvoice.trim()) ||
+        (draft.notes && draft.notes.trim())
+      );
+      if (!hasContent) return false;
+
+      setSupplier(draft.supplier || '');
+      setSupplierInvoice(draft.supplierInvoice || '');
+      setPhone(draft.phone || '');
+      setDate(draft.date || todayISO());
+      setExpectedDelivery(draft.expectedDelivery || '');
+      setNotes(draft.notes || '');
+      setPoStatus(draft.poStatus || 'received');
+      setLines(Array.isArray(draft.lines) ? draft.lines : []);
+      setPaymentStatus(draft.paymentStatus || 'Paid');
+      setPaymentMethod(draft.paymentMethod || 'Bank Transfer');
+      setPoDueDate(draft.poDueDate || '');
+      setPoPaymentTerms(draft.poPaymentTerms || 'Immediate');
+      setPoChequeNo(draft.poChequeNo || '');
+      setPoChequeBank(draft.poChequeBank || '');
+      setPoChequeDate(draft.poChequeDate || todayISO());
+      setPoChequeStatus(draft.poChequeStatus || 'pending_clearance');
+      setRestoredFromPoDraft(true);
+      setPoDraftSavedAt(draft.savedAt || Date.now());
+      setHasPoDraft(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Check for existing drafts on initial mount
+  useEffect(() => {
+    try {
+      const rawPb = localStorage.getItem(PB_DRAFT_STORAGE_KEY);
+      if (rawPb) {
+        const parsed = JSON.parse(rawPb);
+        if (parsed && (parsed.pbSupplier?.trim() || (Array.isArray(parsed.pbLines) && parsed.pbLines.length > 0) || parsed.pbPhone?.trim())) {
+          setHasPbDraft(true);
+          setPbDraftSavedAt(parsed.savedAt || null);
+        }
+      }
+      const rawPo = localStorage.getItem(PO_DRAFT_STORAGE_KEY);
+      if (rawPo) {
+        const parsedPo = JSON.parse(rawPo);
+        if (parsedPo && (parsedPo.supplier?.trim() || (Array.isArray(parsedPo.lines) && parsedPo.lines.length > 0) || parsedPo.phone?.trim())) {
+          setHasPoDraft(true);
+          setPoDraftSavedAt(parsedPo.savedAt || null);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Auto-save Purchase Bill draft
+  useEffect(() => {
+    if (!pbModalOpen) return;
+    const hasContent = Boolean(
+      pbSupplier.trim() ||
+      pbLines.length > 0 ||
+      pbPhone.trim() ||
+      pbAddress.trim() ||
+      pbGstin.trim() ||
+      pbPoNumber.trim()
+    );
+
+    if (hasContent) {
+      const draftData: PurchaseBillDraftData = {
+        pbSupplierId, pbSupplier, pbPhone, pbAddress, pbGstin,
+        pbCustomBillNumber, pbDate, pbPoNumber, pbPoDate,
+        pbTransportMode, pbVehicleNumber, pbEwayBill, pbVendorCode,
+        pbBankName, pbBankAccount, pbBankIfsc, pbSellerGstin, pbSellerPan,
+        pbApplyGst, pbGstRate, pbGstTaxType, pbDiscount, pbDiscountType,
+        pbFreightCharges, pbLines, pbDocumentType,
+        savedAt: Date.now(),
+      };
+      try {
+        localStorage.setItem(PB_DRAFT_STORAGE_KEY, JSON.stringify(draftData));
+        setHasPbDraft(true);
+        setPbDraftSavedAt(draftData.savedAt);
+      } catch {}
+    }
+  }, [
+    pbModalOpen, pbSupplierId, pbSupplier, pbPhone, pbAddress, pbGstin,
+    pbCustomBillNumber, pbDate, pbPoNumber, pbPoDate,
+    pbTransportMode, pbVehicleNumber, pbEwayBill, pbVendorCode,
+    pbBankName, pbBankAccount, pbBankIfsc, pbSellerGstin, pbSellerPan,
+    pbApplyGst, pbGstRate, pbGstTaxType, pbDiscount, pbDiscountType,
+    pbFreightCharges, pbLines, pbDocumentType
+  ]);
+
+  // Auto-save Purchase Order draft
+  useEffect(() => {
+    if (!modalOpen) return;
+    const hasContent = Boolean(
+      supplier.trim() ||
+      lines.length > 0 ||
+      phone.trim() ||
+      supplierInvoice.trim() ||
+      notes.trim()
+    );
+
+    if (hasContent) {
+      const draftData: PurchaseOrderDraftData = {
+        supplier, supplierInvoice, phone, date,
+        expectedDelivery, notes, poStatus, lines,
+        paymentStatus, paymentMethod, poDueDate, poPaymentTerms,
+        poChequeNo, poChequeBank, poChequeDate, poChequeStatus,
+        savedAt: Date.now(),
+      };
+      try {
+        localStorage.setItem(PO_DRAFT_STORAGE_KEY, JSON.stringify(draftData));
+        setHasPoDraft(true);
+        setPoDraftSavedAt(draftData.savedAt);
+      } catch {}
+    }
+  }, [
+    modalOpen, supplier, supplierInvoice, phone, date,
+    expectedDelivery, notes, poStatus, lines,
+    paymentStatus, paymentMethod, poDueDate, poPaymentTerms,
+    poChequeNo, poChequeBank, poChequeDate, poChequeStatus,
+  ]);
+
+  // Window beforeunload listener
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (pbModalOpen && (pbSupplier.trim() || pbLines.length > 0 || pbPhone.trim())) {
+        const draftData: PurchaseBillDraftData = {
+          pbSupplierId, pbSupplier, pbPhone, pbAddress, pbGstin,
+          pbCustomBillNumber, pbDate, pbPoNumber, pbPoDate,
+          pbTransportMode, pbVehicleNumber, pbEwayBill, pbVendorCode,
+          pbBankName, pbBankAccount, pbBankIfsc, pbSellerGstin, pbSellerPan,
+          pbApplyGst, pbGstRate, pbGstTaxType, pbDiscount, pbDiscountType,
+          pbFreightCharges, pbLines, pbDocumentType,
+          savedAt: Date.now(),
+        };
+        try {
+          localStorage.setItem(PB_DRAFT_STORAGE_KEY, JSON.stringify(draftData));
+        } catch {}
+      }
+      if (modalOpen && (supplier.trim() || lines.length > 0 || phone.trim() || supplierInvoice.trim())) {
+        const poDraftData: PurchaseOrderDraftData = {
+          supplier, supplierInvoice, phone, date,
+          expectedDelivery, notes, poStatus, lines,
+          paymentStatus, paymentMethod, poDueDate, poPaymentTerms,
+          poChequeNo, poChequeBank, poChequeDate, poChequeStatus,
+          savedAt: Date.now(),
+        };
+        try {
+          localStorage.setItem(PO_DRAFT_STORAGE_KEY, JSON.stringify(poDraftData));
+        } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [
+    pbModalOpen, pbSupplierId, pbSupplier, pbPhone, pbAddress, pbGstin,
+    pbCustomBillNumber, pbDate, pbPoNumber, pbPoDate,
+    pbTransportMode, pbVehicleNumber, pbEwayBill, pbVendorCode,
+    pbBankName, pbBankAccount, pbBankIfsc, pbSellerGstin, pbSellerPan,
+    pbApplyGst, pbGstRate, pbGstTaxType, pbDiscount, pbDiscountType,
+    pbFreightCharges, pbLines, pbDocumentType,
+    modalOpen, supplier, supplierInvoice, phone, date,
+    expectedDelivery, notes, poStatus, lines,
+    paymentStatus, paymentMethod, poDueDate, poPaymentTerms,
+    poChequeNo, poChequeBank, poChequeDate, poChequeStatus
+  ]);
+
+  const openNewPurchaseBill = () => {
+    const restored = restorePbDraftIfExists();
+    if (!restored) {
+      resetPbForm();
+      setPbDocumentType('PURCHASE BILL');
+      setPbCustomBillNumber(nextPurchaseBill(sales));
+      setRestoredFromPbDraft(false);
+    }
     setPbModalOpen(true);
   };
 
@@ -776,14 +1205,12 @@ export default function Purchase() {
     return smartFilterItems(
       products,
       rawPurProductSearch,
-      (p) => [p.name, p.rackNumber, p.size, p.category],
+      (p) => [p.name, p.rackNumber, p.hsnCode, p.supplier],
       {
-        activeCategory: rawPurCategory,
-        getCategory: (p) => p.category,
         maxResults: 50,
       }
     );
-  }, [products, rawPurProductSearch, rawPurCategory]);
+  }, [products, rawPurProductSearch]);
 
   const openNewRawPurchase = () => {
     setRawPurNumber(nextRawPurchaseNumber(sales));
@@ -791,6 +1218,8 @@ export default function Purchase() {
     setRawPurNote('');
     setRawPurPaymentMethod('Cash');
     setRawPurLines([]);
+    setActiveRawPurLineProductId(null);
+    setJustAddedRawPurLineId(null);
     setRawPurProductSearch('');
     setRawPurCategory('All');
     setIsAddingRawPurProduct(false);
@@ -804,15 +1233,15 @@ export default function Purchase() {
   };
 
   const addRawProductToPurchase = (p: Product) => {
+    setActiveRawPurLineProductId(p.id);
+    setJustAddedRawPurLineId(p.id);
     setRawPurLines((prev) => {
-      const idx = prev.findIndex((l) => l.productId === p.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
-        return next;
+      const existing = prev.find((l) => l.productId === p.id);
+      if (existing) {
+        const updated = { ...existing, qty: existing.qty + 1 };
+        return [updated, ...prev.filter((l) => l.productId !== p.id)];
       }
       return [
-        ...prev,
         {
           productId: p.id,
           name: p.name,
@@ -821,6 +1250,38 @@ export default function Purchase() {
           qty: 1,
           hsnCode: p.hsnCode || '7318150',
         },
+        ...prev,
+      ];
+    });
+  };
+
+  const addFastRawPurchaseLine = (item: {
+    productId: string;
+    name: string;
+    price: number;
+    cost?: number;
+    qty: number;
+    hsnCode?: string;
+    isCustom?: boolean;
+  }) => {
+    setActiveRawPurLineProductId(item.productId);
+    setJustAddedRawPurLineId(item.productId);
+    setRawPurLines((prev) => {
+      const existing = prev.find((l) => l.productId === item.productId);
+      if (existing) {
+        const updated = { ...existing, qty: existing.qty + item.qty, price: item.price };
+        return [updated, ...prev.filter((l) => l.productId !== item.productId)];
+      }
+      return [
+        {
+          productId: item.productId,
+          name: item.name,
+          price: item.price,
+          cost: item.cost || item.price,
+          qty: item.qty,
+          hsnCode: item.hsnCode || '7318150',
+        },
+        ...prev,
       ];
     });
   };
@@ -838,6 +1299,18 @@ export default function Purchase() {
   const updateRawPurLineCost = (productId: string, price: number) => {
     setRawPurLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, price: Math.max(0, price) } : l))
+    );
+  };
+
+  const updateRawPurLineName = (productId: string, name: string) => {
+    setRawPurLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, name } : l))
+    );
+  };
+
+  const updateRawPurLineHsn = (productId: string, hsnCode: string) => {
+    setRawPurLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, hsnCode } : l))
     );
   };
 
@@ -859,10 +1332,8 @@ export default function Purchase() {
       // (Because saving this Raw Purchase will add inwardQty to stock!)
       const created = await addProduct({
         name: rawNewProdName.trim(),
-        category: rawNewProdCategory,
         supplier: 'Raw Purchase',
         rackNumber: rawNewProdRack.trim() || 'General',
-        size: rawNewProdSize.trim() || 'Standard',
         cost,
         price,
         boxCapacity: 1000,
@@ -872,9 +1343,10 @@ export default function Purchase() {
         hsnCode: rawNewProdHsn.trim() || '7318150',
       });
 
-      // 2. Add line item directly to active Raw Purchase lines
+      // 2. Add line item directly to active Raw Purchase lines at top
+      setActiveRawPurLineProductId(created.id);
+      setJustAddedRawPurLineId(created.id);
       setRawPurLines((prev) => [
-        ...prev,
         {
           productId: created.id,
           name: created.name,
@@ -883,12 +1355,12 @@ export default function Purchase() {
           qty: inwardQty,
           hsnCode: created.hsnCode || '7318150',
         },
+        ...prev,
       ]);
 
       // 3. Reset form
       setRawNewProdName('');
       setRawNewProdRack('');
-      setRawNewProdSize('');
       setRawNewProdCost('');
       setRawNewProdPrice('');
       setRawNewProdInwardQty('1');
@@ -940,6 +1412,11 @@ export default function Purchase() {
 
     try {
       await addSale(newRawPurchase);
+      try {
+        if (newRawPurchase.invoice) {
+          localStorage.setItem('nain_last_entered_raw_purchase_no', newRawPurchase.invoice.trim());
+        }
+      } catch {}
       setRawPurchaseModalOpen(false);
     } catch (err) {
       alert(`Failed to record raw purchase: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -966,25 +1443,64 @@ export default function Purchase() {
     }
   };
 
-  const addPbLine = (productId: string) => {
+  const addPbLine = (productId: string, initialQty?: number, initialPrice?: number) => {
     const p = products.find((x) => x.id === productId);
     if (!p) return;
+    setActivePbLineProductId(productId);
+    setJustAddedPbLineId(productId);
     setPbLines((prev) => {
-      const idx = prev.findIndex((l) => l.productId === p.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
-        return next;
+      const existing = prev.find((l) => l.productId === p.id);
+      if (existing) {
+        const updated = {
+          ...existing,
+          qty: existing.qty + (initialQty || 1),
+          price: initialPrice !== undefined ? initialPrice : existing.price,
+        };
+        return [updated, ...prev.filter((l) => l.productId !== p.id)];
       }
       return [
-        ...prev,
         {
           productId: p.id,
           name: p.name,
-          price: p.price,
-          qty: 1,
+          price: initialPrice !== undefined ? initialPrice : (p.cost || p.price),
+          qty: initialQty || 1,
           hsnCode: p.hsnCode || '7318150',
         },
+        ...prev,
+      ];
+    });
+  };
+
+  const addFastPbLine = (item: {
+    productId: string;
+    name: string;
+    price: number;
+    cost?: number;
+    qty: number;
+    hsnCode?: string;
+    isCustom?: boolean;
+  }) => {
+    setActivePbLineProductId(item.productId);
+    setJustAddedPbLineId(item.productId);
+    setPbLines((prev) => {
+      const existing = prev.find((l) => l.productId === item.productId);
+      if (existing) {
+        const updated = {
+          ...existing,
+          qty: existing.qty + item.qty,
+          price: item.price,
+        };
+        return [updated, ...prev.filter((l) => l.productId !== item.productId)];
+      }
+      return [
+        {
+          productId: item.productId,
+          name: item.name,
+          price: item.price,
+          qty: item.qty,
+          hsnCode: item.hsnCode || '7318150',
+        },
+        ...prev,
       ];
     });
   };
@@ -997,8 +1513,8 @@ export default function Purchase() {
     );
   };
 
-  const setPbLineQty = (productId: string, raw: string) => {
-    const q = parseInt(raw, 10);
+  const setPbLineQty = (productId: string, raw: string | number) => {
+    const q = typeof raw === 'number' ? raw : parseInt(raw, 10);
     setPbLines((prev) =>
       prev
         .map((l) => (l.productId === productId ? { ...l, qty: isNaN(q) ? 0 : Math.max(0, q) } : l))
@@ -1006,8 +1522,8 @@ export default function Purchase() {
     );
   };
 
-  const setPbLinePrice = (productId: string, raw: string) => {
-    const val = parseFloat(raw);
+  const setPbLinePrice = (productId: string, raw: string | number) => {
+    const val = typeof raw === 'number' ? raw : parseFloat(raw);
     setPbLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, price: isNaN(val) ? 0 : Math.max(0, val) } : l)),
     );
@@ -1043,10 +1559,8 @@ export default function Purchase() {
     // 1. Create product in Main Inventory Master
     await addProduct({
       name: pbNewProdName.trim(),
-      category: pbNewProdCategory,
       supplier: pbSupplier.trim() || 'General Supplier',
       rackNumber: pbNewProdRack.trim() || 'General',
-      size: pbNewProdSize.trim() || 'Standard',
       cost,
       price,
       boxCapacity,
@@ -1056,9 +1570,10 @@ export default function Purchase() {
       hsnCode: pbNewProdHsn.trim() || '7318150',
     });
 
-    // 2. Add line item directly to active Purchase Bill
+    // 2. Add line item directly to active Purchase Bill at top
+    setActivePbLineProductId(newId);
+    setJustAddedPbLineId(newId);
     setPbLines((prev) => [
-      ...prev,
       {
         productId: newId,
         name: pbNewProdName.trim(),
@@ -1066,12 +1581,12 @@ export default function Purchase() {
         qty: 1,
         hsnCode: pbNewProdHsn.trim() || '7318150',
       },
+      ...prev,
     ]);
 
     // 3. Reset creator form state
     setPbNewProdName('');
     setPbNewProdRack('');
-    setPbNewProdSize('');
     setPbNewProdCost('');
     setPbNewProdPrice('');
     setIsAddingPbNewProduct(false);
@@ -1147,6 +1662,17 @@ export default function Purchase() {
     };
 
     await addSale(newBill);
+    try {
+      if (newBill.invoice) {
+        localStorage.setItem('nain_last_entered_purchase_bill_no', newBill.invoice.trim());
+        const docKey = `nain_last_entered_${(newBill.documentType || 'PURCHASE BILL').replace(/\s+/g, '_').toLowerCase()}_no`;
+        localStorage.setItem(docKey, newBill.invoice.trim());
+      }
+      localStorage.removeItem(PB_DRAFT_STORAGE_KEY);
+    } catch {}
+    setHasPbDraft(false);
+    setRestoredFromPbDraft(false);
+    setPbDraftSavedAt(null);
     setPbModalOpen(false);
     setPbViewing(newBill);
     resetPbForm();
@@ -1203,6 +1729,15 @@ export default function Purchase() {
       chequeStatus: paymentMethod === 'Cheque' ? poChequeStatus : undefined,
     };
     await addPurchase(po);
+    try {
+      if (po.poNumber) {
+        localStorage.setItem('nain_last_entered_po_number', po.poNumber.trim());
+      }
+      localStorage.removeItem(PO_DRAFT_STORAGE_KEY);
+    } catch {}
+    setHasPoDraft(false);
+    setRestoredFromPoDraft(false);
+    setPoDraftSavedAt(null);
     setModalOpen(false);
     resetForm();
   };
@@ -1259,6 +1794,20 @@ export default function Purchase() {
               <span className="hidden sm:inline">Export</span>
             </button>
             <button
+              className={`btn-secondary bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold flex items-center gap-1.5 shadow-sm ${
+                hasPoDraft ? 'ring-2 ring-blue-400/80 bg-blue-100' : ''
+              }`}
+              onClick={openNewPurchase}
+            >
+              <Plus className="h-4 w-4 text-blue-600" />
+              <span>{hasPoDraft ? 'Resume PO (Draft)' : 'New Purchase Order'}</span>
+              {hasPoDraft && (
+                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-200 text-blue-900 animate-pulse">
+                  DRAFT
+                </span>
+              )}
+            </button>
+            <button
               className="btn-secondary bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 font-bold flex items-center gap-1.5 shadow-sm"
               onClick={openNewCreditNote}
             >
@@ -1273,11 +1822,18 @@ export default function Purchase() {
               <span>New Raw Purchase</span>
             </button>
             <button
-              className="btn-primary flex items-center gap-1.5 shadow-sm"
+              className={`btn-primary flex items-center gap-1.5 shadow-sm ${
+                hasPbDraft ? 'ring-2 ring-amber-400/80 bg-gradient-to-r from-amber-600 to-brand-600' : ''
+              }`}
               onClick={openNewPurchaseBill}
             >
               <Plus className="h-4 w-4" />
-              <span>New Purchase Bill</span>
+              <span>{hasPbDraft ? 'Resume Purchase Bill (Draft)' : 'New Purchase Bill'}</span>
+              {hasPbDraft && (
+                <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 animate-pulse">
+                  DRAFT
+                </span>
+              )}
             </button>
           </div>
         }
@@ -1662,8 +2218,8 @@ export default function Purchase() {
                 <table className="w-full">
                   <thead className="bg-slate-50/80">
                     <tr>
-                      <th className="table-th">Product & Size</th>
-                      <th className="table-th">Category / Rack</th>
+                      <th className="table-th">Product Name</th>
+                      <th className="table-th">Rack Location</th>
                       <th className="table-th">Supplier</th>
                       <th className="table-th text-center">Stock Level</th>
                       <th className="table-th text-center">Reorder Threshold</th>
@@ -1681,14 +2237,10 @@ export default function Purchase() {
                           <td className="table-td">
                             <div>
                               <p className="font-bold text-slate-900">{p.name}</p>
-                              {p.size && <p className="text-[11px] text-slate-500">Size: {p.size}</p>}
                             </div>
                           </td>
                           <td className="table-td">
-                            <span className="badge bg-slate-100 text-slate-700 font-medium">
-                              {p.category}
-                            </span>
-                            <span className="text-[11px] text-slate-400 block mt-0.5">Rack: {p.rackNumber}</span>
+                            <span className="font-medium text-slate-700">Rack {p.rackNumber || '—'}</span>
                           </td>
                           <td className="table-td text-slate-700 font-medium">{p.supplier || 'Any Supplier'}</td>
                           <td className="table-td text-center">
@@ -2216,20 +2768,48 @@ export default function Purchase() {
         subtitle={`PO ${poNumber} · ${date}`}
         size="xl"
         footer={
-          <>
-            <button className="btn-secondary" onClick={() => setModalOpen(false)}>Cancel</button>
-            <button
-              className="btn-primary"
-              disabled={!canSubmit}
-              onClick={handleSave}
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              Save Purchase
-            </button>
-          </>
+          <div className="flex items-center justify-between w-full">
+            {hasPoDraft ? (
+              <button
+                type="button"
+                onClick={clearPoDraft}
+                className="btn-secondary text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+              >
+                Discard Draft
+              </button>
+            ) : <div />}
+            <div className="flex gap-2">
+              <button className="btn-secondary" onClick={() => setModalOpen(false)}>Cancel</button>
+              <button
+                className="btn-primary"
+                disabled={!canSubmit}
+                onClick={handleSave}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                Save Purchase
+              </button>
+            </div>
+          </div>
         }
       >
         <div className="space-y-5">
+          {restoredFromPoDraft && (
+            <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+                <span className="font-semibold">
+                  Restored unsaved purchase order draft {poDraftSavedAt ? `from ${formatRelativeDate(new Date(poDraftSavedAt).toISOString())}` : ''}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={clearPoDraft}
+                className="px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-200/70 hover:bg-amber-200 rounded-lg border border-amber-300 transition"
+              >
+                Discard Draft &amp; Start Fresh
+              </button>
+            </div>
+          )}
           {/* Supplier section */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="relative">
@@ -2440,151 +3020,34 @@ export default function Purchase() {
               </div>
             )}
 
-            {/* Product Catalog Picker with Search, Category Filter, and Smooth Scroller */}
-            <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2.5">
-              {/* Search input with Cross (X) button */}
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && searchResults.length > 0) {
-                      e.preventDefault();
-                      addLine(searchResults[0].id);
-                      setProductSearch('');
-                    }
-                  }}
-                  placeholder="Search 990+ products by name, size, rack..."
-                  className="input pl-9 pr-9 text-xs bg-white"
-                />
-                {productSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setProductSearch('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded-full transition"
-                    title="Clear search"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
+            {/* Active Item Spotlight at Top */}
+            <ActiveItemSpotlight
+              activeItem={activePoLineItem ? {
+                productId: activePoLineItem.productId,
+                name: activePoLineItem.name,
+                price: activePoLineItem.cost,
+                cost: activePoLineItem.cost,
+                qty: activePoLineItem.qty,
+                hsnCode: activePoLineItem.hsnCode,
+              } : null}
+              product={activePoProduct}
+              lineNumber={activePoLineIndex >= 0 ? activePoLineIndex + 1 : undefined}
+              isJustAdded={activePoLineItem ? activePoLineItem.productId === justAddedPoLineId : false}
+              mode="purchase"
+              onUpdateName={(n) => activePoLineItem && updatePoLineName(activePoLineItem.productId, n)}
+              onUpdateHsn={(h) => activePoLineItem && updatePoLineHsn(activePoLineItem.productId, h)}
+              onUpdateQty={(q) => activePoLineItem && setQty(activePoLineItem.productId, q)}
+              onUpdatePrice={(p) => activePoLineItem && setCost(activePoLineItem.productId, p)}
+              onRemove={() => activePoLineItem && removeLine(activePoLineItem.productId)}
+            />
 
-              {/* Category Filter Chips */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-                <span className="text-[11px] font-bold text-slate-500 shrink-0">Category:</span>
-                {availableCategories.slice(0, 9).map((cat) => (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => setPoCategory(cat)}
-                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition shrink-0 ${
-                      poCategory === cat
-                        ? 'bg-brand-600 text-white shadow-xs'
-                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    {cat}
-                  </button>
-                ))}
-              </div>
-
-              {/* Scrollable Catalog Product List (Inline, Never overlays or hides added items) */}
-              <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-xs">
-                <div className="bg-slate-100/70 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
-                  <span>
-                    Catalog List ({searchResults.length} {searchResults.length === 1 ? 'item' : 'items'} displayed
-                    {productSearch ? ` for "${productSearch}"` : ''})
-                  </span>
-                  <span className="text-slate-400 text-[10.5px]">Scroll to browse &middot; Click &quot;+ Add&quot; to order</span>
-                </div>
-
-                <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
-                  {searchResults.length > 0 ? (
-                    searchResults.map((p) => {
-                      const addedLine = lines.find((l) => l.productId === p.id);
-                      return (
-                        <div
-                          key={p.id}
-                          className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
-                            addedLine ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'hover:bg-slate-50'
-                          }`}
-                        >
-                          <div className="flex-1 pr-3">
-                            <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
-                            <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
-                              {p.size && <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">{p.size}</span>}
-                              {p.rackNumber && <span>Rack: <strong className="text-slate-700">{p.rackNumber}</strong></span>}
-                              <span>Est. Stock: <strong className="text-slate-700">{p.stock}</strong></span>
-                              {p.category && <span className="text-slate-400 font-medium">({p.category})</span>}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-3 shrink-0">
-                            <span className="text-xs font-bold text-slate-700 font-mono">
-                              ₹{p.cost.toFixed(2)}
-                            </span>
-
-                            {addedLine ? (
-                              <div className="flex items-center gap-1.5">
-                                <span className="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
-                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                  <span>Added ({addedLine.qty})</span>
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => addLine(p.id)}
-                                  className="p-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition"
-                                  title="Add one more"
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => removeLine(p.id)}
-                                  className="p-1 rounded-md bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition"
-                                  title="Remove from order"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => addLine(p.id)}
-                                className="px-3 py-1 rounded-lg bg-brand-50 hover:bg-brand-100 text-brand-700 border border-brand-200 font-bold text-xs transition flex items-center gap-1 shadow-xs"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>Add</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="p-4 text-center text-xs space-y-2">
-                      <p className="text-slate-400">No products found matching &quot;{productSearch}&quot;.</p>
-                      {productSearch.trim() && !isAddingNewProduct && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNewProdName(productSearch.trim());
-                            setIsAddingNewProduct(true);
-                            setProductSearch('');
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs shadow-xs transition"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>+ Add &quot;{productSearch}&quot; as New Product Master</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            {/* Fast Item Entry Bar */}
+            <FastItemEntryBar
+              products={products}
+              mode="purchase"
+              placeholder="Fast item entry for purchase order..."
+              onAddItem={(item) => addLine(item.productId, item.qty, item.cost || item.price)}
+            />
           </div>
 
           {/* Items Added to Purchase Order */}
@@ -2609,6 +3072,7 @@ export default function Purchase() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 font-bold text-slate-700">
                     <tr>
+                      <th className="p-2.5 text-center w-12">Sr.</th>
                       <th className="p-2.5">Product Name</th>
                       <th className="p-2.5 text-center w-36">Qty (Pieces)</th>
                       <th className="p-2.5 text-right w-28">Cost / Piece</th>
@@ -2618,9 +3082,32 @@ export default function Purchase() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {lines.map((l) => (
-                      <tr key={l.productId} className={l.isNewProduct ? 'bg-emerald-50/20' : 'hover:bg-slate-50/50'}>
-                        <td className="p-2.5">
+                    {lines.map((l, idx) => {
+                      const isActive = l.productId === activePoLineItem?.productId;
+                      return (
+                        <tr
+                          key={l.productId}
+                          onClick={() => {
+                            setActivePoLineProductId(l.productId);
+                            setJustAddedPoLineId(null);
+                          }}
+                          className={`transition cursor-pointer ${
+                            isActive
+                              ? 'bg-brand-50/70 border-l-4 border-l-brand-600 ring-1 ring-brand-300/60'
+                              : l.isNewProduct
+                              ? 'bg-emerald-50/20 hover:bg-emerald-50/40'
+                              : 'hover:bg-slate-50/50'
+                          }`}
+                        >
+                          <td className="p-2.5 text-center font-bold text-slate-500">
+                            <div className="flex items-center justify-center gap-1">
+                              <span>{idx + 1}</span>
+                              {isActive && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-brand-600 shrink-0 animate-pulse" title="Active Selected Line" />
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-2.5">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <input
                               type="text"
@@ -2692,7 +3179,8 @@ export default function Purchase() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                    );
+                  })}
                   </tbody>
                 </table>
               </div>
@@ -2897,13 +3385,24 @@ export default function Purchase() {
             </p>
           )}
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button className="btn-secondary" onClick={() => setModalOpen(false)}>
-              Cancel
-            </button>
-            <button className="btn-primary" onClick={handleSave} disabled={!canSubmit}>
-              Save Purchase Order
-            </button>
+          <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+            {hasPoDraft ? (
+              <button
+                type="button"
+                onClick={clearPoDraft}
+                className="btn-secondary text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+              >
+                Discard Draft
+              </button>
+            ) : <div />}
+            <div className="flex gap-2">
+              <button className="btn-secondary" onClick={() => setModalOpen(false)}>
+                Cancel
+              </button>
+              <button className="btn-primary" onClick={handleSave} disabled={!canSubmit}>
+                Save Purchase Order
+              </button>
+            </div>
           </div>
         </div>
       </Modal>
@@ -2916,6 +3415,23 @@ export default function Purchase() {
           onClose={() => setPbModalOpen(false)}
         >
           <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1 text-xs">
+            {restoredFromPbDraft && (
+              <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+                  <span className="font-semibold">
+                    Restored unsaved purchase bill draft {pbDraftSavedAt ? `from ${formatRelativeDate(new Date(pbDraftSavedAt).toISOString())}` : ''}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearPbDraft}
+                  className="px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-200/70 hover:bg-amber-200 rounded-lg border border-amber-300 transition"
+                >
+                  Discard Draft &amp; Start Fresh
+                </button>
+              </div>
+            )}
             {/* Document Type Selector */}
             <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
               <label className="block text-xs font-bold text-slate-700 mb-1.5">Document Type</label>
@@ -3234,157 +3750,27 @@ export default function Purchase() {
                 </div>
               )}
 
-              {/* Product Catalog Picker with Search, Category Filter, and Smooth Scroller */}
-              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2.5">
-                {/* Search input with Cross (X) button */}
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={pbProductSearch}
-                    onChange={(e) => setPbProductSearch(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && pbSearchResults.length > 0) {
-                        e.preventDefault();
-                        addPbLine(pbSearchResults[0].id);
-                        setPbProductSearch('');
-                      }
-                    }}
-                    placeholder="Search 990+ products by name, size, rack..."
-                    className="input pl-9 pr-9 text-xs bg-white"
-                  />
-                  {pbProductSearch && (
-                    <button
-                      type="button"
-                      onClick={() => setPbProductSearch('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded-full transition"
-                      title="Clear search"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
+              {/* Active Item Spotlight (Represents current/last selected item at top) */}
+              <ActiveItemSpotlight
+                activeItem={activePbLineItem}
+                product={activePbProduct}
+                lineNumber={activePbLineIndex >= 0 ? activePbLineIndex + 1 : undefined}
+                isJustAdded={activePbLineItem ? activePbLineItem.productId === justAddedPbLineId : false}
+                mode="purchase"
+                onUpdateName={(n) => activePbLineItem && updatePbLineName(activePbLineItem.productId, n)}
+                onUpdateHsn={(h) => activePbLineItem && setPbLineHsn(activePbLineItem.productId, h)}
+                onUpdateQty={(q) => activePbLineItem && setPbLineQty(activePbLineItem.productId, q)}
+                onUpdatePrice={(p) => activePbLineItem && setPbLinePrice(activePbLineItem.productId, p)}
+                onRemove={() => activePbLineItem && removePbLine(activePbLineItem.productId)}
+              />
 
-                {/* Category Filter Chips */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-                  <span className="text-[11px] font-bold text-slate-500 shrink-0">Category:</span>
-                  {availableCategories.slice(0, 9).map((cat) => (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => setPbCategory(cat)}
-                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition shrink-0 ${
-                        pbCategory === cat
-                          ? 'bg-brand-600 text-white shadow-xs'
-                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Scrollable Catalog Product List (Inline) */}
-                <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-xs">
-                  <div className="bg-slate-100/70 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
-                    <span>
-                      Catalog List ({pbSearchResults.length} {pbSearchResults.length === 1 ? 'item' : 'items'} displayed
-                      {pbProductSearch ? ` for "${pbProductSearch}"` : ''})
-                    </span>
-                    <span className="text-slate-400 text-[10.5px]">Scroll to browse &middot; Click &quot;+ Add&quot; to include</span>
-                  </div>
-
-                  <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
-                    {pbSearchResults.length > 0 ? (
-                      pbSearchResults.map((p) => {
-                        const addedLine = pbLines.find((l) => l.productId === p.id);
-                        return (
-                          <div
-                            key={p.id}
-                            className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
-                              addedLine ? 'bg-indigo-50/40 hover:bg-indigo-50/70' : 'hover:bg-slate-50'
-                            }`}
-                          >
-                            <div className="flex-1 pr-3">
-                              <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
-                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
-                                {p.size && <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">{p.size}</span>}
-                                {p.rackNumber && <span>Rack: <strong className="text-slate-700">{p.rackNumber}</strong></span>}
-                                <span>Est. Stock: <strong className="text-slate-700">{p.stock}</strong></span>
-                                {p.category && <span className="text-slate-400 font-medium">({p.category})</span>}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-3 shrink-0">
-                              <span className="text-xs font-bold text-slate-700 font-mono">
-                                ₹{p.price.toFixed(2)}
-                              </span>
-
-                              {addedLine ? (
-                                <div className="flex items-center gap-1.5">
-                                  <span className="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-300 flex items-center gap-1">
-                                    <CheckCircle2 className="w-3 h-3 text-indigo-600" />
-                                    <span>Added ({addedLine.qty})</span>
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => addPbLine(p.id)}
-                                    className="p-1 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition"
-                                    title="Add one more"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removePbLine(p.id)}
-                                    className="p-1 rounded-md bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition"
-                                    title="Remove from bill"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => addPbLine(p.id)}
-                                  className="px-3 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold text-xs transition flex items-center gap-1 shadow-xs"
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                  <span>Add</span>
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="p-4 text-center text-xs text-slate-400">
-                        No products found matching &quot;{pbProductSearch}&quot;.
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {pbProductSearch && pbSearchResults.length === 0 && !isAddingPbNewProduct && (
-                  <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/70 flex items-center justify-between gap-2">
-                    <span className="text-xs text-amber-900 font-medium">
-                      No existing product match for &quot;{pbProductSearch}&quot;.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPbNewProdName(pbProductSearch.trim());
-                        setIsAddingPbNewProduct(true);
-                        setPbProductSearch('');
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs shrink-0 flex items-center gap-1"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>+ Add &quot;{pbProductSearch}&quot; as New Product</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+              {/* Fast Item Entry Bar */}
+              <FastItemEntryBar
+                products={products}
+                mode="purchase"
+                placeholder="Fast item entry for purchase bill..."
+                onAddItem={(item) => addFastPbLine(item)}
+              />
             </div>
 
             {/* Items Added to Purchase Bill */}
@@ -3409,6 +3795,7 @@ export default function Purchase() {
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50 font-bold text-slate-700">
                       <tr>
+                        <th className="p-2.5 text-center w-12">Sr.</th>
                         <th className="p-2.5">Item Name</th>
                         <th className="p-2.5 w-28">HSN Code</th>
                         <th className="p-2.5 w-28 text-center">Qty</th>
@@ -3418,8 +3805,29 @@ export default function Purchase() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {pbLines.map((l) => (
-                        <tr key={l.productId} className="hover:bg-slate-50/50">
+                      {pbLines.map((l, idx) => {
+                        const isActive = l.productId === activePbLineItem?.productId;
+                        return (
+                          <tr
+                            key={l.productId}
+                            onClick={() => {
+                              setActivePbLineProductId(l.productId);
+                              setJustAddedPbLineId(null);
+                            }}
+                            className={`transition cursor-pointer ${
+                              isActive
+                                ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 ring-1 ring-indigo-300/60'
+                                : 'hover:bg-slate-50/50'
+                            }`}
+                          >
+                            <td className="p-2.5 text-center font-bold text-slate-500">
+                              <div className="flex items-center justify-center gap-1">
+                                <span>{idx + 1}</span>
+                                {isActive && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 shrink-0 animate-pulse" title="Active Selected Line" />
+                                )}
+                              </div>
+                            </td>
                           <td className="p-2.5">
                             <input
                               type="text"
@@ -3488,7 +3896,8 @@ export default function Purchase() {
                             </button>
                           </td>
                         </tr>
-                      ))}
+                      );
+                    })}
                     </tbody>
                   </table>
                 </div>
@@ -3635,23 +4044,34 @@ export default function Purchase() {
             </div>
 
             {/* Actions */}
-            <div className="flex justify-end gap-2 pt-2">
-              <button className="btn-secondary" onClick={() => setPbModalOpen(false)}>
-                Cancel
-              </button>
-              <button
-                className={`btn-primary font-bold ${
-                  pbDocumentType === 'CREDIT NOTE'
-                    ? 'bg-rose-600 hover:bg-rose-700'
-                    : pbDocumentType === 'DEBIT NOTE'
-                    ? 'bg-amber-600 hover:bg-amber-700'
-                    : 'bg-indigo-600 hover:bg-indigo-700'
-                }`}
-                onClick={handleSavePurchaseBill}
-                disabled={!pbCanSubmit}
-              >
-                Confirm &amp; Issue {pbDocumentType === 'CREDIT NOTE' ? 'Credit Note' : pbDocumentType === 'DEBIT NOTE' ? 'Debit Note' : 'Purchase Bill'}
-              </button>
+            <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+              {hasPbDraft ? (
+                <button
+                  type="button"
+                  onClick={clearPbDraft}
+                  className="btn-secondary text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+                >
+                  Discard Draft
+                </button>
+              ) : <div />}
+              <div className="flex gap-2">
+                <button className="btn-secondary" onClick={() => setPbModalOpen(false)}>
+                  Cancel
+                </button>
+                <button
+                  className={`btn-primary font-bold ${
+                    pbDocumentType === 'CREDIT NOTE'
+                      ? 'bg-rose-600 hover:bg-rose-700'
+                      : pbDocumentType === 'DEBIT NOTE'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-indigo-600 hover:bg-indigo-700'
+                  }`}
+                  onClick={handleSavePurchaseBill}
+                  disabled={!pbCanSubmit}
+                >
+                  Confirm &amp; Issue {pbDocumentType === 'CREDIT NOTE' ? 'Credit Note' : pbDocumentType === 'DEBIT NOTE' ? 'Debit Note' : 'Purchase Bill'}
+                </button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -4178,29 +4598,6 @@ export default function Purchase() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Category</label>
-                      <select
-                        value={rawNewProdCategory}
-                        onChange={(e) => setRawNewProdCategory(e.target.value)}
-                        className="input text-xs bg-white"
-                      >
-                        {availableCategories.filter((c) => c !== 'All').map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Size / Spec</label>
-                      <input
-                        type="text"
-                        value={rawNewProdSize}
-                        onChange={(e) => setRawNewProdSize(e.target.value)}
-                        placeholder="e.g. M10 x 40"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-
-                    <div>
                       <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Inward Cost Price (₹)</label>
                       <input
                         type="number"
@@ -4261,85 +4658,27 @@ export default function Purchase() {
                 </div>
               )}
 
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={rawPurProductSearch}
-                  onChange={(e) => setRawPurProductSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && rawPurSearchResults.length > 0) {
-                      e.preventDefault();
-                      addRawProductToPurchase(rawPurSearchResults[0]);
-                      setRawPurProductSearch('');
-                    }
-                  }}
-                  placeholder="Search products by name, rack #, size..."
-                  className="input pl-8 py-1.5 bg-white text-xs font-medium"
-                />
-              </div>
+              {/* Active Item Spotlight (Represents current/last selected item at top) */}
+              <ActiveItemSpotlight
+                activeItem={activeRawPurLineItem}
+                product={activeRawPurProduct}
+                lineNumber={activeRawPurLineIndex >= 0 ? activeRawPurLineIndex + 1 : undefined}
+                isJustAdded={activeRawPurLineItem ? activeRawPurLineItem.productId === justAddedRawPurLineId : false}
+                mode="purchase"
+                onUpdateName={(n) => activeRawPurLineItem && updateRawPurLineName(activeRawPurLineItem.productId, n)}
+                onUpdateHsn={(h) => activeRawPurLineItem && updateRawPurLineHsn(activeRawPurLineItem.productId, h)}
+                onUpdateQty={(q) => activeRawPurLineItem && updateRawPurLineQty(activeRawPurLineItem.productId, q)}
+                onUpdatePrice={(p) => activeRawPurLineItem && updateRawPurLineCost(activeRawPurLineItem.productId, p)}
+                onRemove={() => activeRawPurLineItem && removeRawPurLine(activeRawPurLineItem.productId)}
+              />
 
-              {/* Quick Pick Products Grid */}
-              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1.5 divide-y divide-slate-100">
-                {rawPurSearchResults.length === 0 ? (
-                  <div className="py-4 px-2 text-center space-y-2">
-                    <p className="text-slate-400 text-xs">
-                      {rawPurProductSearch
-                        ? `No products found matching "${rawPurProductSearch}".`
-                        : 'No products in this category.'}
-                    </p>
-                    {rawPurProductSearch.trim() && !isAddingRawPurProduct && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRawNewProdName(rawPurProductSearch.trim());
-                          setIsAddingRawPurProduct(true);
-                        }}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>+ Create &quot;{rawPurProductSearch}&quot; as New Product</span>
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  rawPurSearchResults.map((p) => {
-                    const alreadyInCart = rawPurLines.find((l) => l.productId === p.id);
-                    return (
-                      <div
-                        key={p.id}
-                        className="flex items-center justify-between py-1.5 px-2 hover:bg-slate-50 rounded-lg transition"
-                      >
-                        <div className="min-w-0 pr-2">
-                          <p className="font-bold text-slate-800 truncate">{p.name}</p>
-                          <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                            <span>Rack: <strong className="text-slate-700">{p.rackNumber || '—'}</strong></span>
-                            <span>•</span>
-                            <span>Cost: <strong className="text-emerald-700">{money(p.cost)}</strong></span>
-                            <span>•</span>
-                            <span className="text-slate-600">
-                              Current Stock: <strong>{p.stock}</strong>
-                            </span>
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => addRawProductToPurchase(p)}
-                          className={`px-2.5 py-1 text-xs font-bold rounded-lg transition flex items-center gap-1 shrink-0 ${
-                            alreadyInCart
-                              ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                              : 'bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white'
-                          }`}
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>{alreadyInCart ? `Add (${alreadyInCart.qty})` : 'Add'}</span>
-                        </button>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+              {/* Fast Item Entry Bar */}
+              <FastItemEntryBar
+                products={products}
+                mode="purchase"
+                placeholder="Fast item entry for raw purchase inward..."
+                onAddItem={(item) => addFastRawPurchaseLine(item)}
+              />
             </div>
 
             {/* Selected Inward Items Table */}
@@ -4364,6 +4703,7 @@ export default function Purchase() {
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50 text-[11px] font-bold text-slate-600">
                       <tr>
+                        <th className="px-2 py-2 text-center w-10">Sr.</th>
                         <th className="px-3 py-2">Item Name</th>
                         <th className="px-3 py-2 w-28 text-center">Inward Qty</th>
                         <th className="px-3 py-2 w-28 text-right">Cost Rate (₹)</th>
@@ -4372,12 +4712,32 @@ export default function Purchase() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
-                      {rawPurLines.map((line) => {
+                      {rawPurLines.map((line, idx) => {
                         const lineTotal = +(line.price * line.qty).toFixed(2);
                         const prod = products.find((p) => p.id === line.productId);
+                        const isActive = line.productId === activeRawPurLineItem?.productId;
 
                         return (
-                          <tr key={line.productId} className="hover:bg-slate-50">
+                          <tr
+                            key={line.productId}
+                            onClick={() => {
+                              if (line.productId) setActiveRawPurLineProductId(line.productId);
+                              setJustAddedRawPurLineId(null);
+                            }}
+                            className={`transition cursor-pointer ${
+                              isActive
+                                ? 'bg-emerald-50/70 border-l-4 border-l-emerald-600 ring-1 ring-emerald-300/60'
+                                : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <td className="px-2 py-2 text-center font-bold text-slate-500">
+                              <div className="flex items-center justify-center gap-1">
+                                <span>{idx + 1}</span>
+                                {isActive && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0 animate-pulse" title="Active Selected Line" />
+                                )}
+                              </div>
+                            </td>
                             <td className="px-3 py-2">
                               <p className="font-bold text-slate-900">{line.name}</p>
                               {prod && (

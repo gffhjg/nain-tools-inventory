@@ -8,7 +8,7 @@ export type Product = {
   category?: string;
   supplier: string;
   rackNumber: string;
-  size: string;
+  size?: string;
   cost: number;
   price: number;
   stock: number;

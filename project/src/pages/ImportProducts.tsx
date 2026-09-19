@@ -26,10 +26,8 @@ type ImportedRow = {
 const SAMPLE_TEMPLATE_DATA = [
   {
     'Product Name': 'M8 x 25mm Hex Bolt SS304',
-    'Category': 'Fasteners',
     'Supplier': 'Nain Fasteners Ltd',
     'Rack Number': 'A-12',
-    'Size': 'M8x25',
     'Initial Stock': 250,
     'Purchase Price': 4.5,
     'Selling Price': 8.0,
@@ -39,10 +37,8 @@ const SAMPLE_TEMPLATE_DATA = [
   },
   {
     'Product Name': 'M10 Nylon Lock Nut SS316',
-    'Category': 'Nuts & Washers',
     'Supplier': 'Apex Hardware',
     'Rack Number': 'B-04',
-    'Size': 'M10',
     'Initial Stock': 500,
     'Purchase Price': 3.2,
     'Selling Price': 6.5,
@@ -436,7 +432,7 @@ export default function ImportProducts() {
               <p className="text-sm font-semibold text-brand-900">Supported Headers & Automatic Mapping</p>
               <p className="mt-1 text-xs leading-relaxed text-brand-700/90">
                 The import tool automatically recognizes standard column headers: <br />
-                <code className="font-mono text-brand-900">Product Name</code>, <code className="font-mono text-brand-900">Category</code>, <code className="font-mono text-brand-900">Supplier</code>, <code className="font-mono text-brand-900">Rack Number</code>, <code className="font-mono text-brand-900">Size</code>, <code className="font-mono text-brand-900">Purchase Price</code>, <code className="font-mono text-brand-900">Selling Price</code>, <code className="font-mono text-brand-900">Box Capacity</code>, and <code className="font-mono text-brand-900">Reorder Level</code>.
+                <code className="font-mono text-brand-900">Product Name</code>, <code className="font-mono text-brand-900">Supplier</code>, <code className="font-mono text-brand-900">Rack Number</code>, <code className="font-mono text-brand-900">Purchase Price</code>, <code className="font-mono text-brand-900">Selling Price</code>, <code className="font-mono text-brand-900">Box Capacity</code>, and <code className="font-mono text-brand-900">Reorder Level</code>.
               </p>
             </div>
           </div>
@@ -571,10 +567,8 @@ export default function ImportProducts() {
                 <tr>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Status</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Product Name</th>
-                  <th className="px-3 py-2.5 font-semibold text-slate-600">Category</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Supplier</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Rack</th>
-                  <th className="px-3 py-2.5 font-semibold text-slate-600">Size</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Stock (Qty)</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Cost (₹)</th>
                   <th className="px-3 py-2.5 font-semibold text-slate-600">Price (₹)</th>
@@ -620,14 +614,6 @@ export default function ImportProducts() {
                     <td className="px-3 py-2">
                       <input
                         type="text"
-                        value={r.category}
-                        onChange={(e) => updateRowField(r.id, 'category', e.target.value)}
-                        className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="text"
                         value={r.supplier}
                         onChange={(e) => updateRowField(r.id, 'supplier', e.target.value)}
                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
@@ -638,14 +624,6 @@ export default function ImportProducts() {
                         type="text"
                         value={r.rackNumber}
                         onChange={(e) => updateRowField(r.id, 'rackNumber', e.target.value)}
-                        className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
-                      />
-                    </td>
-                    <td className="px-3 py-2 w-20">
-                      <input
-                        type="text"
-                        value={r.size}
-                        onChange={(e) => updateRowField(r.id, 'size', e.target.value)}
                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
                       />
                     </td>

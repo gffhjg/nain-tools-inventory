@@ -4,10 +4,25 @@ import { Plus, Search, FileText, Trash2, Edit2, Eye, Truck, Building2, AlertTria
 import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
 import { useStore } from '@/store/AppStore';
-import { money } from '@/utils/analytics';
+import { money, formatRelativeDate } from '@/utils/analytics';
 import type { Supplier, PurchaseRecord } from '@/lib/types';
 
 const empty: Supplier = { id: '', name: '', contactPerson: '', phone: '', gstin: '', email: '', address: '', state: '', stateCode: '', notes: '' };
+
+const SUPPLIER_DRAFT_KEY = 'nain_supplier_form_draft';
+
+interface SupplierDraftData {
+  name: string;
+  contactPerson: string;
+  phone: string;
+  gstin: string;
+  email: string;
+  address: string;
+  state: string;
+  stateCode: string;
+  notes: string;
+  savedAt: number;
+}
 
 export default function Suppliers() {
   const { suppliers, purchases, addSupplier, updateSupplier, deleteSupplier } = useStore();
@@ -20,6 +35,10 @@ export default function Suppliers() {
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [form, setForm] = useState<Supplier>(empty);
   const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null);
+
+  const [hasSupplierDraft, setHasSupplierDraft] = useState(false);
+  const [restoredFromSupplierDraft, setRestoredFromSupplierDraft] = useState(false);
+  const [supplierDraftSavedAt, setSupplierDraftSavedAt] = useState<number | null>(null);
 
   const purchasesBySupplier = useMemo(() => {
     const map = new Map<string, PurchaseRecord[]>();
@@ -68,9 +87,134 @@ export default function Suppliers() {
     return filtered.slice(start, start + pageSize);
   }, [filtered, page, pageSize]);
 
+  const clearSupplierDraft = () => {
+    try {
+      localStorage.removeItem(SUPPLIER_DRAFT_KEY);
+    } catch {}
+    setHasSupplierDraft(false);
+    setRestoredFromSupplierDraft(false);
+    setSupplierDraftSavedAt(null);
+    setForm(empty);
+  };
+
+  const restoreSupplierDraftIfExists = (): boolean => {
+    try {
+      const raw = localStorage.getItem(SUPPLIER_DRAFT_KEY);
+      if (!raw) return false;
+      const draft: SupplierDraftData = JSON.parse(raw);
+      if (!draft) return false;
+
+      const hasContent = Boolean(
+        draft.name?.trim() ||
+        draft.contactPerson?.trim() ||
+        draft.phone?.trim() ||
+        draft.gstin?.trim() ||
+        draft.email?.trim() ||
+        draft.address?.trim()
+      );
+      if (!hasContent) return false;
+
+      setForm({
+        ...empty,
+        name: draft.name || '',
+        contactPerson: draft.contactPerson || '',
+        phone: draft.phone || '',
+        gstin: draft.gstin || '',
+        email: draft.email || '',
+        address: draft.address || '',
+        state: draft.state || '',
+        stateCode: draft.stateCode || '',
+        notes: draft.notes || '',
+      });
+      setRestoredFromSupplierDraft(true);
+      setSupplierDraftSavedAt(draft.savedAt || Date.now());
+      setHasSupplierDraft(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Check for supplier draft on initial mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SUPPLIER_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && (parsed.name?.trim() || parsed.phone?.trim() || parsed.contactPerson?.trim() || parsed.gstin?.trim())) {
+          setHasSupplierDraft(true);
+          setSupplierDraftSavedAt(parsed.savedAt || null);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Auto-save Supplier draft
+  useEffect(() => {
+    if (!formOpen || editing) return;
+    const hasContent = Boolean(
+      form.name.trim() ||
+      form.contactPerson.trim() ||
+      form.phone.trim() ||
+      form.gstin.trim() ||
+      form.email.trim() ||
+      form.address.trim() ||
+      form.notes.trim()
+    );
+
+    if (hasContent) {
+      const draftData: SupplierDraftData = {
+        name: form.name,
+        contactPerson: form.contactPerson,
+        phone: form.phone,
+        gstin: form.gstin,
+        email: form.email,
+        address: form.address,
+        state: form.state,
+        stateCode: form.stateCode,
+        notes: form.notes,
+        savedAt: Date.now(),
+      };
+      try {
+        localStorage.setItem(SUPPLIER_DRAFT_KEY, JSON.stringify(draftData));
+        setHasSupplierDraft(true);
+        setSupplierDraftSavedAt(draftData.savedAt);
+      } catch {}
+    }
+  }, [formOpen, editing, form]);
+
+  // Window beforeunload listener
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (formOpen && !editing && (form.name.trim() || form.phone.trim() || form.contactPerson.trim())) {
+        const draftData: SupplierDraftData = {
+          name: form.name,
+          contactPerson: form.contactPerson,
+          phone: form.phone,
+          gstin: form.gstin,
+          email: form.email,
+          address: form.address,
+          state: form.state,
+          stateCode: form.stateCode,
+          notes: form.notes,
+          savedAt: Date.now(),
+        };
+        try {
+          localStorage.setItem(SUPPLIER_DRAFT_KEY, JSON.stringify(draftData));
+        } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [formOpen, editing, form]);
+
   const openAdd = () => {
     setEditing(null);
-    setForm(empty);
+    const restored = restoreSupplierDraftIfExists();
+    if (!restored) {
+      setForm(empty);
+      setRestoredFromSupplierDraft(false);
+    }
     setFormOpen(true);
   };
 
@@ -86,6 +230,12 @@ export default function Suppliers() {
       updateSupplier(editing.id, { ...form });
     } else {
       addSupplier({ ...form, id: `s${Date.now()}` });
+      try {
+        localStorage.removeItem(SUPPLIER_DRAFT_KEY);
+      } catch {}
+      setHasSupplierDraft(false);
+      setRestoredFromSupplierDraft(false);
+      setSupplierDraftSavedAt(null);
     }
     setFormOpen(false);
     setEditing(null);
@@ -103,9 +253,20 @@ export default function Suppliers() {
         title="Suppliers"
         subtitle="Manage supplier accounts, track outstanding payments, and view purchase history."
         actions={
-          <button className="btn-primary" onClick={openAdd}>
+          <button
+            className={`btn-primary flex items-center gap-1.5 shadow-sm ${
+              hasSupplierDraft ? 'ring-2 ring-amber-400/80 bg-gradient-to-r from-amber-600 to-brand-600' : ''
+            }`}
+            onClick={openAdd}
+          >
             <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">Add Supplier</span>
+            <span className="hidden sm:inline">{hasSupplierDraft ? 'Resume Supplier (Draft)' : 'Add Supplier'}</span>
+            <span className="sm:hidden">{hasSupplierDraft ? 'Draft' : 'Add'}</span>
+            {hasSupplierDraft && (
+              <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 animate-pulse">
+                DRAFT
+              </span>
+            )}
           </button>
         }
       />
@@ -286,15 +447,43 @@ export default function Suppliers() {
         title={editing ? 'Edit Supplier' : 'Add New Supplier'}
         size="md"
         footer={
-          <>
-            <button className="btn-secondary" onClick={() => setFormOpen(false)}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} disabled={!form.name.trim()}>
-              {editing ? 'Save Changes' : 'Add Supplier'}
-            </button>
-          </>
+          <div className="flex items-center justify-between w-full">
+            {hasSupplierDraft && !editing ? (
+              <button
+                type="button"
+                onClick={clearSupplierDraft}
+                className="btn-secondary text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+              >
+                Discard Draft
+              </button>
+            ) : <div />}
+            <div className="flex gap-2">
+              <button className="btn-secondary" onClick={() => setFormOpen(false)}>Cancel</button>
+              <button className="btn-primary" onClick={handleSubmit} disabled={!form.name.trim()}>
+                {editing ? 'Save Changes' : 'Add Supplier'}
+              </button>
+            </div>
+          </div>
         }
       >
         <div className="space-y-4">
+          {restoredFromSupplierDraft && !editing && (
+            <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+                <span className="font-semibold">
+                  Restored unsaved supplier draft {supplierDraftSavedAt ? `from ${formatRelativeDate(new Date(supplierDraftSavedAt).toISOString())}` : ''}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={clearSupplierDraft}
+                className="px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-200/70 hover:bg-amber-200 rounded-lg border border-amber-300 transition"
+              >
+                Discard Draft &amp; Start Fresh
+              </button>
+            </div>
+          )}
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-700">Company Name</label>
             <input

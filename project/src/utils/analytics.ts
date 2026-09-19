@@ -296,12 +296,75 @@ ${bodyHTML}
   win.document.close();
 }
 
-export function nextInvoice(existing: { invoice: string }[]): string {
-  const nums = existing
-    .map((s) => parseInt(s.invoice.replace('INV-', ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 2040;
-  return `INV-${max + 1}`;
+/**
+ * Takes an invoice string (e.g. "INV-2046", "00744", "NT/24-25/012", "105", "INV-0099")
+ * and returns the next invoice number with the same prefix and padding incremented by 1.
+ */
+export function incrementInvoiceNumber(inv: string): string {
+  if (!inv || !inv.trim()) {
+    return 'INV-2041';
+  }
+  const trimmed = inv.trim();
+
+  // Match: (prefix)(trailing digits)
+  const match = trimmed.match(/^(.*?)(\d+)$/);
+  if (!match) {
+    return `${trimmed}-1`;
+  }
+
+  const [, prefix, numStr] = match;
+  const num = parseInt(numStr, 10);
+  const nextNum = num + 1;
+
+  // Preserve leading zero padding if the original had leading zeros (e.g. "00744" has length 5 -> "00745")
+  const padded = String(nextNum).padStart(numStr.length, '0');
+  return `${prefix}${padded}`;
 }
+
+export function nextInvoice(existing: { invoice: string; documentType?: string }[], docType: string = 'TAX INVOICE'): string {
+  const existingInvoices = new Set(existing.map((s) => s.invoice.trim().toLowerCase()));
+
+  // 1. Check if user recently entered a custom invoice number in localStorage
+  try {
+    const lastEntered = localStorage.getItem('nain_last_entered_invoice_no');
+    if (lastEntered && lastEntered.trim()) {
+      let candidate = incrementInvoiceNumber(lastEntered.trim());
+      let attempts = 0;
+      while (existingInvoices.has(candidate.toLowerCase()) && attempts < 1000) {
+        candidate = incrementInvoiceNumber(candidate);
+        attempts++;
+      }
+      return candidate;
+    }
+  } catch {
+    // ignore localStorage errors
+  }
+
+  // 2. Find the latest invoice from matching document type or general invoices
+  const relevant = existing.filter((s) => !s.documentType || s.documentType === docType || s.documentType === 'TAX INVOICE');
+  if (relevant.length > 0 && relevant[0]?.invoice) {
+    let candidate = incrementInvoiceNumber(relevant[0].invoice);
+    let attempts = 0;
+    while (existingInvoices.has(candidate.toLowerCase()) && attempts < 1000) {
+      candidate = incrementInvoiceNumber(candidate);
+      attempts++;
+    }
+    return candidate;
+  }
+
+  // 3. Check any existing invoice
+  if (existing.length > 0 && existing[0]?.invoice) {
+    let candidate = incrementInvoiceNumber(existing[0].invoice);
+    let attempts = 0;
+    while (existingInvoices.has(candidate.toLowerCase()) && attempts < 1000) {
+      candidate = incrementInvoiceNumber(candidate);
+      attempts++;
+    }
+    return candidate;
+  }
+
+  return 'INV-2041';
+}
+
 
 

@@ -172,53 +172,31 @@ export function smartFilterItems<T>(
   query: string,
   extractFields: (item: T) => (string | undefined | null)[],
   options?: {
+    maxResults?: number;
     activeCategory?: string;
     getCategory?: (item: T) => string | undefined | null;
-    maxResults?: number;
   }
 ): T[] {
   const q = (query || '').trim();
   const maxResults = options?.maxResults ?? 100;
 
-  // If no search query, simply apply category filter if present
   if (!q) {
-    if (options?.activeCategory && options.activeCategory !== 'All' && options.getCategory) {
-      const cat = options.activeCategory.toLowerCase();
-      return items.filter((it) => (options.getCategory!(it) || '').toLowerCase() === cat).slice(0, maxResults);
-    }
     return items.slice(0, maxResults);
   }
 
-  // When search query is present:
-  // Step 1: Score all items
-  const scoredItems: { item: T; score: number; inCategory: boolean }[] = [];
-  const activeCat = options?.activeCategory && options.activeCategory !== 'All' ? options.activeCategory.toLowerCase() : null;
+  const scoredItems: { item: T; score: number }[] = [];
 
   for (const item of items) {
     const fields = extractFields(item);
     const result = smartSearchMatch(fields, q);
     if (result.matched) {
-      const itemCat = options?.getCategory ? (options.getCategory(item) || '').toLowerCase() : null;
-      const inCategory = !activeCat || itemCat === activeCat;
       scoredItems.push({
         item,
-        score: result.score + (inCategory && activeCat ? 25 : 0),
-        inCategory,
+        score: result.score,
       });
     }
   }
 
-  // Sort by score descending
   scoredItems.sort((a, b) => b.score - a.score);
-
-  // If category filter is active and we have results in category, return those first
-  if (activeCat) {
-    const inCatResults = scoredItems.filter((s) => s.inCategory);
-    if (inCatResults.length > 0) {
-      return inCatResults.map((s) => s.item).slice(0, maxResults);
-    }
-    // If 0 results in category, DO NOT HIDE! Show cross-category results!
-  }
-
   return scoredItems.map((s) => s.item).slice(0, maxResults);
 }

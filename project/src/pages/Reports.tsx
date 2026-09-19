@@ -1222,7 +1222,7 @@ function LowStockReport({ products }: { products: Product[] }) {
               </div>
               <div>
                 <p className="font-semibold text-slate-800">{p.name}</p>
-                <p className="text-xs text-slate-500">{p.category} · {p.supplier}</p>
+                <p className="text-xs text-slate-500">{p.supplier}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">

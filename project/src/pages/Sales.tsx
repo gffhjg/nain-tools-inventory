@@ -11,6 +11,7 @@ import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import { printInvoice } from '@/components/PrintableInvoice';
+import { ActiveItemSpotlight } from '@/components/ActiveItemSpotlight';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeGrandTotal, computeDiscountAmount, validateGstin } from '@/lib/constants';
 import {
@@ -22,6 +23,7 @@ import {
   getDateRangeLabel,
   formatRelativeDate,
   getDaysAgo,
+  incrementInvoiceNumber,
   type DateRange,
 } from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
@@ -51,48 +53,64 @@ function addMonthsToDate(dateStr: string, months: number): string {
   }
 }
 
+function getNextInvoiceByDocType(existing: SaleRecord[], docType: string): string {
+  const existingInvoices = new Set(existing.map((s) => s.invoice.trim().toLowerCase()));
+
+  // 1. Check localStorage for the last entered invoice number of this doc type (or general)
+  try {
+    const storageKey = docType === 'TAX INVOICE'
+      ? 'nain_last_entered_invoice_no'
+      : `nain_last_entered_${docType.replace(/\s+/g, '_').toLowerCase()}_no`;
+    const lastEntered = localStorage.getItem(storageKey);
+    if (lastEntered && lastEntered.trim()) {
+      let candidate = incrementInvoiceNumber(lastEntered.trim());
+      let attempts = 0;
+      while (existingInvoices.has(candidate.toLowerCase()) && attempts < 1000) {
+        candidate = incrementInvoiceNumber(candidate);
+        attempts++;
+      }
+      return candidate;
+    }
+  } catch {}
+
+  // 2. Filter existing sales matching the docType
+  const matching = existing.filter((s) => (s.documentType || 'TAX INVOICE') === docType);
+  if (matching.length > 0 && matching[0]?.invoice) {
+    let candidate = incrementInvoiceNumber(matching[0].invoice);
+    let attempts = 0;
+    while (existingInvoices.has(candidate.toLowerCase()) && attempts < 1000) {
+      candidate = incrementInvoiceNumber(candidate);
+      attempts++;
+    }
+    return candidate;
+  }
+
+  // 3. Fallbacks by document type
+  if (docType === 'DEBIT NOTE') return 'DN-1001';
+  if (docType === 'PROFORMA INVOICE') return 'PI-1001';
+  if (docType === 'PURCHASE ORDER') return 'PO-3101';
+  if (docType === 'RAW INVOICE') return 'RAW-1001';
+  return 'INV-2041';
+}
+
 function nextInvoice(existing: SaleRecord[]): string {
-  const nums = existing
-    .map((s) => parseInt(s.invoice.replace('INV-', ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 2040;
-  return `INV-${max + 1}`;
+  return getNextInvoiceByDocType(existing, 'TAX INVOICE');
 }
 
 function nextDebitNote(existing: SaleRecord[]): string {
-  const nums = existing
-    .filter((s) => s.documentType === 'DEBIT NOTE' || s.invoice.startsWith('DN-'))
-    .map((s) => parseInt(s.invoice.replace(/^DN-/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 1000;
-  return `DN-${max + 1}`;
+  return getNextInvoiceByDocType(existing, 'DEBIT NOTE');
 }
 
 function nextProformaInvoice(existing: SaleRecord[]): string {
-  const nums = existing
-    .filter((s) => s.documentType === 'PROFORMA INVOICE' || s.invoice.startsWith('PI-'))
-    .map((s) => parseInt(s.invoice.replace(/^PI-/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 3100;
-  return `PI-${max + 1}`;
+  return getNextInvoiceByDocType(existing, 'PROFORMA INVOICE');
 }
 
 function nextCompanyPO(existing: SaleRecord[]): string {
-  const nums = existing
-    .filter((s) => s.documentType === 'PURCHASE ORDER' || s.invoice.startsWith('PO-'))
-    .map((s) => parseInt(s.invoice.replace(/^PO-/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 3100;
-  return `PO-${max + 1}`;
+  return getNextInvoiceByDocType(existing, 'PURCHASE ORDER');
 }
 
 function nextRawInvoiceNumber(existing: SaleRecord[]): string {
-  const nums = existing
-    .filter((s) => s.documentType === 'RAW INVOICE' || s.invoice.startsWith('RAW-') || s.invoice.startsWith('CASH-'))
-    .map((s) => parseInt(s.invoice.replace(/^(RAW-|CASH-)/, ''), 10))
-    .filter((n) => !isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 1000;
-  return `RAW-${max + 1}`;
+  return getNextInvoiceByDocType(existing, 'RAW INVOICE');
 }
 
 const SALES_TIMELINE_STEPS: { id: DateRange; label: string; shortLabel: string }[] = [
@@ -106,6 +124,50 @@ const SALES_TIMELINE_STEPS: { id: DateRange; label: string; shortLabel: string }
 ];
 
 type DraftLine = InvoiceLineItem;
+
+const DRAFT_STORAGE_KEY = 'nain_sales_invoice_draft';
+
+interface InvoiceDraftData {
+  customer: string;
+  selectedCustomerId: string;
+  phone: string;
+  address: string;
+  customerGstin: string;
+  customInvoiceNumber: string;
+  date: string;
+  lines: DraftLine[];
+  discount: number;
+  discountType: DiscountType;
+  paymentStatusType: 'paid' | 'pay-later' | 'partial';
+  partialPaidAmount: string;
+  paymentMethod: PaymentMethod;
+  paymentTerms: string;
+  dueDate: string;
+  saleNotes: string;
+  poNumber: string;
+  poDate: string;
+  transportMode: string;
+  vehicleNumber: string;
+  ewayBill: string;
+  vendorCode: string;
+  bankName: string;
+  bankAccount: string;
+  bankIfsc: string;
+  sellerGstin: string;
+  sellerPan: string;
+  applyGst: boolean;
+  gstRate: number;
+  gstTaxType: 'local' | 'central';
+  freightCharges: string;
+  documentType: NonNullable<SaleRecord['documentType']>;
+  chequeNo: string;
+  chequeBank: string;
+  chequeDate: string;
+  chequeStatus: ChequeStatus;
+  piExpirationDate: string;
+  expectedDeliveryDate?: string;
+  savedAt: number;
+}
 
 export default function Sales() {
   const {
@@ -179,6 +241,26 @@ export default function Sales() {
   const [rawInvoiceNote, setRawInvoiceNote] = useState('');
   const [rawInvoicePaymentMethod, setRawInvoicePaymentMethod] = useState<'Cash' | 'UPI'>('Cash');
   const [rawInvoiceLines, setRawInvoiceLines] = useState<DraftLine[]>([]);
+  const [activeRawLineProductId, setActiveRawLineProductId] = useState<string | null>(null);
+  const [justAddedRawLineId, setJustAddedRawLineId] = useState<string | null>(null);
+
+  const activeRawLineItem = useMemo(() => {
+    if (activeRawLineProductId) {
+      const found = rawInvoiceLines.find((l) => l.productId === activeRawLineProductId);
+      if (found) return found;
+    }
+    return rawInvoiceLines.length > 0 ? rawInvoiceLines[0] : null;
+  }, [rawInvoiceLines, activeRawLineProductId]);
+
+  const activeRawProduct = useMemo(() => {
+    if (!activeRawLineItem) return null;
+    return products.find((p) => p.id === activeRawLineItem.productId) || null;
+  }, [activeRawLineItem, products]);
+
+  const activeRawLineIndex = useMemo(() => {
+    if (!activeRawLineItem) return -1;
+    return rawInvoiceLines.findIndex((l) => l.productId === activeRawLineItem.productId);
+  }, [rawInvoiceLines, activeRawLineItem]);
   const [rawProductSearch, setRawProductSearch] = useState('');
   const [rawCategory, setRawCategory] = useState('All');
   const [viewingRawSale, setViewingRawSale] = useState<SaleRecord | null>(null);
@@ -212,6 +294,26 @@ export default function Sales() {
   }, [customers, customer]);
   const [piExpirationDate, setPiExpirationDate] = useState(addMonthsToDate(todayISO(), 1));
   const [lines, setLines] = useState<DraftLine[]>([]);
+  const [activeLineProductId, setActiveLineProductId] = useState<string | null>(null);
+  const [justAddedLineId, setJustAddedLineId] = useState<string | null>(null);
+
+  const activeLineItem = useMemo(() => {
+    if (activeLineProductId) {
+      const found = lines.find((l) => l.productId === activeLineProductId);
+      if (found) return found;
+    }
+    return lines.length > 0 ? lines[0] : null;
+  }, [lines, activeLineProductId]);
+
+  const activeProduct = useMemo(() => {
+    if (!activeLineItem) return null;
+    return products.find((p) => p.id === activeLineItem.productId) || null;
+  }, [activeLineItem, products]);
+
+  const activeLineIndex = useMemo(() => {
+    if (!activeLineItem) return -1;
+    return lines.findIndex((l) => l.productId === activeLineItem.productId);
+  }, [lines, activeLineItem]);
   const [discount, setDiscount] = useState(0);
   const [discountType, setDiscountType] = useState<DiscountType>('amount');
 
@@ -285,10 +387,8 @@ export default function Sales() {
   const [quickEditProductModalOpen, setQuickEditProductModalOpen] = useState(false);
   const [quickEditFormData, setQuickEditFormData] = useState({
     name: '',
-    category: 'Bolts',
     supplier: '',
     rackNumber: '',
-    size: '',
     cost: 0,
     price: 0,
     stock: 0,
@@ -311,6 +411,10 @@ export default function Sales() {
 
   const [convertTargetSale, setConvertTargetSale] = useState<SaleRecord | null>(null);
   const [convertInvoiceNumber, setConvertInvoiceNumber] = useState('');
+
+  const [hasDraft, setHasDraft] = useState(false);
+  const [restoredFromDraft, setRestoredFromDraft] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
 
   const autoInvoiceNumber = useMemo(() => nextInvoice(sales), [sales]);
   const [customInvoiceNumber, setCustomInvoiceNumber] = useState('');
@@ -631,14 +735,12 @@ export default function Sales() {
     return smartFilterItems(
       products,
       rawProductSearch,
-      (p) => [p.name, p.size, p.rackNumber, p.category, p.hsnCode],
+      (p) => [p.name, p.rackNumber, p.hsnCode],
       {
-        activeCategory: rawCategory,
-        getCategory: (p) => p.category,
         maxResults: 60,
       }
     );
-  }, [products, rawProductSearch, rawCategory]);
+  }, [products, rawProductSearch]);
 
   const [freightCharges, setFreightCharges] = useState('0');
   const freightVal = parseFloat(freightCharges) || 0;
@@ -681,14 +783,12 @@ export default function Sales() {
     return smartFilterItems(
       products,
       productSearch,
-      (p) => [p.name, p.size, p.rackNumber, p.category, p.hsnCode, p.supplier],
+      (p) => [p.name, p.rackNumber, p.hsnCode, p.supplier],
       {
-        activeCategory: salesCategory,
-        getCategory: (p) => p.category,
         maxResults: 100,
       }
     );
-  }, [products, productSearch, salesCategory]);
+  }, [products, productSearch]);
 
   const [customerGstin, setCustomerGstin] = useState('');
 
@@ -740,6 +840,8 @@ export default function Sales() {
     setDate(todayISO());
     setPiExpirationDate(addMonthsToDate(todayISO(), 1));
     setLines([]);
+    setActiveLineProductId(null);
+    setJustAddedLineId(null);
     setDiscount(0);
     setDiscountType('amount');
     setPaymentStatusType('paid');
@@ -771,10 +873,212 @@ export default function Sales() {
     setEditingSaleId(null);
   };
 
-  const openNewSale = () => {
+  const clearDraft = () => {
+    try {
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {}
+    setHasDraft(false);
+    setRestoredFromDraft(false);
+    setDraftSavedAt(null);
     resetForm();
-    setDocumentType('TAX INVOICE');
     setCustomInvoiceNumber(nextInvoice(sales));
+  };
+
+  const restoreDraftIfExists = (): boolean => {
+    try {
+      const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (!raw) return false;
+      const draft: InvoiceDraftData = JSON.parse(raw);
+      if (!draft) return false;
+
+      const hasContent = Boolean(
+        (draft.customer && draft.customer.trim()) ||
+        (Array.isArray(draft.lines) && draft.lines.length > 0) ||
+        (draft.phone && draft.phone.trim()) ||
+        (draft.address && draft.address.trim()) ||
+        (draft.poNumber && draft.poNumber.trim()) ||
+        (draft.saleNotes && draft.saleNotes.trim())
+      );
+      if (!hasContent) return false;
+
+      setSelectedCustomerId(draft.selectedCustomerId || '');
+      setCustomer(draft.customer || '');
+      setPhone(draft.phone || '');
+      setAddress(draft.address || '');
+      setCustomerGstin(draft.customerGstin || '');
+      setCustomInvoiceNumber(draft.customInvoiceNumber || nextInvoice(sales));
+      setPoNumber(draft.poNumber || '');
+      setPoDate(draft.poDate || '');
+      setTransportMode(draft.transportMode || '');
+      setVehicleNumber(draft.vehicleNumber || '');
+      setEwayBill(draft.ewayBill || '');
+      setVendorCode(draft.vendorCode || '');
+      setBankName(draft.bankName || companySettings?.bankName || 'HDFC BANK');
+      setBankAccount(draft.bankAccount || companySettings?.bankAccount || '50200088182531');
+      setBankIfsc(draft.bankIfsc || companySettings?.bankIfsc || 'HDFC0002034');
+      setSellerGstin(draft.sellerGstin || companySettings?.gstin || '06CCCPK0841B1ZA');
+      setSellerPan(draft.sellerPan || companySettings?.pan || 'CCCPK0841B');
+      setDocumentType(draft.documentType || 'TAX INVOICE');
+      setPreviewCopyTag('Original For Recipient');
+      setDate(draft.date || todayISO());
+      setPiExpirationDate(draft.piExpirationDate || addMonthsToDate(todayISO(), 1));
+      setLines(Array.isArray(draft.lines) ? draft.lines : []);
+      setDiscount(typeof draft.discount === 'number' ? draft.discount : 0);
+      setDiscountType(draft.discountType || 'amount');
+      setPaymentStatusType(draft.paymentStatusType || 'paid');
+      setPartialPaidAmount(draft.partialPaidAmount || '');
+      setPaymentMethod(draft.paymentMethod || 'Cash');
+      setPaymentTerms(draft.paymentTerms || 'Immediate');
+      setDueDate(draft.dueDate || '');
+      setSaleNotes(draft.saleNotes || '');
+      setChequeNo(draft.chequeNo || '');
+      setChequeBank(draft.chequeBank || '');
+      setChequeDate(draft.chequeDate || todayISO());
+      setChequeStatus(draft.chequeStatus || 'pending_clearance');
+      setApplyGst(draft.applyGst !== false);
+      setGstRate(typeof draft.gstRate === 'number' ? draft.gstRate : 18);
+      setGstTaxType(draft.gstTaxType || 'local');
+      setFreightCharges(draft.freightCharges || '0');
+      setExpectedDeliveryDate(draft.expectedDeliveryDate || '');
+      setEditingSaleId(null);
+      setRestoredFromDraft(true);
+      setDraftSavedAt(draft.savedAt || Date.now());
+      setHasDraft(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Check for existing draft on initial mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (
+          parsed &&
+          (Boolean(parsed.customer?.trim()) || (Array.isArray(parsed.lines) && parsed.lines.length > 0) || Boolean(parsed.phone?.trim()))
+        ) {
+          setHasDraft(true);
+          setDraftSavedAt(parsed.savedAt || null);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Auto-save draft whenever inputs change while modal is open (new invoice only)
+  useEffect(() => {
+    if (!modalOpen || editingSaleId) return;
+
+    const hasContent = Boolean(
+      customer.trim() ||
+      lines.length > 0 ||
+      phone.trim() ||
+      address.trim() ||
+      customerGstin.trim() ||
+      poNumber.trim() ||
+      saleNotes.trim()
+    );
+
+    if (hasContent) {
+      const draftData: InvoiceDraftData = {
+        customer,
+        selectedCustomerId,
+        phone,
+        address,
+        customerGstin,
+        customInvoiceNumber,
+        date,
+        lines,
+        discount,
+        discountType,
+        paymentStatusType,
+        partialPaidAmount,
+        paymentMethod,
+        paymentTerms,
+        dueDate,
+        saleNotes,
+        poNumber,
+        poDate,
+        transportMode,
+        vehicleNumber,
+        ewayBill,
+        vendorCode,
+        bankName,
+        bankAccount,
+        bankIfsc,
+        sellerGstin,
+        sellerPan,
+        applyGst,
+        gstRate,
+        gstTaxType,
+        freightCharges,
+        documentType,
+        chequeNo,
+        chequeBank,
+        chequeDate,
+        chequeStatus,
+        piExpirationDate,
+        expectedDeliveryDate,
+        savedAt: Date.now(),
+      };
+      try {
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draftData));
+        setHasDraft(true);
+        setDraftSavedAt(draftData.savedAt);
+      } catch {}
+    }
+  }, [
+    modalOpen, editingSaleId, customer, selectedCustomerId, phone, address, customerGstin,
+    customInvoiceNumber, date, lines, discount, discountType,
+    paymentStatusType, partialPaidAmount, paymentMethod, paymentTerms, dueDate,
+    saleNotes, poNumber, poDate, transportMode, vehicleNumber, ewayBill, vendorCode,
+    bankName, bankAccount, bankIfsc, sellerGstin, sellerPan, applyGst, gstRate,
+    gstTaxType, freightCharges, documentType, chequeNo, chequeBank, chequeDate,
+    chequeStatus, piExpirationDate, expectedDeliveryDate
+  ]);
+
+  // Window beforeunload fallback to ensure current values are stored
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!modalOpen || editingSaleId) return;
+      if (customer.trim() || lines.length > 0 || phone.trim() || address.trim()) {
+        const draftData: InvoiceDraftData = {
+          customer, selectedCustomerId, phone, address, customerGstin,
+          customInvoiceNumber, date, lines, discount, discountType,
+          paymentStatusType, partialPaidAmount, paymentMethod, paymentTerms, dueDate,
+          saleNotes, poNumber, poDate, transportMode, vehicleNumber, ewayBill, vendorCode,
+          bankName, bankAccount, bankIfsc, sellerGstin, sellerPan, applyGst, gstRate,
+          gstTaxType, freightCharges, documentType, chequeNo, chequeBank, chequeDate,
+          chequeStatus, piExpirationDate, expectedDeliveryDate,
+          savedAt: Date.now(),
+        };
+        try {
+          localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draftData));
+        } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [
+    modalOpen, editingSaleId, customer, selectedCustomerId, phone, address, customerGstin,
+    customInvoiceNumber, date, lines, discount, discountType,
+    paymentStatusType, partialPaidAmount, paymentMethod, paymentTerms, dueDate,
+    saleNotes, poNumber, poDate, transportMode, vehicleNumber, ewayBill, vendorCode,
+    bankName, bankAccount, bankIfsc, sellerGstin, sellerPan, applyGst, gstRate,
+    gstTaxType, freightCharges, documentType, chequeNo, chequeBank, chequeDate,
+    chequeStatus, piExpirationDate, expectedDeliveryDate
+  ]);
+
+  const openNewSale = () => {
+    const restored = restoreDraftIfExists();
+    if (!restored) {
+      resetForm();
+      setDocumentType('TAX INVOICE');
+      setCustomInvoiceNumber(nextInvoice(sales));
+      setRestoredFromDraft(false);
+    }
     setModalOpen(true);
   };
 
@@ -802,6 +1106,8 @@ export default function Sales() {
     setRawInvoiceNote('');
     setRawInvoicePaymentMethod('Cash');
     setRawInvoiceLines([]);
+    setActiveRawLineProductId(null);
+    setJustAddedRawLineId(null);
     setRawProductSearch('');
     setRawCategory('All');
     setIsAddingRawProduct(false);
@@ -816,15 +1122,15 @@ export default function Sales() {
   };
 
   const addRawProductToInvoice = (p: Product) => {
+    setActiveRawLineProductId(p.id);
+    setJustAddedRawLineId(p.id);
     setRawInvoiceLines((prev) => {
-      const idx = prev.findIndex((l) => l.productId === p.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
-        return next;
+      const existing = prev.find((l) => l.productId === p.id);
+      if (existing) {
+        const updated = { ...existing, qty: existing.qty + 1 };
+        return [updated, ...prev.filter((l) => l.productId !== p.id)];
       }
       return [
-        ...prev,
         {
           productId: p.id,
           name: p.name,
@@ -833,6 +1139,39 @@ export default function Sales() {
           qty: 1,
           hsnCode: p.hsnCode || '7318150',
         },
+        ...prev,
+      ];
+    });
+  };
+
+  const addFastRawLine = (item: {
+    productId: string;
+    name: string;
+    price: number;
+    cost?: number;
+    qty: number;
+    hsnCode?: string;
+    isCustom?: boolean;
+  }) => {
+    setActiveRawLineProductId(item.productId);
+    setJustAddedRawLineId(item.productId);
+    setRawInvoiceLines((prev) => {
+      const existing = prev.find((l) => l.productId === item.productId);
+      if (existing) {
+        const updated = { ...existing, qty: existing.qty + item.qty, price: item.price };
+        return [updated, ...prev.filter((l) => l.productId !== item.productId)];
+      }
+      return [
+        {
+          productId: item.productId,
+          name: item.name,
+          price: item.price,
+          cost: item.cost || 0,
+          qty: item.qty,
+          hsnCode: item.hsnCode || '7318150',
+          isCustom: item.isCustom,
+        },
+        ...prev,
       ];
     });
   };
@@ -850,6 +1189,18 @@ export default function Sales() {
   const updateRawLinePrice = (productId: string, price: number) => {
     setRawInvoiceLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, price: Math.max(0, price) } : l))
+    );
+  };
+
+  const updateRawLineName = (productId: string, name: string) => {
+    setRawInvoiceLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, name } : l))
+    );
+  };
+
+  const updateRawLineHsn = (productId: string, hsnCode: string) => {
+    setRawInvoiceLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, hsnCode } : l))
     );
   };
 
@@ -872,10 +1223,8 @@ export default function Sales() {
       // (When this Raw Invoice is saved, it will deduct sellQty from stock)
       const created = await addProduct({
         name: rawNewProdName.trim(),
-        category: rawNewProdCategory,
         supplier: 'Raw Sale Entry',
         rackNumber: rawNewProdRack.trim() || 'General',
-        size: rawNewProdSize.trim() || 'Standard',
         cost: costVal,
         price: priceVal,
         boxCapacity: 1000,
@@ -885,9 +1234,10 @@ export default function Sales() {
         hsnCode: '7318150',
       });
 
-      // 2. Add line item directly to rawInvoiceLines
+      // 2. Add line item directly to rawInvoiceLines at top
+      setActiveRawLineProductId(created.id);
+      setJustAddedRawLineId(created.id);
       setRawInvoiceLines((prev) => [
-        ...prev,
         {
           productId: created.id,
           name: created.name,
@@ -896,6 +1246,7 @@ export default function Sales() {
           qty: sellQty,
           hsnCode: created.hsnCode || '7318150',
         },
+        ...prev,
       ]);
 
       // 3. Reset form
@@ -1059,17 +1410,34 @@ export default function Sales() {
     setModalOpen(true);
   };
 
-  const addLine = (productId: string) => {
+  const addLine = (productId: string, initialQty?: number, initialRate?: number, initialDisc?: number) => {
     const product = products.find((p) => p.id === productId);
     if (!product) return;
+    setActiveLineProductId(productId);
+    setJustAddedLineId(productId);
     setLines((prev) => {
       const existing = prev.find((l) => l.productId === productId);
       if (existing) {
-        return prev.map((l) => (l.productId === productId ? { ...l, qty: l.qty + 1 } : l));
+        const updated = {
+          ...existing,
+          qty: existing.qty + (initialQty || 1),
+          price: initialRate !== undefined ? initialRate : existing.price,
+          discount: initialDisc !== undefined ? initialDisc : existing.discount,
+        };
+        return [updated, ...prev.filter((l) => l.productId !== productId)];
       }
       return [
+        {
+          productId: product.id,
+          name: product.name,
+          price: initialRate !== undefined ? initialRate : product.price,
+          cost: product.cost,
+          qty: initialQty || 1,
+          discount: initialDisc || 0,
+          isCustom: false,
+          hsnCode: product.hsnCode || '7318150',
+        },
         ...prev,
-        { productId: product.id, name: product.name, price: product.price, cost: product.cost, qty: 1, isCustom: false, hsnCode: product.hsnCode || '7318150' },
       ];
     });
   };
@@ -1082,20 +1450,22 @@ export default function Sales() {
     const discVal = parseFloat(customDiscount) || 0;
     const customId = `custom_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
-    setLines((prev) => [
-      ...prev,
-      {
-        productId: customId,
-        name: customName.trim(),
-        price: priceVal,
-        cost: costVal,
-        qty: qtyVal,
-        isCustom: true,
-        hsnCode: customHsn.trim() || '7318150',
-        discount: discVal,
-        discountType: 'percent',
-      },
-    ]);
+    const newCustomLine: DraftLine = {
+      productId: customId,
+      name: customName.trim(),
+      price: priceVal,
+      cost: costVal,
+      qty: qtyVal,
+      isCustom: true,
+      hsnCode: customHsn.trim() || '7318150',
+      discount: discVal,
+      discountType: 'percent',
+    };
+
+    setActiveLineProductId(customId);
+    setJustAddedLineId(customId);
+    setLines((prev) => [newCustomLine, ...prev]);
+
     setCustomName('');
     setCustomPrice('');
     setCustomCost('');
@@ -1118,10 +1488,10 @@ export default function Sales() {
     try {
       const created = await addProduct({
         name: salesNewProdName.trim(),
-        category: salesNewProdCategory,
+        category: 'General',
+        size: 'Standard',
         supplier: 'Main Catalog',
         rackNumber: salesNewProdRack.trim() || 'General',
-        size: salesNewProdSize.trim() || 'Standard',
         cost: costVal,
         price: priceVal,
         boxCapacity: 1000,
@@ -1131,18 +1501,19 @@ export default function Sales() {
         hsnCode: '7318150',
       });
 
-      setLines((prev) => [
-        ...prev,
-        {
-          productId: created.id,
-          name: created.name,
-          price: priceVal,
-          cost: costVal,
-          qty: qtyVal,
-          isCustom: false,
-          hsnCode: created.hsnCode || '7318150',
-        },
-      ]);
+      const newCatalogLine: DraftLine = {
+        productId: created.id,
+        name: created.name,
+        price: priceVal,
+        cost: costVal,
+        qty: qtyVal,
+        isCustom: false,
+        hsnCode: created.hsnCode || '7318150',
+      };
+
+      setActiveLineProductId(created.id);
+      setJustAddedLineId(created.id);
+      setLines((prev) => [newCatalogLine, ...prev]);
 
       setSalesNewProdName('');
       setSalesNewProdRack('');
@@ -1164,14 +1535,20 @@ export default function Sales() {
     );
   };
 
+  const updateLineHsn = (productId: string, newHsn: string) => {
+    setLines((prev) =>
+      prev.map((l) => (l.productId === productId ? { ...l, hsnCode: newHsn } : l))
+    );
+  };
+
   const updateQty = (productId: string, delta: number) => {
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, qty: Math.max(0, l.qty + delta) } : l))
     );
   };
 
-  const setQty = (productId: string, raw: string) => {
-    const qty = parseInt(raw, 10);
+  const setQty = (productId: string, raw: string | number) => {
+    const qty = typeof raw === 'number' ? raw : parseInt(raw, 10);
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, qty: isNaN(qty) ? 0 : Math.max(0, qty) } : l))
     );
@@ -1189,9 +1566,8 @@ export default function Sales() {
     );
   };
 
-  const setLineDiscount = (productId: string, rawDisc: string) => {
-    const cleaned = rawDisc.replace(/^0+(?=\d)/, '');
-    const disc = parseFloat(cleaned);
+  const setLineDiscount = (productId: string, rawDisc: string | number) => {
+    const disc = typeof rawDisc === 'number' ? rawDisc : parseFloat(String(rawDisc).replace(/^0+(?=\d)/, ''));
     setLines((prev) =>
       prev.map((l) => (l.productId === productId ? { ...l, discount: isNaN(disc) ? 0 : Math.max(0, disc) } : l))
     );
@@ -1231,10 +1607,8 @@ export default function Sales() {
       setQuickEditProduct(prod);
       setQuickEditFormData({
         name: prod.name,
-        category: prod.category || 'Bolts',
         supplier: prod.supplier || '',
         rackNumber: prod.rackNumber || '',
-        size: prod.size || '',
         cost: prod.cost || 0,
         price: prod.price || 0,
         stock: prod.stock || 0,
@@ -1252,15 +1626,15 @@ export default function Sales() {
     try {
       await updateProduct(quickEditProduct.id, {
         name: quickEditFormData.name.trim(),
-        category: quickEditFormData.category.trim() || 'Bolts',
-        supplier: quickEditFormData.supplier.trim(),
+        category: quickEditProduct.category || 'General',
+        size: quickEditProduct.size || 'Standard',
+        supplier: quickEditFormData.supplier?.trim() || quickEditProduct.supplier || 'Unassigned',
         rackNumber: quickEditFormData.rackNumber.trim(),
-        size: quickEditFormData.size.trim(),
         cost: quickEditFormData.cost,
         price: quickEditFormData.price,
         stock: quickEditFormData.stock,
-        boxCapacity: quickEditFormData.boxCapacity,
-        reorderLevel: quickEditFormData.reorderLevel,
+        boxCapacity: quickEditFormData.boxCapacity || 1000,
+        reorderLevel: quickEditFormData.reorderLevel || 50,
         hsnCode: quickEditFormData.hsnCode.trim() || '7318150',
         notes: quickEditFormData.notes.trim(),
         image: quickEditProduct.image || '',
@@ -1526,6 +1900,17 @@ export default function Sales() {
       await addSale(newSale);
       setViewing(newSale);
     }
+    // Remember last entered invoice number for future bills to continue +1
+    try {
+      localStorage.setItem('nain_last_entered_invoice_no', newSale.invoice);
+      if (newSale.documentType) {
+        localStorage.setItem(`nain_last_entered_${newSale.documentType.replace(/\s+/g, '_').toLowerCase()}_no`, newSale.invoice);
+      }
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {}
+    setHasDraft(false);
+    setRestoredFromDraft(false);
+    setDraftSavedAt(null);
     setModalOpen(false);
   };
 
@@ -1774,9 +2159,16 @@ export default function Sales() {
               <Zap className="h-4 w-4 text-emerald-600" />
               <span>New Raw Invoice</span>
             </button>
-            <button className="btn-primary" onClick={openNewSale} title="Press F2 anywhere for quick invoice creation">
+            <button
+              className={`btn-primary relative flex items-center gap-1.5 ${hasDraft ? 'ring-2 ring-amber-400/80 bg-brand-700' : ''}`}
+              onClick={openNewSale}
+              title="Press F2 anywhere for quick invoice creation"
+            >
               <Plus className="h-4 w-4" />
-              <span>New Tax Invoice (F2)</span>
+              <span>{hasDraft ? 'Resume Tax Invoice (Draft)' : 'New Tax Invoice (F2)'}</span>
+              {hasDraft && (
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white absolute -top-1 -right-1 animate-pulse" />
+              )}
             </button>
           </div>
         }
@@ -3545,6 +3937,44 @@ export default function Sales() {
           onClose={() => setModalOpen(false)}
         >
           <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
+            {/* Draft Recovery Alert Banner */}
+            {!editingSaleId && restoredFromDraft && (
+              <div className="flex flex-wrap items-center justify-between gap-2.5 p-3 bg-amber-50/90 border-2 border-amber-300 rounded-xl text-xs text-amber-950 shadow-xs animate-fade-in">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-amber-200/80 flex items-center justify-center text-base shrink-0">
+                    📝
+                  </div>
+                  <div>
+                    <div className="font-extrabold flex items-center gap-2 text-amber-900">
+                      <span>Unsaved Invoice Draft Restored</span>
+                      {draftSavedAt && (
+                        <span className="text-[10.5px] font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-200">
+                          Last saved {formatRelativeDate(new Date(draftSavedAt).toISOString())}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-amber-800">
+                      Your entered customer &amp; product details were safely restored. You can continue editing or discard this draft to start fresh.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('Are you sure you want to discard this draft and reset all fields?')) {
+                        clearDraft();
+                      }
+                    }}
+                    className="px-3 py-1.5 text-xs font-bold text-rose-700 bg-white hover:bg-rose-50 border border-rose-200 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Discard Draft &amp; Start Fresh</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Refined Autocomplete Customer Selector */}
             <div className="border border-slate-200 rounded-xl p-3.5 bg-slate-50/70 space-y-3">
               <div className="flex items-center justify-between">
@@ -3918,24 +4348,12 @@ export default function Sales() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Category</label>
-                      <select
-                        value={salesNewProdCategory}
-                        onChange={(e) => setSalesNewProdCategory(e.target.value)}
-                        className="input text-xs bg-white"
-                      >
-                        {availableCategories.filter((c) => c !== 'All').map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Size / Spec</label>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Rack Location</label>
                       <input
                         type="text"
-                        value={salesNewProdSize}
-                        onChange={(e) => setSalesNewProdSize(e.target.value)}
-                        placeholder="e.g. M12 x 50"
+                        value={salesNewProdRack}
+                        onChange={(e) => setSalesNewProdRack(e.target.value)}
+                        placeholder="e.g. A-01"
                         className="input text-xs bg-white font-mono"
                       />
                     </div>
@@ -4105,9 +4523,23 @@ export default function Sales() {
                 </div>
               )}
 
-              {/* Product Catalog Picker with Search, Category Filter, and Smooth Scroller */}
-              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2.5">
-                {/* Search input with Cross (X) button */}
+              {/* Active Item Spotlight (Prominently represented at the top) */}
+              <ActiveItemSpotlight
+                activeItem={activeLineItem}
+                product={activeProduct}
+                lineNumber={activeLineIndex >= 0 ? activeLineIndex + 1 : undefined}
+                isJustAdded={activeLineItem ? activeLineItem.productId === justAddedLineId : false}
+                mode="sale"
+                onUpdateName={(n) => activeLineItem && updateLineName(activeLineItem.productId, n)}
+                onUpdateHsn={(h) => activeLineItem && updateLineHsn(activeLineItem.productId, h)}
+                onUpdateQty={(q) => activeLineItem && setQty(activeLineItem.productId, q)}
+                onUpdatePrice={(p) => activeLineItem && setPrice(activeLineItem.productId, p)}
+                onUpdateDiscount={(d) => activeLineItem && setLineDiscount(activeLineItem.productId, d)}
+                onRemove={() => activeLineItem && removeLine(activeLineItem.productId)}
+              />
+
+              {/* Product Search & Quick Add Bar */}
+              <div className="space-y-2">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
@@ -4120,176 +4552,142 @@ export default function Sales() {
                         if (searchResults.length > 0) {
                           addLine(searchResults[0].id);
                           setProductSearch('');
-                        } else if (productSearch.trim()) {
-                          setCustomName(productSearch.trim());
-                          setIsAddingCustom(true);
                         }
+                      } else if (e.key === 'Escape') {
+                        setProductSearch('');
                       }
                     }}
-                    placeholder="Search 990+ products (e.g. ss304, 1/2x2, allen bolt)... Press Enter to Add"
-                    className="input pl-9 pr-9 text-xs bg-white"
+                    placeholder="Search 990+ products (e.g. ss304, allen bolt, 5x10)... Press Enter to Add"
+                    className="input pl-9 pr-8 py-2 bg-white text-xs font-medium w-full border border-slate-300 focus:border-brand-500 rounded-xl shadow-2xs"
                   />
                   {productSearch && (
                     <button
                       type="button"
                       onClick={() => setProductSearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded-full transition"
-                      title="Clear search"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
                     >
-                      <X className="w-4 h-4" />
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
 
-                {/* Category Filter Chips */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-                  <span className="text-[11px] font-bold text-slate-500 shrink-0">Category:</span>
-                  {availableCategories.slice(0, 9).map((cat) => (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => setSalesCategory(cat)}
-                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition shrink-0 ${
-                        salesCategory === cat
-                          ? 'bg-brand-600 text-white shadow-xs'
-                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Scrollable Catalog Product List (Inline) */}
-                <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-xs">
-                  <div className="bg-slate-100/70 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
-                    <span>
-                      Catalog List ({searchResults.length} {searchResults.length === 1 ? 'item' : 'items'} displayed
-                      {productSearch ? ` for "${productSearch}"` : ''})
-                    </span>
-                    <span className="text-slate-400 text-[10.5px]">Scroll to browse &middot; Click &quot;+ Add&quot; to include</span>
-                  </div>
-
-                  {productSearch.trim() && searchResults.length === 0 ? (
-                    <div className="p-4 flex flex-col sm:flex-row items-center justify-between border-t border-purple-200 bg-purple-50/50 gap-2">
-                      <div className="text-xs text-purple-900">
-                        <span className="font-semibold">No catalog match for &quot;{productSearch}&quot;.</span>
-                        <span className="text-purple-600 block text-[11px]">Save as permanent product master or add as one-off custom item.</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSalesNewProdName(productSearch.trim());
-                            setIsAddingSalesCatalogProduct(true);
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs flex items-center gap-1"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>+ Create &quot;{productSearch}&quot; as Product Master</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCustomName(productSearch.trim());
-                            setIsAddingCustom(true);
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs"
-                        >
-                          + Add as Custom Item
-                        </button>
-                      </div>
+                {/* Instant Search Results Dropdown / Quick-Pick List */}
+                {productSearch.trim() && (
+                  <div className="rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden animate-fade-in divide-y divide-slate-100">
+                    <div className="bg-slate-100/80 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
+                      <span>
+                        Matching Products ({searchResults.length} {searchResults.length === 1 ? 'item' : 'items'} found)
+                      </span>
+                      <span className="text-slate-400 text-[10.5px]">Click &quot;+ Add&quot; or press Enter to add top match</span>
                     </div>
-                  ) : (
-                    <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
-                      {searchResults.map((p) => {
-                        const addedLine = lines.find((l) => l.productId === p.id);
-                        return (
-                          <div
-                            key={p.id}
-                            className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
-                              addedLine ? 'bg-indigo-50/40 hover:bg-indigo-50/70' : 'hover:bg-slate-50'
-                            }`}
+
+                    {searchResults.length === 0 ? (
+                      <div className="p-4 flex flex-col sm:flex-row items-center justify-between bg-purple-50/50 gap-2">
+                        <div className="text-xs text-purple-900">
+                          <span className="font-semibold">No catalog match for &quot;{productSearch}&quot;.</span>
+                          <span className="text-purple-600 block text-[11px]">Save as permanent product master or add as one-off custom item.</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSalesNewProdName(productSearch.trim());
+                              setIsAddingSalesCatalogProduct(true);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs flex items-center gap-1"
                           >
-                            <div className="flex-1 pr-3">
-                              <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
-                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
-                                {p.size && <span className="font-mono bg-slate-100 px-1 rounded text-slate-600">{p.size}</span>}
-                                {p.rackNumber && <span>Rack: <strong className="text-slate-700">{p.rackNumber}</strong></span>}
-                                <span>Avail. Stock: <strong className="text-emerald-700">{p.stock}</strong></span>
-                                {p.category && <span className="text-slate-400 font-medium">({p.category})</span>}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span className="text-xs font-bold text-brand-600 font-mono">{money(p.price)}</span>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setQuickEditProduct(p);
-                                  setQuickEditFormData({
-                                    name: p.name,
-                                    category: p.category || 'Bolts',
-                                    supplier: p.supplier || '',
-                                    rackNumber: p.rackNumber || '',
-                                    size: p.size || '',
-                                    cost: p.cost || 0,
-                                    price: p.price || 0,
-                                    stock: p.stock || 0,
-                                    boxCapacity: p.boxCapacity || 1000,
-                                    reorderLevel: p.reorderLevel || 100,
-                                    hsnCode: p.hsnCode || '7318150',
-                                    notes: p.notes || '',
-                                  });
-                                  setQuickEditProductModalOpen(true);
-                                }}
-                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
-                                title="Quick Edit Product Master"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
-
-                              {addedLine ? (
-                                <div className="flex items-center gap-1.5">
-                                  <span className="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-300 flex items-center gap-1">
-                                    <CheckCircle2 className="w-3 h-3 text-indigo-600" />
-                                    <span>Added ({addedLine.qty})</span>
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>+ Create &quot;{productSearch}&quot; as Product Master</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustomName(productSearch.trim());
+                              setIsAddingCustom(true);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs"
+                          >
+                            + Add as Custom Item
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
+                        {searchResults.map((p) => {
+                          const addedLine = lines.find((l) => l.productId === p.id);
+                          return (
+                            <div
+                              key={p.id}
+                              className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
+                                addedLine ? 'bg-indigo-50/40 hover:bg-indigo-50/70' : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="flex-1 pr-3">
+                                <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
+                                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
+                                  {p.rackNumber && (
+                                    <span className="text-slate-600 font-medium">Rack: <strong className="text-slate-800">{p.rackNumber}</strong></span>
+                                  )}
+                                  <span>
+                                    Avail. Stock:{' '}
+                                    <strong className={p.stock <= 0 ? 'text-rose-600' : 'text-emerald-700'}>
+                                      {p.stock} pcs
+                                    </strong>
                                   </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => addLine(p.id)}
-                                    className="p-1 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition"
-                                    title="Add one more"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeLine(p.id)}
-                                    className="p-1 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition"
-                                    title="Remove from invoice"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
+                                  {p.hsnCode && (
+                                    <span className="font-mono text-slate-400">HSN: {p.hsnCode}</span>
+                                  )}
                                 </div>
-                              ) : (
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-xs font-bold text-brand-600 font-mono">{money(p.price)}</span>
                                 <button
                                   type="button"
-                                  onClick={() => addLine(p.id)}
-                                  className="px-2.5 py-1 bg-brand-600 hover:bg-brand-700 text-white text-[11px] font-bold rounded-lg transition flex items-center gap-1 shadow-xs"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setQuickEditProduct(p);
+                                    setQuickEditFormData({
+                                      name: p.name,
+                                      supplier: p.supplier || '',
+                                      rackNumber: p.rackNumber || '',
+                                      cost: p.cost || 0,
+                                      price: p.price || 0,
+                                      stock: p.stock || 0,
+                                      boxCapacity: p.boxCapacity || 1000,
+                                      reorderLevel: p.reorderLevel || 100,
+                                      hsnCode: p.hsnCode || '7318150',
+                                      notes: p.notes || '',
+                                    });
+                                    setQuickEditProductModalOpen(true);
+                                  }}
+                                  className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition"
+                                  title="Quick Edit Product Master"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    addLine(p.id);
+                                  }}
+                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-xs ${
+                                    addedLine
+                                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                                      : 'bg-brand-600 text-white hover:bg-brand-700'
+                                  }`}
                                 >
                                   <Plus className="w-3.5 h-3.5" />
-                                  <span>Add</span>
+                                  <span>{addedLine ? `Added (${addedLine.qty})` : '+ Add'}</span>
                                 </button>
-                              )}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -4315,6 +4713,7 @@ export default function Sales() {
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-100">
                       <tr>
+                        <th className="px-2 py-2.5 font-bold text-slate-600 text-center w-12">Sr.</th>
                         <th className="px-3 py-2.5 font-bold text-slate-600">Product</th>
                         <th className="px-3 py-2.5 font-bold text-slate-600 text-center w-24">Avail. Stock</th>
                         <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-center">Qty</th>
@@ -4326,15 +4725,37 @@ export default function Sales() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
-                      {lines.map((l) => {
+                      {lines.map((l, idx) => {
                         const prod = products.find((p) => p.id === l.productId);
                         const availStock = prod ? prod.stock : 0;
                         const discPct = l.discount || 0;
                         const netRate = l.price * (1 - discPct / 100);
                         const lineNet = l.qty * netRate;
                         const isOverStock = !l.isCustom && l.qty > availStock;
+                        const isActive = l.productId === activeLineItem?.productId;
                         return (
-                          <tr key={l.productId} className={l.isCustom ? 'bg-purple-50/20' : ''}>
+                          <tr
+                            key={l.productId}
+                            onClick={() => {
+                              setActiveLineProductId(l.productId);
+                              setJustAddedLineId(null);
+                            }}
+                            className={`transition cursor-pointer ${
+                              isActive
+                                ? 'bg-brand-50/70 border-l-4 border-l-brand-600 ring-1 ring-brand-300/60'
+                                : l.isCustom
+                                ? 'bg-purple-50/20 hover:bg-purple-50/40'
+                                : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <td className="px-2 py-2.5 text-center font-bold text-slate-500">
+                              <div className="flex items-center justify-center gap-1">
+                                <span>{idx + 1}</span>
+                                {isActive && (
+                                  <span className="w-2 h-2 rounded-full bg-brand-600 shrink-0 animate-pulse" title="Active Selected Line" />
+                                )}
+                              </div>
+                            </td>
                             <td className="px-3 py-2.5">
                               <div>
                                 <div className="flex items-center gap-1.5">
@@ -5018,18 +5439,42 @@ export default function Sales() {
             )}
 
             {/* Actions */}
-            <div className="flex justify-end gap-2 pt-2">
-              <button className="btn-secondary" onClick={() => setModalOpen(false)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={!canSubmit}
-                onClick={handleSubmit}
-                className="btn-primary"
-              >
-                {editingSaleId ? 'Save & Update Invoice' : documentType === 'DEBIT NOTE' ? 'Confirm & Issue Debit Note' : documentType === 'PROFORMA INVOICE' ? 'Confirm & Issue Proforma Invoice' : 'Confirm & Issue Invoice'}
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-200 mt-3">
+              <div className="flex items-center gap-3">
+                {!editingSaleId && (hasDraft || restoredFromDraft || customer.trim() || lines.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('Clear all entered information and discard this draft?')) {
+                        clearDraft();
+                      }
+                    }}
+                    className="text-xs font-semibold text-rose-600 hover:text-rose-800 hover:bg-rose-50 px-2.5 py-1.5 rounded-lg border border-rose-200 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear Form / Discard Draft</span>
+                  </button>
+                )}
+                {!editingSaleId && (
+                  <span className="text-[11px] text-slate-500 flex items-center gap-1.5 font-medium">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                    <span>Auto-saving draft</span>
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button className="btn-secondary" onClick={() => setModalOpen(false)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!canSubmit}
+                  onClick={handleSubmit}
+                  className="btn-primary"
+                >
+                  {editingSaleId ? 'Save & Update Invoice' : documentType === 'DEBIT NOTE' ? 'Confirm & Issue Debit Note' : documentType === 'PROFORMA INVOICE' ? 'Confirm & Issue Proforma Invoice' : 'Confirm & Issue Invoice'}
+                </button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -5242,10 +5687,8 @@ export default function Sales() {
                                         setQuickEditProduct(prod);
                                         setQuickEditFormData({
                                           name: prod.name,
-                                          category: prod.category || 'Bolts',
                                           supplier: prod.supplier || '',
                                           rackNumber: prod.rackNumber || '',
-                                          size: prod.size || '',
                                           cost: prod.cost || 0,
                                           price: prod.price || 0,
                                           stock: prod.stock || 0,
@@ -6289,38 +6732,35 @@ export default function Sales() {
               </div>
             </div>
 
-            {/* Product Selector for Raw Sale */}
-            <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/70 space-y-2.5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <label className="font-extrabold text-slate-800 flex items-center gap-1.5">
-                  <Package className="w-4 h-4 text-emerald-600" />
-                  <span>Select Products to Add</span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={rawCategory}
-                    onChange={(e) => setRawCategory(e.target.value)}
-                    className="input py-1 text-xs font-semibold"
-                  >
-                    {availableCategories.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!isAddingRawProduct) setRawNewProdName(rawProductSearch.trim());
-                      setIsAddingRawProduct(!isAddingRawProduct);
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1 shadow-xs shrink-0"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add New Product</span>
-                  </button>
-                </div>
+            {/* Active Item Spotlight at Top */}
+            <ActiveItemSpotlight
+              activeItem={activeRawLineItem}
+              product={activeRawProduct}
+              lineNumber={activeRawLineIndex >= 0 ? activeRawLineIndex + 1 : undefined}
+              isJustAdded={activeRawLineItem ? activeRawLineItem.productId === justAddedRawLineId : false}
+              mode="sale"
+              onUpdateName={(n) => activeRawLineItem && updateRawLineName(activeRawLineItem.productId, n)}
+              onUpdateHsn={(h) => activeRawLineItem && updateRawLineHsn(activeRawLineItem.productId, h)}
+              onUpdateQty={(q) => activeRawLineItem && updateRawLineQty(activeRawLineItem.productId, q)}
+              onUpdatePrice={(p) => activeRawLineItem && updateRawLinePrice(activeRawLineItem.productId, p)}
+              onRemove={() => activeRawLineItem && removeRawLine(activeRawLineItem.productId)}
+            />
+
+            {/* Fast Item Entry Bar for Raw Sale with New Product Master Trigger */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700">Add Items to Raw Sale</span>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingRawProduct(!isAddingRawProduct)}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1 shadow-xs shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add New Product Master</span>
+                </button>
               </div>
 
-              {/* Inline New Product Form for Raw Sale */}
+              {/* Inline New Product Form for Raw Sale (No Category, No Size) */}
               {isAddingRawProduct && (
                 <div className="p-3 bg-emerald-50/70 rounded-xl border-2 border-emerald-300 space-y-2.5 animate-fade-in shadow-xs">
                   <div className="flex items-center justify-between">
@@ -6350,28 +6790,15 @@ export default function Sales() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Category</label>
-                      <select
-                        value={rawNewProdCategory}
-                        onChange={(e) => setRawNewProdCategory(e.target.value)}
-                        className="input text-xs bg-white"
-                      >
-                        {availableCategories.filter((c) => c !== 'All').map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Size / Spec</label>
+                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Rack Number</label>
                       <input
                         type="text"
-                        value={rawNewProdSize}
-                        onChange={(e) => setRawNewProdSize(e.target.value)}
-                        placeholder="e.g. M10 x 40"
+                        value={rawNewProdRack}
+                        onChange={(e) => setRawNewProdRack(e.target.value)}
+                        placeholder="e.g. A-1"
                         className="input text-xs bg-white font-mono"
                       />
                     </div>
-
                     <div>
                       <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Selling Rate (₹) *</label>
                       <input
@@ -6434,76 +6861,116 @@ export default function Sales() {
                 </div>
               )}
 
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={rawProductSearch}
-                  onChange={(e) => setRawProductSearch(e.target.value)}
-                  placeholder="Search products by name, rack #, size..."
-                  className="input pl-8 py-1.5 bg-white text-xs font-medium"
-                />
-              </div>
+              {/* Product Search & Quick Add Bar */}
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={rawProductSearch}
+                    onChange={(e) => setRawProductSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (rawSearchResults.length > 0) {
+                          addRawProductToInvoice(rawSearchResults[0]);
+                          setRawProductSearch('');
+                        }
+                      } else if (e.key === 'Escape') {
+                        setRawProductSearch('');
+                      }
+                    }}
+                    placeholder="Search products by name, rack #... Press Enter to Add"
+                    className="input pl-9 pr-8 py-2 bg-white text-xs font-medium w-full border border-slate-300 focus:border-brand-500 rounded-xl shadow-2xs"
+                  />
+                  {rawProductSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setRawProductSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
 
-              {/* Quick Pick Products Grid */}
-              <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1.5 divide-y divide-slate-100">
-                {rawSearchResults.length === 0 ? (
-                  <div className="py-4 px-2 text-center space-y-2">
-                    <p className="text-slate-400 text-xs">
-                      {rawProductSearch
-                        ? `No products found matching "${rawProductSearch}".`
-                        : 'No products in this category.'}
-                    </p>
-                    {rawProductSearch.trim() && !isAddingRawProduct && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRawNewProdName(rawProductSearch.trim());
-                          setIsAddingRawProduct(true);
-                        }}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>+ Create &quot;{rawProductSearch}&quot; as New Product</span>
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  rawSearchResults.map((p) => {
-                    const alreadyInCart = rawInvoiceLines.find((l) => l.productId === p.id);
-                    return (
-                      <div
-                        key={p.id}
-                        className="flex items-center justify-between py-1.5 px-2 hover:bg-slate-50 rounded-lg transition"
-                      >
-                        <div className="min-w-0 pr-2">
-                          <p className="font-bold text-slate-800 truncate">{p.name}</p>
-                          <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                            <span>Rack: <strong className="text-slate-700">{p.rackNumber || '—'}</strong></span>
-                            <span>•</span>
-                            <span>Rate: <strong className="text-emerald-700">{money(p.price)}</strong></span>
-                            <span>•</span>
-                            <span className={p.stock <= 0 ? 'text-rose-600 font-bold' : 'text-slate-600'}>
-                              Stock: <strong>{p.stock}</strong>
-                            </span>
-                          </div>
+                {/* Instant Search Results Dropdown / Quick-Pick List */}
+                {rawProductSearch.trim() && (
+                  <div className="rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden animate-fade-in divide-y divide-slate-100">
+                    <div className="bg-slate-100/80 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
+                      <span>
+                        Matching Products ({rawSearchResults.length} {rawSearchResults.length === 1 ? 'item' : 'items'} found)
+                      </span>
+                      <span className="text-slate-400 text-[10.5px]">Click &quot;+ Add&quot; or press Enter to add top match</span>
+                    </div>
+
+                    {rawSearchResults.length === 0 ? (
+                      <div className="p-4 flex flex-col sm:flex-row items-center justify-between bg-emerald-50/50 gap-2">
+                        <div className="text-xs text-emerald-900">
+                          <span className="font-semibold">No catalog match for &quot;{rawProductSearch}&quot;.</span>
+                          <span className="text-emerald-700 block text-[11px]">Create it instantly as a permanent product master.</span>
                         </div>
-
                         <button
                           type="button"
-                          onClick={() => addRawProductToInvoice(p)}
-                          className={`px-2.5 py-1 text-xs font-bold rounded-lg transition flex items-center gap-1 shrink-0 ${
-                            alreadyInCart
-                              ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                              : 'bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white'
-                          }`}
+                          onClick={() => {
+                            setRawNewProdName(rawProductSearch.trim());
+                            setIsAddingRawProduct(true);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs flex items-center gap-1"
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>{alreadyInCart ? `Add (${alreadyInCart.qty})` : 'Add'}</span>
+                          <span>+ Create &quot;{rawProductSearch}&quot; as New Product</span>
                         </button>
                       </div>
-                    );
-                  })
+                    ) : (
+                      <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
+                        {rawSearchResults.map((p) => {
+                          const addedLine = rawInvoiceLines.find((l) => l.productId === p.id);
+                          return (
+                            <div
+                              key={p.id}
+                              className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
+                                addedLine ? 'bg-emerald-50/50 hover:bg-emerald-50/80' : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1 pr-3">
+                                <p className="font-bold text-slate-800 leading-tight truncate">{p.name}</p>
+                                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+                                  {p.rackNumber && (
+                                    <span className="text-slate-600 font-medium">Rack: <strong className="text-slate-800">{p.rackNumber}</strong></span>
+                                  )}
+                                  <span>
+                                    Avail. Stock:{' '}
+                                    <strong className={p.stock <= 0 ? 'text-rose-600' : 'text-emerald-700'}>
+                                      {p.stock} pcs
+                                    </strong>
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-xs font-bold text-emerald-700 font-mono">{money(p.price)}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    addRawProductToInvoice(p);
+                                  }}
+                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-xs ${
+                                    addedLine
+                                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                                      : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                  }`}
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>{addedLine ? `Added (${addedLine.qty})` : '+ Add'}</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -6530,6 +6997,7 @@ export default function Sales() {
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50 text-[11px] font-bold text-slate-600">
                       <tr>
+                        <th className="px-2 py-2 text-center w-10">Sr.</th>
                         <th className="px-3 py-2">Item Name</th>
                         <th className="px-3 py-2 w-28 text-center">Qty</th>
                         <th className="px-3 py-2 w-28 text-right">Rate (₹)</th>
@@ -6538,13 +7006,35 @@ export default function Sales() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
-                      {rawInvoiceLines.map((line) => {
+                      {rawInvoiceLines.map((line, idx) => {
                         const lineTotal = +(line.price * line.qty).toFixed(2);
                         const prod = products.find((p) => p.id === line.productId);
                         const isOverStock = prod && line.qty > prod.stock;
+                        const isActive = line.productId === activeRawLineItem?.productId;
 
                         return (
-                          <tr key={line.productId} className={`hover:bg-slate-50 ${isOverStock ? 'bg-rose-50/40' : ''}`}>
+                          <tr
+                            key={line.productId}
+                            onClick={() => {
+                              setActiveRawLineProductId(line.productId);
+                              setJustAddedRawLineId(null);
+                            }}
+                            className={`transition cursor-pointer ${
+                              isActive
+                                ? 'bg-brand-50/70 border-l-4 border-l-brand-600 ring-1 ring-brand-300/60'
+                                : isOverStock
+                                ? 'bg-rose-50/40 hover:bg-rose-50/60'
+                                : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <td className="px-2 py-2 text-center font-bold text-slate-500">
+                              <div className="flex items-center justify-center gap-1">
+                                <span>{idx + 1}</span>
+                                {isActive && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-brand-600 shrink-0 animate-pulse" title="Active Selected Line" />
+                                )}
+                              </div>
+                            </td>
                             <td className="px-3 py-2">
                               <p className="font-bold text-slate-900">{line.name}</p>
                               {prod && (

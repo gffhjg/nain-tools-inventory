@@ -73,6 +73,9 @@ export default function InvoiceDetailsModal({ sale, onClose, companySettings }: 
     try {
       const origDocNo = currentSale.invoice;
       await updateSaleDocumentType(currentSale.id, 'TAX INVOICE', invoiceNoToUse.trim(), origDocNo, isPo);
+      try {
+        localStorage.setItem('nain_last_entered_invoice_no', invoiceNoToUse.trim());
+      } catch {}
       const now = new Date();
       const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       setCurrentSale((prev) => ({

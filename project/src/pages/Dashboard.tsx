@@ -576,7 +576,6 @@ export default function Dashboard() {
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600">Product</th>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600">Category</th>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600">Rack Location</th>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600">Current Stock</th>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600">Reorder Min</th>
@@ -586,7 +585,7 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {lowStockProducts.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
+                      <td colSpan={5} className="py-8 text-center text-xs text-slate-400">
                         No low stock items. All inventory levels are healthy!
                       </td>
                     </tr>
@@ -594,7 +593,6 @@ export default function Dashboard() {
                     lowStockProducts.map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50">
                         <td className="px-3.5 py-3 font-bold text-slate-900">{p.name}</td>
-                        <td className="px-3.5 py-3 text-slate-600">{p.category}</td>
                         <td className="px-3.5 py-3 font-mono text-slate-600">Rack {p.rackNumber}</td>
                         <td className="px-3.5 py-3 font-black text-rose-600">{p.stock}</td>
                         <td className="px-3.5 py-3 font-semibold text-slate-700">{p.reorderLevel}</td>
@@ -636,7 +634,6 @@ export default function Dashboard() {
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600">Product</th>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600">Category</th>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600">Rack Location</th>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600">Stock Status</th>
                     <th className="px-3.5 py-2.5 font-bold text-slate-600 text-right">Action</th>
@@ -645,7 +642,7 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {outOfStockProducts.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-xs text-slate-400">
+                      <td colSpan={4} className="py-8 text-center text-xs text-slate-400">
                         No products are currently out of stock.
                       </td>
                     </tr>
@@ -653,7 +650,6 @@ export default function Dashboard() {
                     outOfStockProducts.map((p) => (
                       <tr key={p.id} className="hover:bg-rose-50/30">
                         <td className="px-3.5 py-3 font-bold text-slate-900">{p.name}</td>
-                        <td className="px-3.5 py-3 text-slate-600">{p.category}</td>
                         <td className="px-3.5 py-3 font-mono text-slate-600">Rack {p.rackNumber}</td>
                         <td className="px-3.5 py-3">
                           <span className="rounded bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">0 Stock (Emptied)</span>

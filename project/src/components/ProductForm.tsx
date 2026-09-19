@@ -1,10 +1,16 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { Upload, Image as ImageIcon, Plus, List } from 'lucide-react';
-import { productCategories } from '@/lib/constants';
 import type { Product } from '@/lib/types';
 import { useStore } from '@/store/AppStore';
+import { formatRelativeDate } from '@/utils/analytics';
 
 export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>;
+
+export const PRODUCT_DRAFT_KEY = 'nain_product_form_draft';
+
+interface ProductDraftData extends ProductFormData {
+  savedAt: number;
+}
 
 type ProductFormProps = {
   initial?: Product | null;
@@ -14,9 +20,10 @@ type ProductFormProps = {
 
 const empty: ProductFormData = {
   name: '',
+  category: 'General',
   supplier: '',
   rackNumber: '',
-  size: '',
+  size: 'Standard',
   cost: 0,
   price: 0,
   boxCapacity: 0,
@@ -32,16 +39,92 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
   const [errors, setErrors] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const [hasProductDraft, setHasProductDraft] = useState(false);
+  const [restoredFromProductDraft, setRestoredFromProductDraft] = useState(false);
+  const [productDraftSavedAt, setProductDraftSavedAt] = useState<number | null>(null);
+
+  const clearProductDraft = () => {
+    try {
+      localStorage.removeItem(PRODUCT_DRAFT_KEY);
+    } catch {}
+    setHasProductDraft(false);
+    setRestoredFromProductDraft(false);
+    setProductDraftSavedAt(null);
+    setForm(empty);
+  };
+
   useEffect(() => {
     if (initial) {
       const { id, status, boxStatus, stock, lastPhysicalObservation, ...rest } = initial;
       void id; void status; void boxStatus; void stock; void lastPhysicalObservation;
       setForm(rest);
+      setRestoredFromProductDraft(false);
     } else {
+      try {
+        const raw = localStorage.getItem(PRODUCT_DRAFT_KEY);
+        if (raw) {
+          const draft: ProductDraftData = JSON.parse(raw);
+          if (draft && (draft.name?.trim() || draft.supplier?.trim() || draft.price > 0 || draft.cost > 0 || draft.rackNumber?.trim())) {
+            const { savedAt, ...restDraft } = draft;
+            setForm(restDraft);
+            setRestoredFromProductDraft(true);
+            setProductDraftSavedAt(savedAt || Date.now());
+            setHasProductDraft(true);
+            setErrors({});
+            return;
+          }
+        }
+      } catch {}
       setForm(empty);
+      setRestoredFromProductDraft(false);
     }
     setErrors({});
   }, [initial]);
+
+  // Auto-save Product draft
+  useEffect(() => {
+    if (initial) return;
+    const hasContent = Boolean(
+      form.name.trim() ||
+      form.supplier.trim() ||
+      form.rackNumber.trim() ||
+      form.cost > 0 ||
+      form.price > 0 ||
+      form.boxCapacity > 0 ||
+      form.reorderLevel > 0 ||
+      form.notes.trim() ||
+      form.image.trim()
+    );
+
+    if (hasContent) {
+      const draftData: ProductDraftData = {
+        ...form,
+        savedAt: Date.now(),
+      };
+      try {
+        localStorage.setItem(PRODUCT_DRAFT_KEY, JSON.stringify(draftData));
+        setHasProductDraft(true);
+        setProductDraftSavedAt(draftData.savedAt);
+      } catch {}
+    }
+  }, [initial, form]);
+
+  // Window beforeunload listener
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!initial && (form.name.trim() || form.supplier.trim() || form.cost > 0 || form.price > 0)) {
+        const draftData: ProductDraftData = {
+          ...form,
+          savedAt: Date.now(),
+        };
+        try {
+          localStorage.setItem(PRODUCT_DRAFT_KEY, JSON.stringify(draftData));
+        } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [initial, form]);
 
   const update = (field: keyof ProductFormData, value: string | number) => {
     setForm((f) => ({ ...f, [field]: value }));
@@ -70,7 +153,19 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
-    onSubmit(form);
+    if (!initial) {
+      try {
+        localStorage.removeItem(PRODUCT_DRAFT_KEY);
+      } catch {}
+      setHasProductDraft(false);
+      setRestoredFromProductDraft(false);
+      setProductDraftSavedAt(null);
+    }
+    onSubmit({
+      ...form,
+      category: form.category || 'General',
+      size: form.size || 'Standard',
+    });
   };
 
   const inputCls = (field: string) =>
@@ -78,6 +173,23 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
 
   return (
     <form id="product-form" onSubmit={handleSubmit} className="space-y-5">
+      {restoredFromProductDraft && !initial && (
+        <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+            <span className="font-semibold">
+              Restored unsaved product draft {productDraftSavedAt ? `from ${formatRelativeDate(new Date(productDraftSavedAt).toISOString())}` : ''}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={clearProductDraft}
+            className="px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-200/70 hover:bg-amber-200 rounded-lg border border-amber-300 transition"
+          >
+            Discard Draft &amp; Start Fresh
+          </button>
+        </div>
+      )}
       {/* Image upload */}
       <div>
         <label className="mb-1.5 block text-sm font-medium text-slate-700">Product Image</label>

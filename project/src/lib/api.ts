@@ -450,7 +450,7 @@ export const api = {
     validateNonNegative(data.boxCapacity, 'Box capacity');
     validateNonNegative(data.reorderLevel, 'Reorder level');
     const db = await getDb();
-    const { rows } = await db.query<ProductRow>('SELECT stock, box_status_mode, manual_box_status FROM products WHERE id = $1', [id]);
+    const { rows } = await db.query<ProductRow>('SELECT stock, category, size, box_status_mode, manual_box_status FROM products WHERE id = $1', [id]);
     if (rows.length === 0) return;
     const stock = rows[0].stock;
     const mode = (rows[0].box_status_mode || 'auto') as BoxStatusMode;
@@ -458,9 +458,11 @@ export const api = {
     const autoBoxStatus = computeBoxStatus(stock, data.boxCapacity);
     const boxStatus = resolveBoxStatus(mode, autoBoxStatus, manualBoxStatus);
     const status = computeStockStatus(stock, data.reorderLevel);
+    const category = data.category || rows[0].category || 'General';
+    const size = data.size || rows[0].size || 'Standard';
     await db.query(
       `UPDATE products SET name=$1, category=$2, supplier=$3, rack_number=$4, size=$5, cost=$6, price=$7, box_capacity=$8, reorder_level=$9, box_status=$10, notes=$11, status=$12 WHERE id=$13`,
-      [data.name, data.category, data.supplier, data.rackNumber, data.size, data.cost, data.price, data.boxCapacity, data.reorderLevel, boxStatus, data.notes, status, id],
+      [data.name, category, data.supplier || '', data.rackNumber || '', size, data.cost, data.price, data.boxCapacity, data.reorderLevel, boxStatus, data.notes || '', status, id],
     );
   },
 

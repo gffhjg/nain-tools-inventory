@@ -4,11 +4,26 @@ import { Plus, Search, FileText, Trash2, Edit2, Eye, Users, AlertTriangle, Messa
 import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
 import { useStore } from '@/store/AppStore';
-import { money } from '@/utils/analytics';
+import { money, formatRelativeDate } from '@/utils/analytics';
 import { indianStates, getStateCode, validateGstin } from '@/lib/constants';
 import type { Customer, SaleStatus, PaymentMethod, ChequeRecord, SaleRecord } from '@/lib/types';
 
 const empty: Customer = { id: '', name: '', businessName: '', phone: '', gstin: '', email: '', address: '', state: '', stateCode: '', notes: '' };
+
+const CUSTOMER_DRAFT_KEY = 'nain_customer_form_draft';
+
+interface CustomerDraftData {
+  name: string;
+  businessName: string;
+  phone: string;
+  gstin: string;
+  email: string;
+  address: string;
+  state: string;
+  stateCode: string;
+  notes: string;
+  savedAt: number;
+}
 
 export default function Customers() {
   const { customers, sales, addCustomer, updateCustomer, deleteCustomer, updateSaleStatus, updateSale, addCheque, cheques, companySettings } = useStore();
@@ -26,6 +41,10 @@ export default function Customers() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [hasCustomerDraft, setHasCustomerDraft] = useState(false);
+  const [restoredFromCustomerDraft, setRestoredFromCustomerDraft] = useState(false);
+  const [customerDraftSavedAt, setCustomerDraftSavedAt] = useState<number | null>(null);
 
   // Quick Payment Modal state
   const [payTarget, setPayTarget] = useState<{ customer: Customer; pendingInvoices: typeof sales } | null>(null);
@@ -104,13 +123,142 @@ export default function Customers() {
     [enriched]
   );
 
-  const openAdd = () => {
-    setEditing(null);
+  const clearCustomerDraft = () => {
+    try {
+      localStorage.removeItem(CUSTOMER_DRAFT_KEY);
+    } catch {}
+    setHasCustomerDraft(false);
+    setRestoredFromCustomerDraft(false);
+    setCustomerDraftSavedAt(null);
     setForm({
       ...empty,
       state: companySettings?.state || 'Haryana',
       stateCode: companySettings?.stateCode || '06',
     });
+  };
+
+  const restoreCustomerDraftIfExists = (): boolean => {
+    try {
+      const raw = localStorage.getItem(CUSTOMER_DRAFT_KEY);
+      if (!raw) return false;
+      const draft: CustomerDraftData = JSON.parse(raw);
+      if (!draft) return false;
+
+      const hasContent = Boolean(
+        draft.name?.trim() ||
+        draft.businessName?.trim() ||
+        draft.phone?.trim() ||
+        draft.gstin?.trim() ||
+        draft.email?.trim() ||
+        draft.address?.trim()
+      );
+      if (!hasContent) return false;
+
+      setForm({
+        ...empty,
+        name: draft.name || '',
+        businessName: draft.businessName || '',
+        phone: draft.phone || '',
+        gstin: draft.gstin || '',
+        email: draft.email || '',
+        address: draft.address || '',
+        state: draft.state || companySettings?.state || 'Haryana',
+        stateCode: draft.stateCode || companySettings?.stateCode || '06',
+        notes: draft.notes || '',
+      });
+      setRestoredFromCustomerDraft(true);
+      setCustomerDraftSavedAt(draft.savedAt || Date.now());
+      setHasCustomerDraft(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Check for customer draft on initial mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CUSTOMER_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && (parsed.name?.trim() || parsed.phone?.trim() || parsed.businessName?.trim() || parsed.gstin?.trim())) {
+          setHasCustomerDraft(true);
+          setCustomerDraftSavedAt(parsed.savedAt || null);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Auto-save Customer draft
+  useEffect(() => {
+    if (!formOpen || editing) return;
+    const hasContent = Boolean(
+      form.name.trim() ||
+      form.businessName.trim() ||
+      form.phone.trim() ||
+      form.gstin.trim() ||
+      form.email.trim() ||
+      form.address.trim() ||
+      form.notes.trim()
+    );
+
+    if (hasContent) {
+      const draftData: CustomerDraftData = {
+        name: form.name,
+        businessName: form.businessName,
+        phone: form.phone,
+        gstin: form.gstin,
+        email: form.email,
+        address: form.address,
+        state: form.state,
+        stateCode: form.stateCode,
+        notes: form.notes,
+        savedAt: Date.now(),
+      };
+      try {
+        localStorage.setItem(CUSTOMER_DRAFT_KEY, JSON.stringify(draftData));
+        setHasCustomerDraft(true);
+        setCustomerDraftSavedAt(draftData.savedAt);
+      } catch {}
+    }
+  }, [formOpen, editing, form]);
+
+  // Window beforeunload listener
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (formOpen && !editing && (form.name.trim() || form.phone.trim() || form.businessName.trim())) {
+        const draftData: CustomerDraftData = {
+          name: form.name,
+          businessName: form.businessName,
+          phone: form.phone,
+          gstin: form.gstin,
+          email: form.email,
+          address: form.address,
+          state: form.state,
+          stateCode: form.stateCode,
+          notes: form.notes,
+          savedAt: Date.now(),
+        };
+        try {
+          localStorage.setItem(CUSTOMER_DRAFT_KEY, JSON.stringify(draftData));
+        } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [formOpen, editing, form]);
+
+  const openAdd = () => {
+    setEditing(null);
+    const restored = restoreCustomerDraftIfExists();
+    if (!restored) {
+      setForm({
+        ...empty,
+        state: companySettings?.state || 'Haryana',
+        stateCode: companySettings?.stateCode || '06',
+      });
+      setRestoredFromCustomerDraft(false);
+    }
     setFormError(null);
     setFormOpen(true);
   };
@@ -175,6 +323,14 @@ export default function Customers() {
           stateCode: form.stateCode.trim(),
           notes: form.notes.trim(),
         });
+      }
+      if (!editing) {
+        try {
+          localStorage.removeItem(CUSTOMER_DRAFT_KEY);
+        } catch {}
+        setHasCustomerDraft(false);
+        setRestoredFromCustomerDraft(false);
+        setCustomerDraftSavedAt(null);
       }
       setFormOpen(false);
       setEditing(null);
@@ -269,9 +425,19 @@ export default function Customers() {
         title="Customers"
         subtitle="Manage customer profiles, track receivables, send payment reminders, and record collections."
         actions={
-          <button className="btn-primary" onClick={openAdd}>
+          <button
+            className={`btn-primary flex items-center gap-1.5 shadow-sm ${
+              hasCustomerDraft ? 'ring-2 ring-amber-400/80 bg-gradient-to-r from-amber-600 to-brand-600' : ''
+            }`}
+            onClick={openAdd}
+          >
             <Plus className="h-4 w-4" />
-            <span>Add Customer</span>
+            <span>{hasCustomerDraft ? 'Resume Customer (Draft)' : 'Add Customer'}</span>
+            {hasCustomerDraft && (
+              <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 animate-pulse">
+                DRAFT
+              </span>
+            )}
           </button>
         }
       />
@@ -552,6 +718,23 @@ export default function Customers() {
           onClose={() => setFormOpen(false)}
         >
           <div className="space-y-4">
+            {restoredFromCustomerDraft && !editing && (
+              <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+                  <span className="font-semibold">
+                    Restored unsaved customer draft {customerDraftSavedAt ? `from ${formatRelativeDate(new Date(customerDraftSavedAt).toISOString())}` : ''}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearCustomerDraft}
+                  className="px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-200/70 hover:bg-amber-200 rounded-lg border border-amber-300 transition"
+                >
+                  Discard Draft &amp; Start Fresh
+                </button>
+              </div>
+            )}
             {formError && (
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-semibold flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
@@ -658,13 +841,24 @@ export default function Customers() {
               />
             </div>
 
-            <div className="flex justify-end gap-2 pt-4">
-              <button className="btn-secondary" onClick={() => setFormOpen(false)} disabled={isSubmitting}>
-                Cancel
-              </button>
-              <button className="btn-primary" onClick={handleSubmit} disabled={isSubmitting}>
-                {isSubmitting ? 'Saving...' : 'Save Customer'}
-              </button>
+            <div className="flex items-center justify-between pt-4 border-t border-slate-200">
+              {hasCustomerDraft && !editing ? (
+                <button
+                  type="button"
+                  onClick={clearCustomerDraft}
+                  className="btn-secondary text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+                >
+                  Discard Draft
+                </button>
+              ) : <div />}
+              <div className="flex gap-2">
+                <button className="btn-secondary" onClick={() => setFormOpen(false)} disabled={isSubmitting}>
+                  Cancel
+                </button>
+                <button className="btn-primary" onClick={handleSubmit} disabled={isSubmitting}>
+                  {isSubmitting ? 'Saving...' : 'Save Customer'}
+                </button>
+              </div>
             </div>
           </div>
         </Modal>
