@@ -176,7 +176,7 @@ export default function Products() {
   const handleExport = () => {
     const rows = filtered.map((p) => ({
       Name: p.name, Supplier: p.supplier,
-      Rack: p.rackNumber, EstStock: p.stock, BoxCapacity: p.boxCapacity,
+      Rack: p.rackNumber, ActualStock: p.stock, BoxCapacity: p.boxCapacity,
       BoxStatus: p.boxStatus, BoxStatusMode: p.boxStatusMode,
       Cost: p.cost.toFixed(2), Price: p.price.toFixed(2),
       ProfitPerPiece: (p.price - p.cost).toFixed(2),
@@ -286,7 +286,7 @@ export default function Products() {
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('name')}>Product Name <SortIcon col="name" /></th>
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('supplier')}>Supplier <SortIcon col="supplier" /></th>
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('rackNumber')}>Rack <SortIcon col="rackNumber" /></th>
-                <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('stock')}>Est. Stock <SortIcon col="stock" /></th>
+                <th className="table-th cursor-pointer select-none hover:text-slate-700 text-right" onClick={() => toggleSort('stock')}>Actual Stock <SortIcon col="stock" /></th>
                 <th className="table-th cursor-pointer select-none hover:text-slate-700" onClick={() => toggleSort('boxStatus')}>Box <SortIcon col="boxStatus" /></th>
                 <th className="table-th text-right">Selling</th>
                 <th className="table-th text-right">Profit</th>
@@ -316,20 +316,43 @@ export default function Products() {
                   <td className="table-td text-slate-600">{p.rackNumber}</td>
                   <td className="table-td text-right">
                     <div>
-                      <span className="font-bold tabular-nums text-slate-900">{p.stock.toLocaleString('en-IN')}</span>
-                      <span className="text-[11px] text-slate-400"> / min {p.reorderLevel.toLocaleString('en-IN')}</span>
-                    </div>
-                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1 max-w-[100px] ml-auto">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          p.stock === 0
-                            ? 'bg-rose-500'
-                            : p.stock <= p.reorderLevel
-                            ? 'bg-amber-500'
-                            : 'bg-emerald-500'
-                        }`}
-                        style={{ width: `${Math.min(100, Math.max(8, (p.stock / (p.boxCapacity || 1000)) * 100))}%` }}
-                      />
+                      {p.stock < 0 ? (
+                        <div className="flex flex-col items-end">
+                          <span className="font-bold tabular-nums text-rose-600 text-sm">
+                            {p.stock.toLocaleString('en-IN')} <span className="text-xs font-semibold">pcs</span>
+                          </span>
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-50 text-rose-600 border border-rose-200">
+                            Negative
+                          </span>
+                          {p.reorderLevel > 0 && (
+                            <span className="text-[11px] text-slate-400 mt-0.5">Min: {p.reorderLevel.toLocaleString('en-IN')} pcs</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="flex items-baseline justify-end gap-1">
+                            <span className={`font-bold tabular-nums ${p.stock === 0 ? 'text-rose-600' : p.stock <= p.reorderLevel ? 'text-amber-700' : 'text-slate-900'}`}>
+                              {p.stock.toLocaleString('en-IN')}
+                            </span>
+                            <span className="text-xs text-slate-400 font-medium">pcs</span>
+                          </div>
+                          {p.reorderLevel > 0 && (
+                            <div className="text-[11px] text-slate-400">Min: {p.reorderLevel.toLocaleString('en-IN')} pcs</div>
+                          )}
+                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1 max-w-[80px] ml-auto">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                p.stock === 0
+                                  ? 'bg-rose-500'
+                                  : p.stock <= p.reorderLevel
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                              }`}
+                              style={{ width: `${Math.min(100, Math.max(8, (p.stock / (p.boxCapacity || 1000)) * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </td>
                   <td className="table-td"><StatusBadge status={p.boxStatus} variant="box" /></td>

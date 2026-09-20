@@ -43,7 +43,7 @@ export default function VerificationModal({ open, product, onClose, onSave }: Ve
 
   const previousEstimate = product.stock;
 
-  const observedEstimate = mode === 'quantity' ? Math.max(0, quantity) : estimateFromBoxStatus(selectedStatus, product.boxCapacity);
+  const observedEstimate = mode === 'quantity' ? quantity : estimateFromBoxStatus(selectedStatus, product.boxCapacity);
 
   const handleSave = () => {
     const v: VerificationRecord = {
@@ -136,19 +136,17 @@ export default function VerificationModal({ open, product, onClose, onSave }: Ve
           </div>
         ) : (
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700">Approximate Remaining Quantity (Pieces)</label>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">Observed Quantity (Pieces)</label>
             <input
               type="number"
-              min="0"
               value={quantity || ''}
               {...autoSelectNumberProps}
               onChange={(e) => {
-                const clean = cleanLeadingZeros(e.target.value);
-                e.target.value = clean;
-                setQuantity(clean === '' ? 0 : parseInt(clean, 10) || 0);
+                const val = e.target.value;
+                setQuantity(val === '' ? 0 : parseInt(val, 10) || 0);
               }}
               placeholder="e.g. 3500"
-              className="input"
+              className={`input ${quantity < 0 ? 'text-rose-600 border-rose-300 font-semibold' : ''}`}
             />
             <div className="mt-2 flex items-center gap-2">
               <span className="text-xs text-slate-400">Box Status will be:</span>

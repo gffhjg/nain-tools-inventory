@@ -9,7 +9,7 @@ import type {
   ChequeRecord, ChequeStatus,
 } from '@/lib/types';
 
-export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>;
+export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'> & { stock?: number };
 
 type StoreContextValue = {
   products: Product[];
@@ -384,7 +384,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .filter((item) => !item.isCustom && (item.productId === p.id || item.name.trim().toLowerCase() === p.name.trim().toLowerCase()))
             .reduce((sum, item) => sum + item.qty, 0);
           if (itemQty === 0) return p;
-          const stock = Math.max(0, p.stock + (itemQty * mult));
+          const stock = p.stock + (itemQty * mult);
           stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
           const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
           const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -412,7 +412,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               .filter((i) => !i.isCustom && (i.productId === p.id || i.name.trim().toLowerCase() === p.name.trim().toLowerCase()))
               .reduce((sum, i) => sum + i.qty, 0);
             if (qty === 0) return p;
-            const stock = Math.max(0, p.stock + (qty * multDiff));
+            const stock = p.stock + (qty * multDiff);
             stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
             const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
             const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -443,7 +443,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .filter((item) => !item.isCustom && (item.productId === p.id || item.name.trim().toLowerCase() === p.name.trim().toLowerCase()))
             .reduce((sum, item) => sum + item.qty, 0);
           if (itemQty === 0) return p;
-          const stock = Math.max(0, p.stock + (itemQty * reverseMult));
+          const stock = p.stock + (itemQty * reverseMult);
           stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
           const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
           const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -475,7 +475,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const newQty = newMult !== 0 ? updatedSale.items.filter((i) => !i.isCustom && (i.productId === p.id || i.name.trim().toLowerCase() === p.name.trim().toLowerCase())).reduce((s, i) => s + i.qty, 0) : 0;
         const netChange = (newQty * newMult) - (oldQty * oldMult);
         if (netChange === 0) return p;
-        const stock = Math.max(0, p.stock + netChange);
+        const stock = p.stock + netChange;
         stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
         const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
         const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -550,7 +550,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               .filter((i) => !i.isCustom && i.productId === p.id)
               .reduce((sum, i) => sum + i.qty, 0);
             if (qty === 0) return p;
-            const stock = Math.max(0, p.stock + (qty * multDiff));
+            const stock = p.stock + (qty * multDiff);
             stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
             const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
             const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;
@@ -666,7 +666,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           .filter((item) => item.productId === p.id || item.name.trim().toLowerCase() === p.name.trim().toLowerCase())
           .reduce((sum, item) => sum + item.qty, 0);
         if (receivedQty === 0) return p;
-        const stock = Math.max(0, p.stock - receivedQty);
+        const stock = p.stock - receivedQty;
         stockUpdates.push({ id: p.id, stock, boxCapacity: p.boxCapacity, reorderLevel: p.reorderLevel });
         const computed = withComputed(stock, p.boxCapacity, p.reorderLevel);
         const boxStatus = p.boxStatusMode === 'manual' ? p.manualBoxStatus : computed.boxStatus;

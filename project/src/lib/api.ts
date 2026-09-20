@@ -385,7 +385,7 @@ export const api = {
     validateNonNegative(data.boxCapacity, 'Box capacity');
     validateNonNegative(data.reorderLevel, 'Reorder level');
     const db = await getDb();
-    const stock = Math.max(0, data.stock ?? data.initialStock ?? 0);
+    const stock = data.stock ?? data.initialStock ?? 0;
     const boxStatus = computeBoxStatus(stock, data.boxCapacity);
     const status = computeStockStatus(stock, data.reorderLevel);
     await db.query(
@@ -407,7 +407,7 @@ export const api = {
       const data = items[i];
       validateNonEmpty(data.name, `Product name (row ${i + 1})`);
       const id = `p${baseTimestamp}_${i}_${Math.random().toString(36).slice(2, 7)}`;
-      const stock = Math.max(0, data.stock ?? data.initialStock ?? 0);
+      const stock = data.stock ?? data.initialStock ?? 0;
       const boxCapacity = Math.max(0, data.boxCapacity || 500);
       const reorderLevel = Math.max(0, data.reorderLevel || 50);
       const cost = Math.max(0, data.cost || 0);
@@ -472,7 +472,6 @@ export const api = {
   },
 
   async updateProductStock(id: string, stock: number, boxCapacity: number, reorderLevel: number): Promise<void> {
-    validateNonNegative(stock, 'Stock');
     validateNonNegative(boxCapacity, 'Box capacity');
     validateNonNegative(reorderLevel, 'Reorder level');
     const db = await getDb();

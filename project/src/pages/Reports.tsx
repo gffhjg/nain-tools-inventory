@@ -227,7 +227,7 @@ export default function Reports() {
         rows = products.map((p) => ({
           Name: p.name, Supplier: p.supplier,
           Rack: p.rackNumber,
-          'Est. Stock': p.stock, 'Box Capacity': p.boxCapacity,
+          'Actual Stock': p.stock, 'Box Capacity': p.boxCapacity,
           'Reorder Level': p.reorderLevel,
           'Unit Cost': p.cost.toFixed(2), 'Unit Price': p.price.toFixed(2),
           'Profit / Piece': (p.price - p.cost).toFixed(2),
@@ -366,7 +366,7 @@ export default function Reports() {
         bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Purchases</span><span>${money(stats.totalPurchaseValue)}</span></div></div>`;
         break;
       case 'inventory':
-        bodyHTML += '<table><thead><tr><th>Product</th><th>Est. Stock</th><th>Box Cap.</th><th style="text-align:right;">Cost</th><th style="text-align:right;">Price</th><th style="text-align:right;">Profit</th><th style="text-align:right;">Value</th><th>Status</th></tr></thead><tbody>';
+        bodyHTML += '<table><thead><tr><th>Product</th><th>Actual Stock</th><th>Box Cap.</th><th style="text-align:right;">Cost</th><th style="text-align:right;">Price</th><th style="text-align:right;">Profit</th><th style="text-align:right;">Value</th><th>Status</th></tr></thead><tbody>';
         for (const p of products) {
           bodyHTML += `<tr><td>${escapeHtml(p.name)}</td><td>${p.stock}</td><td>${p.boxCapacity}</td><td style="text-align:right;">${money(p.cost)}</td><td style="text-align:right;">${money(p.price)}</td><td style="text-align:right;">${money(p.price - p.cost)}</td><td style="text-align:right;">${money(p.stock * p.cost)}</td><td>${escapeHtml(p.status)}</td></tr>`;
         }
@@ -1046,7 +1046,7 @@ function InventoryReport({ products }: { products: Product[] }) {
               <th className="table-th">Product</th>
               <th className="table-th">Supplier</th>
               <th className="table-th">Rack</th>
-              <th className="table-th text-right">Est. Stock</th>
+              <th className="table-th text-right">Actual Stock</th>
               <th className="table-th text-right">Box Cap.</th>
               <th className="table-th text-right">Reorder Level</th>
               <th className="table-th text-right">Unit Cost</th>

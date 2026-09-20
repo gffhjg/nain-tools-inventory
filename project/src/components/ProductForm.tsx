@@ -5,7 +5,7 @@ import { useStore } from '@/store/AppStore';
 import { formatRelativeDate } from '@/utils/analytics';
 import { handleNumericFocus, handleNumericClick, handleNumericKeyDown, cleanLeadingZeros } from '@/utils/numberInput';
 
-export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>;
+export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'> & { stock?: number };
 
 export const PRODUCT_DRAFT_KEY = 'nain_product_form_draft';
 
@@ -27,6 +27,7 @@ const empty: ProductFormData = {
   size: 'Standard',
   cost: 0,
   price: 0,
+  stock: 0,
   boxCapacity: 0,
   reorderLevel: 0,
   notes: '',
@@ -56,9 +57,9 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
 
   useEffect(() => {
     if (initial) {
-      const { id, status, boxStatus, stock, lastPhysicalObservation, ...rest } = initial;
-      void id; void status; void boxStatus; void stock; void lastPhysicalObservation;
-      setForm(rest);
+      const { id, status, boxStatus, lastPhysicalObservation, boxStatusMode, manualBoxStatus, ...rest } = initial;
+      void id; void status; void boxStatus; void lastPhysicalObservation; void boxStatusMode; void manualBoxStatus;
+      setForm({ ...rest, stock: initial.stock });
       setRestoredFromProductDraft(false);
     } else {
       try {
@@ -322,8 +323,25 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
         </div>
       </div>
 
-      {/* Box Capacity + Reorder Level */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {/* Actual Stock + Box Capacity + Reorder Level */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">Actual Stock (Pieces)</label>
+          <input
+            type="number"
+            value={form.stock ?? ''}
+            onFocus={handleNumericFocus}
+            onClick={handleNumericClick}
+            onKeyDown={handleNumericKeyDown}
+            onChange={(e) => {
+              const val = e.target.value;
+              update('stock', val === '' ? 0 : parseInt(val, 10) || 0);
+            }}
+            placeholder="0"
+            className={`input font-semibold ${(form.stock ?? 0) < 0 ? 'border-rose-400 text-rose-600 bg-rose-50/30' : ''}`}
+          />
+          <p className="mt-1 text-[11px] text-slate-400">Supports negative stock</p>
+        </div>
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">Box Capacity (Pieces)</label>
           <input
@@ -377,7 +395,7 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
       </div>
 
       <p className="text-xs text-slate-400">
-        Estimated Stock is calculated automatically from purchases and sales. Use Physical Verification to adjust it.
+        Actual Stock updates automatically with purchases and sales, or you can edit it directly here or through Physical Verification.
       </p>
 
       {/* Hidden submit for form Enter key, footer buttons used in modal */}

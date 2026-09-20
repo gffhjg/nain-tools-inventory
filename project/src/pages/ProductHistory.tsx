@@ -52,7 +52,7 @@ export default function ProductHistory() {
 
   const totalPurchased = purchaseHistory.reduce((s, { item }) => s + item.qty, 0);
   const totalSold = salesHistory.reduce((s, { item }) => s + item.qty, 0);
-  const calculatedEstimate = Math.max(0, totalPurchased - totalSold);
+  const calculatedEstimate = totalPurchased - totalSold;
   const profitPerPiece = product ? product.price - product.cost : 0;
   const lastVerification = verificationHistory[0];
 
@@ -183,11 +183,14 @@ export default function ProductHistory() {
         <div className="card p-5">
           <div className="flex items-center gap-2">
             <Boxes className="h-5 w-5 text-brand-600" />
-            <h3 className="font-semibold text-slate-800">Estimated Stock</h3>
+            <h3 className="font-semibold text-slate-800">Actual Stock</h3>
           </div>
-          <p className="mt-2 text-3xl font-bold text-slate-900">{product.stock.toLocaleString('en-IN')} <span className="text-base font-normal text-slate-400">pcs</span></p>
+          <p className={`mt-2 text-3xl font-bold ${product.stock < 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+            {product.stock.toLocaleString('en-IN')} <span className="text-base font-normal text-slate-400">pcs</span>
+            {product.stock < 0 && <span className="ml-2 text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">Negative Stock</span>}
+          </p>
           <p className="mt-1 text-sm text-slate-500">
-            Received {totalPurchased.toLocaleString('en-IN')} &minus; Sold {totalSold.toLocaleString('en-IN')} = {calculatedEstimate.toLocaleString('en-IN')}
+            Received {totalPurchased.toLocaleString('en-IN')} &minus; Sold {totalSold.toLocaleString('en-IN')} = {calculatedEstimate.toLocaleString('en-IN')} pcs
           </p>
           <p className="mt-1 text-xs text-slate-400">Adjusted by physical verification</p>
         </div>
