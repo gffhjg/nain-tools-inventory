@@ -3,6 +3,7 @@ import { ClipboardCheck, CheckCircle2 } from 'lucide-react';
 import Modal from '@/components/Modal';
 import StatusBadge from '@/components/StatusBadge';
 import { boxStatuses, computeBoxStatus } from '@/lib/constants';
+import { autoSelectNumberProps, cleanLeadingZeros } from '@/utils/numberInput';
 import type { Product, BoxStatus, VerificationRecord } from '@/lib/types';
 
 type VerificationModalProps = {
@@ -140,7 +141,12 @@ export default function VerificationModal({ open, product, onClose, onSave }: Ve
               type="number"
               min="0"
               value={quantity || ''}
-              onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 0)}
+              {...autoSelectNumberProps}
+              onChange={(e) => {
+                const clean = cleanLeadingZeros(e.target.value);
+                e.target.value = clean;
+                setQuantity(clean === '' ? 0 : parseInt(clean, 10) || 0);
+              }}
               placeholder="e.g. 3500"
               className="input"
             />

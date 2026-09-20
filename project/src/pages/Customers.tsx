@@ -5,6 +5,7 @@ import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
 import { useStore } from '@/store/AppStore';
 import { money, formatRelativeDate } from '@/utils/analytics';
+import { autoSelectNumberProps, cleanLeadingZeros } from '@/utils/numberInput';
 import { indianStates, getStateCode, validateGstin } from '@/lib/constants';
 import type { Customer, SaleStatus, PaymentMethod, ChequeRecord, SaleRecord } from '@/lib/types';
 
@@ -898,7 +899,12 @@ export default function Customers() {
               <input
                 type="number"
                 value={paymentAmount}
-                onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
+                {...autoSelectNumberProps}
+                onChange={(e) => {
+                  const clean = cleanLeadingZeros(e.target.value);
+                  e.target.value = clean;
+                  setPaymentAmount(clean === '' ? 0 : parseFloat(clean) || 0);
+                }}
                 className="input font-bold text-emerald-700"
               />
             </div>

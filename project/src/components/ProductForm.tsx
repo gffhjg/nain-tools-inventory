@@ -3,6 +3,7 @@ import { Upload, Image as ImageIcon, Plus, List } from 'lucide-react';
 import type { Product } from '@/lib/types';
 import { useStore } from '@/store/AppStore';
 import { formatRelativeDate } from '@/utils/analytics';
+import { handleNumericFocus, handleNumericClick, handleNumericKeyDown, cleanLeadingZeros } from '@/utils/numberInput';
 
 export type ProductFormData = Omit<Product, 'id' | 'status' | 'boxStatus' | 'stock' | 'lastPhysicalObservation' | 'boxStatusMode' | 'manualBoxStatus'>;
 
@@ -286,7 +287,14 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
             min="0"
             step="0.01"
             value={form.cost || ''}
-            onChange={(e) => update('cost', parseFloat(e.target.value) || 0)}
+            onFocus={handleNumericFocus}
+            onClick={handleNumericClick}
+            onKeyDown={handleNumericKeyDown}
+            onChange={(e) => {
+              const clean = cleanLeadingZeros(e.target.value);
+              e.target.value = clean;
+              update('cost', clean === '' ? 0 : parseFloat(clean) || 0);
+            }}
             placeholder="0.00"
             className={inputCls('cost')}
           />
@@ -299,7 +307,14 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
             min="0"
             step="0.01"
             value={form.price || ''}
-            onChange={(e) => update('price', parseFloat(e.target.value) || 0)}
+            onFocus={handleNumericFocus}
+            onClick={handleNumericClick}
+            onKeyDown={handleNumericKeyDown}
+            onChange={(e) => {
+              const clean = cleanLeadingZeros(e.target.value);
+              e.target.value = clean;
+              update('price', clean === '' ? 0 : parseFloat(clean) || 0);
+            }}
             placeholder="0.00"
             className={inputCls('price')}
           />
@@ -315,7 +330,14 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
             type="number"
             min="1"
             value={form.boxCapacity || ''}
-            onChange={(e) => update('boxCapacity', parseInt(e.target.value, 10) || 0)}
+            onFocus={handleNumericFocus}
+            onClick={handleNumericClick}
+            onKeyDown={handleNumericKeyDown}
+            onChange={(e) => {
+              const clean = cleanLeadingZeros(e.target.value);
+              e.target.value = clean;
+              update('boxCapacity', clean === '' ? 0 : parseInt(clean, 10) || 0);
+            }}
             placeholder="e.g. 5000"
             className={inputCls('boxCapacity')}
           />
@@ -327,7 +349,14 @@ export default function ProductForm({ initial, onSubmit, onCancel }: ProductForm
             type="number"
             min="0"
             value={form.reorderLevel || ''}
-            onChange={(e) => update('reorderLevel', parseInt(e.target.value, 10) || 0)}
+            onFocus={handleNumericFocus}
+            onClick={handleNumericClick}
+            onKeyDown={handleNumericKeyDown}
+            onChange={(e) => {
+              const clean = cleanLeadingZeros(e.target.value);
+              e.target.value = clean;
+              update('reorderLevel', clean === '' ? 0 : parseInt(clean, 10) || 0);
+            }}
             placeholder="0"
             className={inputCls('reorderLevel')}
           />

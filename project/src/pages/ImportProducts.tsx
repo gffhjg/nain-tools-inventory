@@ -5,6 +5,7 @@ import { Upload, FileSpreadsheet, Download, Info, CheckCircle2, AlertTriangle, X
 import PageHeader from '@/components/PageHeader';
 import { useStore, type ProductFormData } from '@/store/AppStore';
 import { downloadCSV, toCSV } from '@/utils/analytics';
+import { autoSelectNumberProps, cleanLeadingZeros } from '@/utils/numberInput';
 
 type ImportedRow = {
   id: string;
@@ -632,7 +633,12 @@ export default function ImportProducts() {
                         type="number"
                         min="0"
                         value={r.initialStock}
-                        onChange={(e) => updateRowField(r.id, 'initialStock', parseInt(e.target.value, 10) || 0)}
+                        {...autoSelectNumberProps}
+                        onChange={(e) => {
+                          const clean = cleanLeadingZeros(e.target.value);
+                          e.target.value = clean;
+                          updateRowField(r.id, 'initialStock', clean === '' ? 0 : parseInt(clean, 10) || 0);
+                        }}
                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
                       />
                     </td>
@@ -640,7 +646,12 @@ export default function ImportProducts() {
                       <input
                         type="number"
                         value={r.cost}
-                        onChange={(e) => updateRowField(r.id, 'cost', parseFloat(e.target.value) || 0)}
+                        {...autoSelectNumberProps}
+                        onChange={(e) => {
+                          const clean = cleanLeadingZeros(e.target.value);
+                          e.target.value = clean;
+                          updateRowField(r.id, 'cost', clean === '' ? 0 : parseFloat(clean) || 0);
+                        }}
                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
                       />
                     </td>
@@ -648,7 +659,12 @@ export default function ImportProducts() {
                       <input
                         type="number"
                         value={r.price}
-                        onChange={(e) => updateRowField(r.id, 'price', parseFloat(e.target.value) || 0)}
+                        {...autoSelectNumberProps}
+                        onChange={(e) => {
+                          const clean = cleanLeadingZeros(e.target.value);
+                          e.target.value = clean;
+                          updateRowField(r.id, 'price', clean === '' ? 0 : parseFloat(clean) || 0);
+                        }}
                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
                       />
                     </td>

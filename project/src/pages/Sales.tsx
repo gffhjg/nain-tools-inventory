@@ -11,7 +11,7 @@ import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import { printInvoice } from '@/components/PrintableInvoice';
-import { ActiveItemSpotlight } from '@/components/ActiveItemSpotlight';
+import { ERPProductItemsManager } from '@/components/ActiveItemSpotlight';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeGrandTotal, computeDiscountAmount, validateGstin } from '@/lib/constants';
 import {
@@ -27,6 +27,7 @@ import {
   type DateRange,
 } from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
+import { handleNumericFocus, handleNumericClick, handleNumericKeyDown, cleanLeadingZeros, autoSelectNumberProps } from '@/utils/numberInput';
 import type { SaleRecord, SaleStatus, InvoiceLineItem, PaymentMethod, DiscountType, Customer, ChequeRecord, ChequeStatus, Product } from '@/lib/types';
 
 function todayISO() {
@@ -4278,626 +4279,161 @@ export default function Sales() {
               </div>
             </div>
 
-            {/* Item Search & Selection */}
-            <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="block text-xs font-bold text-slate-700">Add Products to Invoice</label>
-                <div className="flex items-center gap-2">
+            {/* Inline Custom Product Creator */}
+            {isAddingCustom && (
+              <div className="rounded-xl border-2 border-purple-200 bg-purple-50/40 p-4 space-y-3 animate-fade-in mb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                      Custom Metal / Outsourced Product (Non-Inventory)
+                    </h4>
+                    <p className="text-[11px] text-purple-700">
+                      This item will <strong>not</strong> be saved to your product list, but earnings and profit will be added to your Gross Total and Reports.
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!isAddingSalesCatalogProduct) setSalesNewProdName(productSearch.trim());
-                      setIsAddingSalesCatalogProduct(!isAddingSalesCatalogProduct);
-                    }}
-                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 shadow-xs ${
-                      isAddingSalesCatalogProduct
-                        ? 'bg-emerald-600 text-white border-emerald-700'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                    }`}
+                    onClick={() => setIsAddingCustom(false)}
+                    className="text-purple-400 hover:text-purple-700 p-1"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add New Product Master</span>
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Product Description / Name *</label>
+                    <input
+                      type="text"
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      placeholder="e.g. Custom SS 304 Flange 50mm"
+                      className="input bg-white text-xs py-1.5 font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Selling Rate (₹) *</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={customPrice}
+                      {...autoSelectNumberProps}
+                      onChange={(e) => setCustomPrice(cleanLeadingZeros(e.target.value))}
+                      placeholder="0.00"
+                      className="input bg-white text-xs py-1.5 font-bold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1" title="Rate paid to the other seller or metal material cost">
+                      Sourcing Cost (₹)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={customCost}
+                      {...autoSelectNumberProps}
+                      onChange={(e) => setCustomCost(cleanLeadingZeros(e.target.value))}
+                      placeholder="0.00"
+                      className="input bg-white text-xs py-1.5 font-semibold text-emerald-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Qty</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={customQty}
+                      {...autoSelectNumberProps}
+                      onChange={(e) => setCustomQty(cleanLeadingZeros(e.target.value))}
+                      placeholder="1"
+                      className="input bg-white text-xs py-1.5 text-center font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">HSN Code</label>
+                    <input
+                      type="text"
+                      value={customHsn}
+                      onChange={(e) => setCustomHsn(e.target.value)}
+                      placeholder="7318150"
+                      className="input bg-white text-xs py-1.5 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingCustom(false)}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                  >
+                    Cancel
                   </button>
                   <button
                     type="button"
-                    onClick={() => setIsAddingCustom(!isAddingCustom)}
-                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 shadow-xs ${
-                      isAddingCustom
-                        ? 'bg-purple-600 text-white border-purple-700'
-                        : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                    }`}
+                    onClick={addCustomLine}
+                    disabled={!customName.trim() || !customPrice}
+                    className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>+ Custom / Direct-Sourced Product</span>
+                    <span>Add to Invoice</span>
                   </button>
                 </div>
               </div>
+            )}
 
-              {/* Inline Master Product Creator for Tax Invoice */}
-              {isAddingSalesCatalogProduct && (
-                <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50/60 p-3.5 space-y-3 animate-fade-in shadow-xs">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-emerald-600" />
-                        Create Permanent Product Master (Saves to Main Inventory Catalog)
-                      </h4>
-                      <p className="text-[11px] text-emerald-700">
-                        This item will be saved permanently to your Inventory list, with initial stock, rack and price.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingSalesCatalogProduct(false)}
-                      className="text-slate-400 hover:text-slate-600 text-xs font-bold"
-                    >
-                      ✕ Close
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                    <div className="sm:col-span-2">
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Product Name *</label>
-                      <input
-                        type="text"
-                        value={salesNewProdName}
-                        onChange={(e) => setSalesNewProdName(e.target.value)}
-                        placeholder="e.g. Hex Bolt M12 x 50mm SS"
-                        className="input text-xs bg-white font-medium"
-                        autoFocus
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Rack Location</label>
-                      <input
-                        type="text"
-                        value={salesNewProdRack}
-                        onChange={(e) => setSalesNewProdRack(e.target.value)}
-                        placeholder="e.g. A-01"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Selling Price (₹) *</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={salesNewProdPrice}
-                        onChange={(e) => setSalesNewProdPrice(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Cost Price (₹)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={salesNewProdCost}
-                        onChange={(e) => setSalesNewProdCost(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Initial Stock (Pcs)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={salesNewProdInitialStock}
-                        onChange={(e) => setSalesNewProdInitialStock(e.target.value)}
-                        placeholder="100"
-                        className="input text-xs bg-white font-mono text-emerald-800"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Invoice Qty (Pcs) *</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={salesNewProdQty}
-                        onChange={(e) => setSalesNewProdQty(e.target.value)}
-                        placeholder="1"
-                        className="input text-xs bg-white font-mono font-bold"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10.5px] text-emerald-800 font-medium">
-                      ✓ Saves to catalog &amp; adds item to this invoice.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCreateSalesCatalogProduct}
-                      className="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 flex items-center gap-1.5 shadow-sm"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Save &amp; Add to Invoice</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Inline Custom Product Creator */}
-              {isAddingCustom && (
-                <div className="rounded-xl border-2 border-purple-200 bg-purple-50/40 p-4 space-y-3 animate-fade-in">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-purple-500"></span>
-                        Custom Metal / Outsourced Product (Non-Inventory)
-                      </h4>
-                      <p className="text-[11px] text-purple-700">
-                        This item will <strong>not</strong> be saved to your product list, but earnings and profit will be added to your Gross Total and Reports.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingCustom(false)}
-                      className="text-purple-400 hover:text-purple-700 p-1"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
-                    <div className="md:col-span-2">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Product Description / Name *</label>
-                      <input
-                        type="text"
-                        value={customName}
-                        onChange={(e) => setCustomName(e.target.value)}
-                        placeholder="e.g. Custom SS 304 Flange 50mm"
-                        className="input bg-white text-xs py-1.5 font-medium"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Selling Rate (₹) *</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={customPrice}
-                        onChange={(e) => setCustomPrice(e.target.value)}
-                        placeholder="0.00"
-                        className="input bg-white text-xs py-1.5 font-bold text-slate-800"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1" title="Rate paid to the other seller or metal material cost">
-                        Sourcing Cost (₹)
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={customCost}
-                        onChange={(e) => setCustomCost(e.target.value)}
-                        placeholder="0.00"
-                        className="input bg-white text-xs py-1.5 font-semibold text-emerald-700"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Qty</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={customQty}
-                        onChange={(e) => setCustomQty(e.target.value)}
-                        placeholder="1"
-                        className="input bg-white text-xs py-1.5 text-center font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">HSN Code</label>
-                      <input
-                        type="text"
-                        value={customHsn}
-                        onChange={(e) => setCustomHsn(e.target.value)}
-                        placeholder="7318150"
-                        className="input bg-white text-xs py-1.5 font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingCustom(false)}
-                      className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={addCustomLine}
-                      disabled={!customName.trim() || !customPrice}
-                      className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add to Invoice</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Active Item Spotlight (Prominently represented at the top) */}
-              <ActiveItemSpotlight
-                activeItem={activeLineItem}
-                product={activeProduct}
-                lineNumber={activeLineIndex >= 0 ? activeLineIndex + 1 : undefined}
-                isJustAdded={activeLineItem ? activeLineItem.productId === justAddedLineId : false}
-                mode="sale"
-                onUpdateName={(n) => activeLineItem && updateLineName(activeLineItem.productId, n)}
-                onUpdateHsn={(h) => activeLineItem && updateLineHsn(activeLineItem.productId, h)}
-                onUpdateQty={(q) => activeLineItem && setQty(activeLineItem.productId, q)}
-                onUpdatePrice={(p) => activeLineItem && setPrice(activeLineItem.productId, p)}
-                onUpdateDiscount={(d) => activeLineItem && setLineDiscount(activeLineItem.productId, d)}
-                onRemove={() => activeLineItem && removeLine(activeLineItem.productId)}
-              />
-
-              {/* Product Search & Quick Add Bar */}
-              <div className="space-y-2">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        if (searchResults.length > 0) {
-                          addLine(searchResults[0].id);
-                          setProductSearch('');
-                        }
-                      } else if (e.key === 'Escape') {
-                        setProductSearch('');
-                      }
-                    }}
-                    placeholder="Search 990+ products (e.g. ss304, allen bolt, 5x10)... Press Enter to Add"
-                    className="input pl-9 pr-8 py-2 bg-white text-xs font-medium w-full border border-slate-300 focus:border-brand-500 rounded-xl shadow-2xs"
-                  />
-                  {productSearch && (
-                    <button
-                      type="button"
-                      onClick={() => setProductSearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Instant Search Results Dropdown / Quick-Pick List */}
-                {productSearch.trim() && (
-                  <div className="rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden animate-fade-in divide-y divide-slate-100">
-                    <div className="bg-slate-100/80 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
-                      <span>
-                        Matching Products ({searchResults.length} {searchResults.length === 1 ? 'item' : 'items'} found)
-                      </span>
-                      <span className="text-slate-400 text-[10.5px]">Click &quot;+ Add&quot; or press Enter to add top match</span>
-                    </div>
-
-                    {searchResults.length === 0 ? (
-                      <div className="p-4 flex flex-col sm:flex-row items-center justify-between bg-purple-50/50 gap-2">
-                        <div className="text-xs text-purple-900">
-                          <span className="font-semibold">No catalog match for &quot;{productSearch}&quot;.</span>
-                          <span className="text-purple-600 block text-[11px]">Save as permanent product master or add as one-off custom item.</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSalesNewProdName(productSearch.trim());
-                              setIsAddingSalesCatalogProduct(true);
-                            }}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs flex items-center gap-1"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>+ Create &quot;{productSearch}&quot; as Product Master</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCustomName(productSearch.trim());
-                              setIsAddingCustom(true);
-                            }}
-                            className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs"
-                          >
-                            + Add as Custom Item
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
-                        {searchResults.map((p) => {
-                          const addedLine = lines.find((l) => l.productId === p.id);
-                          return (
-                            <div
-                              key={p.id}
-                              className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
-                                addedLine ? 'bg-indigo-50/40 hover:bg-indigo-50/70' : 'hover:bg-slate-50'
-                              }`}
-                            >
-                              <div className="flex-1 pr-3">
-                                <p className="font-bold text-slate-800 leading-tight">{p.name}</p>
-                                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500 flex-wrap">
-                                  {p.rackNumber && (
-                                    <span className="text-slate-600 font-medium">Rack: <strong className="text-slate-800">{p.rackNumber}</strong></span>
-                                  )}
-                                  <span>
-                                    Avail. Stock:{' '}
-                                    <strong className={p.stock <= 0 ? 'text-rose-600' : 'text-emerald-700'}>
-                                      {p.stock} pcs
-                                    </strong>
-                                  </span>
-                                  {p.hsnCode && (
-                                    <span className="font-mono text-slate-400">HSN: {p.hsnCode}</span>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="text-xs font-bold text-brand-600 font-mono">{money(p.price)}</span>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setQuickEditProduct(p);
-                                    setQuickEditFormData({
-                                      name: p.name,
-                                      supplier: p.supplier || '',
-                                      rackNumber: p.rackNumber || '',
-                                      cost: p.cost || 0,
-                                      price: p.price || 0,
-                                      stock: p.stock || 0,
-                                      boxCapacity: p.boxCapacity || 1000,
-                                      reorderLevel: p.reorderLevel || 100,
-                                      hsnCode: p.hsnCode || '7318150',
-                                      notes: p.notes || '',
-                                    });
-                                    setQuickEditProductModalOpen(true);
-                                  }}
-                                  className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition"
-                                  title="Quick Edit Product Master"
-                                >
-                                  <Edit3 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    addLine(p.id);
-                                  }}
-                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-xs ${
-                                    addedLine
-                                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                                      : 'bg-brand-600 text-white hover:bg-brand-700'
-                                  }`}
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                  <span>{addedLine ? `Added (${addedLine.qty})` : '+ Add'}</span>
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Items Added to Invoice */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                  <ShoppingCart className="w-4 h-4 text-brand-600" />
-                  <span>Items Added to Invoice</span>
-                  <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-extrabold bg-brand-100 text-brand-800 border border-brand-200">
-                    {lines.length} {lines.length === 1 ? 'item' : 'items'}
-                  </span>
-                </label>
-                {lines.length > 0 && (
-                  <span className="text-xs font-bold text-slate-600">
-                    Subtotal: <strong className="text-brand-700 font-mono">{money(subtotal)}</strong>
-                  </span>
-                )}
-              </div>
-
-              {lines.length > 0 ? (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-100">
-                      <tr>
-                        <th className="px-2 py-2.5 font-bold text-slate-600 text-center w-12">Sr.</th>
-                        <th className="px-3 py-2.5 font-bold text-slate-600">Product</th>
-                        <th className="px-3 py-2.5 font-bold text-slate-600 text-center w-24">Avail. Stock</th>
-                        <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-center">Qty</th>
-                        <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Rate (₹)</th>
-                        <th className="px-3 py-2.5 font-bold text-slate-600 w-24 text-right">Disc %</th>
-                        <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Net Rate (₹)</th>
-                        <th className="px-3 py-2.5 font-bold text-slate-600 w-28 text-right">Total (₹)</th>
-                        <th className="px-3 py-2.5 text-right w-24">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {lines.map((l, idx) => {
-                        const prod = products.find((p) => p.id === l.productId);
-                        const availStock = prod ? prod.stock : 0;
-                        const discPct = l.discount || 0;
-                        const netRate = l.price * (1 - discPct / 100);
-                        const lineNet = l.qty * netRate;
-                        const isOverStock = !l.isCustom && l.qty > availStock;
-                        const isActive = l.productId === activeLineItem?.productId;
-                        return (
-                          <tr
-                            key={l.productId}
-                            onClick={() => {
-                              setActiveLineProductId(l.productId);
-                              setJustAddedLineId(null);
-                            }}
-                            className={`transition cursor-pointer ${
-                              isActive
-                                ? 'bg-brand-50/70 border-l-4 border-l-brand-600 ring-1 ring-brand-300/60'
-                                : l.isCustom
-                                ? 'bg-purple-50/20 hover:bg-purple-50/40'
-                                : 'hover:bg-slate-50'
-                            }`}
-                          >
-                            <td className="px-2 py-2.5 text-center font-bold text-slate-500">
-                              <div className="flex items-center justify-center gap-1">
-                                <span>{idx + 1}</span>
-                                {isActive && (
-                                  <span className="w-2 h-2 rounded-full bg-brand-600 shrink-0 animate-pulse" title="Active Selected Line" />
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <div>
-                                <div className="flex items-center gap-1.5">
-                                  <input
-                                    type="text"
-                                    value={l.name}
-                                    onChange={(e) => updateLineName(l.productId!, e.target.value)}
-                                    className="input py-1 px-2 text-xs font-bold text-slate-800 w-full min-w-[200px] bg-white border border-slate-200 hover:border-slate-300 focus:border-indigo-500 rounded-lg shadow-2xs"
-                                    placeholder="Product description..."
-                                    title="Type to customize item name or specifications directly on invoice"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenQuickEdit(l)}
-                                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg border border-slate-200 bg-white transition shrink-0 shadow-2xs"
-                                    title="Click to edit product master in catalog (stock, cost, rack)"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5" />
-                                  </button>
-                                  {l.isCustom && (
-                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 text-purple-700 border border-purple-200 shrink-0">
-                                      Custom
-                                    </span>
-                                  )}
-                                </div>
-                                {prod?.rackNumber && (
-                                  <p className="text-[10px] text-slate-400 font-normal">Rack: {prod.rackNumber}</p>
-                                )}
-                                {l.isCustom && l.cost !== undefined && l.cost > 0 && (
-                                  <p className="text-[10px] text-purple-600 font-medium">
-                                    Cost: {money(l.cost)} · Profit: {money(Math.max(0, netRate - l.cost))}/pc
-                                  </p>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2.5 text-center">
-                              {l.isCustom ? (
-                                <span className="text-[11px] font-bold text-slate-400 italic">Custom</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenQuickEdit(l)}
-                                  title="Click to edit product master stock or details"
-                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold transition hover:scale-105 cursor-pointer ${
-                                    isOverStock
-                                      ? 'bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200'
-                                      : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                                  }`}
-                                >
-                                  <span>{availStock}</span>
-                                  <Edit3 className="w-2.5 h-2.5 opacity-70" />
-                                </button>
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-center">
-                              <input
-                                type="number"
-                                value={l.qty || ''}
-                                onFocus={(e) => e.target.select()}
-                                onChange={(e) => setQty(l.productId, e.target.value)}
-                                className={`w-20 rounded-lg border px-2.5 py-1.5 text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
-                                  isOverStock
-                                    ? 'border-rose-400 bg-rose-50/50 text-rose-900 focus:ring-rose-500'
-                                    : 'border-slate-200 focus:border-indigo-500'
-                                }`}
-                              />
-                            </td>
-                            <td className="px-3 py-2.5 text-right">
-                              <input
-                                type="number"
-                                value={l.price || ''}
-                                onFocus={(e) => e.target.select()}
-                                onChange={(e) => {
-                                  const cleaned = e.target.value.replace(/^0+(?=\d)/, '');
-                                  setPrice(l.productId, parseFloat(cleaned) || 0);
-                                }}
-                                className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-right font-medium focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono"
-                              />
-                            </td>
-                            <td className="px-3 py-2.5 text-right">
-                              <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                step="0.01"
-                                value={l.discount ? l.discount : ''}
-                                placeholder="NIL"
-                                onFocus={(e) => e.target.select()}
-                                onChange={(e) => setLineDiscount(l.productId, e.target.value)}
-                                className="w-20 rounded-lg border border-slate-200 bg-amber-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-amber-700 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 placeholder:text-slate-400 placeholder:font-semibold font-mono"
-                              />
-                            </td>
-                            <td className="px-3 py-2.5 text-right">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={netRate && netRate !== l.price ? +netRate.toFixed(2) : ''}
-                                placeholder={l.price > 0 ? l.price.toFixed(2) : '0.00'}
-                                onFocus={(e) => e.target.select()}
-                                onChange={(e) => setLineNetRate(l.productId, e.target.value)}
-                                className="w-24 rounded-lg border border-slate-200 bg-indigo-50/30 px-2.5 py-1.5 text-xs text-right font-bold text-indigo-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 placeholder:text-slate-400 font-mono"
-                              />
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-bold text-slate-900 font-mono">
-                              {money(lineNet)}
-                            </td>
-                            <td className="px-3 py-2.5 text-right">
-                              <div className="flex items-center justify-end gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenQuickEdit(l)}
-                                  className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
-                                  title="Edit Product Master (Stock, Price, Rack, Details)"
-                                >
-                                  <Edit3 className="h-4 w-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => removeLine(l.productId)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition shadow-xs"
-                                  title="Remove item"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                  <span>Remove</span>
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 py-8 text-center">
-                  <Package className="mx-auto h-8 w-8 text-slate-300" />
-                  <p className="mt-2 text-xs font-bold text-slate-600">No products added yet</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;+ Add&quot; on any product in the catalog above to add it to this invoice.</p>
-                </div>
-              )}
-            </div>
+            {/* High-Speed ERP Product Items Manager: Top Initial Selector -> Top Selected Items Table -> Downward Moving Selector */}
+            <ERPProductItemsManager
+              title={
+                documentType === 'DEBIT NOTE'
+                  ? 'Debit Note Items'
+                  : documentType === 'PROFORMA INVOICE'
+                  ? 'Proforma Invoice Items'
+                  : documentType === 'PURCHASE ORDER'
+                  ? 'Company PO Items'
+                  : 'Invoice Line Items'
+              }
+              mode="sale"
+              items={lines.map((l) => ({
+                productId: l.productId,
+                name: l.name,
+                price: l.price,
+                qty: l.qty,
+                discount: l.discount,
+                discountType: l.discountType,
+                isCustom: l.isCustom,
+                hsnCode: l.hsnCode,
+                rackNumber: products.find((p) => p.id === l.productId)?.rackNumber,
+              }))}
+              products={products}
+              onAddItem={(productId) => addLine(productId)}
+              onUpdateQty={(productId, q) => setQty(productId, q)}
+              onUpdatePrice={(productId, p) => setPrice(productId, p)}
+              onUpdateDiscount={(productId, d) => setLineDiscount(productId, d)}
+              onUpdateName={(productId, n) => updateLineName(productId, n)}
+              onUpdateHsn={(productId, h) => updateLineHsn(productId, h)}
+              onRemoveItem={(productId) => removeLine(productId)}
+              onQuickEditProduct={(p) => {
+                setQuickEditProduct(p);
+                setQuickEditFormData({
+                  name: p.name,
+                  supplier: p.supplier || '',
+                  rackNumber: p.rackNumber || '',
+                  cost: p.cost || 0,
+                  price: p.price || 0,
+                  stock: p.stock || 0,
+                  boxCapacity: p.boxCapacity || 1000,
+                  reorderLevel: p.reorderLevel || 100,
+                  hsnCode: p.hsnCode || '7318150',
+                  notes: p.notes || '',
+                });
+                setQuickEditProductModalOpen(true);
+              }}
+              onOpenCustomModal={() => setIsAddingCustom(true)}
+            />
 
             {/* Calculations & GST */}
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3 text-xs">
@@ -4923,7 +4459,8 @@ export default function Sales() {
                         max="100"
                         step="0.5"
                         value={gstRate}
-                        onChange={(e) => setGstRate(Math.max(0, parseFloat(e.target.value) || 0))}
+                        {...autoSelectNumberProps}
+                        onChange={(e) => setGstRate(Math.max(0, parseFloat(cleanLeadingZeros(e.target.value)) || 0))}
                         className="w-14 rounded border border-slate-200 px-1.5 py-0.5 text-center text-xs font-bold text-brand-600 focus:border-brand-500 focus:outline-none"
                       />
                       <span className="text-xs font-bold text-slate-600">%</span>
@@ -5007,7 +4544,8 @@ export default function Sales() {
                       step="0.01"
                       value={discount || ''}
                       placeholder="0"
-                      onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                      {...autoSelectNumberProps}
+                      onChange={(e) => setDiscount(Math.max(0, parseFloat(cleanLeadingZeros(e.target.value)) || 0))}
                       className="w-28 rounded border border-slate-200 px-2 py-1 text-right text-xs font-bold text-slate-900 focus:border-brand-500 focus:outline-none"
                     />
                     {discountType === 'percent' && (
@@ -5037,8 +4575,8 @@ export default function Sales() {
                     step="1"
                     value={freightCharges || ''}
                     placeholder="0"
-                    onFocus={(e) => e.target.select()}
-                    onChange={(e) => setFreightCharges(e.target.value.replace(/^0+(?=\d)/, ''))}
+                    {...autoSelectNumberProps}
+                    onChange={(e) => setFreightCharges(cleanLeadingZeros(e.target.value))}
                     className="w-28 rounded border border-slate-200 px-2 py-1 text-right text-xs font-bold text-slate-900 focus:border-brand-500 focus:outline-none"
                   />
                 </div>
@@ -5297,7 +4835,8 @@ export default function Sales() {
                           max={grandTotal}
                           step="1"
                           value={partialPaidAmount}
-                          onChange={(e) => setPartialPaidAmount(e.target.value)}
+                          {...autoSelectNumberProps}
+                          onChange={(e) => setPartialPaidAmount(cleanLeadingZeros(e.target.value))}
                           placeholder="0"
                           className="input bg-white text-xs py-1.5 font-bold text-emerald-700"
                         />
@@ -6017,7 +5556,8 @@ export default function Sales() {
                 max={recordPaymentModalSale.grandTotal - (recordPaymentModalSale.amountPaid || 0)}
                 step="1"
                 value={recordPaymentAmount}
-                onChange={(e) => setRecordPaymentAmount(e.target.value)}
+                {...autoSelectNumberProps}
+                onChange={(e) => setRecordPaymentAmount(cleanLeadingZeros(e.target.value))}
                 placeholder="Enter collected amount"
                 className="input text-sm font-bold text-emerald-700 py-2 w-full"
                 autoFocus
@@ -6400,7 +5940,8 @@ export default function Sales() {
                   min="0"
                   step="1"
                   value={editChequeAmount}
-                  onChange={(e) => setEditChequeAmount(e.target.value)}
+                  {...autoSelectNumberProps}
+                  onChange={(e) => setEditChequeAmount(cleanLeadingZeros(e.target.value))}
                   className="input font-mono font-bold text-emerald-700 w-full"
                 />
               </div>
@@ -6476,7 +6017,14 @@ export default function Sales() {
                     type="number"
                     min="0"
                     value={quickEditFormData.stock}
-                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, stock: parseInt(e.target.value, 10) || 0 })}
+                    onFocus={handleNumericFocus}
+                    onClick={handleNumericClick}
+                    onKeyDown={handleNumericKeyDown}
+                    onChange={(e) => {
+                      const clean = cleanLeadingZeros(e.target.value);
+                      e.target.value = clean;
+                      setQuickEditFormData({ ...quickEditFormData, stock: clean === '' ? 0 : parseInt(clean, 10) || 0 });
+                    }}
                     className="input bg-white font-extrabold text-indigo-900 text-sm border-indigo-300 focus:border-indigo-600"
                   />
                   <p className="text-[10px] text-indigo-600 mt-1">Adjust database stock instantly</p>
@@ -6489,7 +6037,14 @@ export default function Sales() {
                     min="0"
                     step="0.01"
                     value={quickEditFormData.price}
-                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, price: parseFloat(e.target.value) || 0 })}
+                    onFocus={handleNumericFocus}
+                    onClick={handleNumericClick}
+                    onKeyDown={handleNumericKeyDown}
+                    onChange={(e) => {
+                      const clean = cleanLeadingZeros(e.target.value);
+                      e.target.value = clean;
+                      setQuickEditFormData({ ...quickEditFormData, price: clean === '' ? 0 : parseFloat(clean) || 0 });
+                    }}
                     className="input font-bold text-emerald-700"
                   />
                   <p className="text-[10px] text-slate-400 mt-1">Master selling price</p>
@@ -6504,7 +6059,14 @@ export default function Sales() {
                     min="0"
                     step="0.01"
                     value={quickEditFormData.cost}
-                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, cost: parseFloat(e.target.value) || 0 })}
+                    onFocus={handleNumericFocus}
+                    onClick={handleNumericClick}
+                    onKeyDown={handleNumericKeyDown}
+                    onChange={(e) => {
+                      const clean = cleanLeadingZeros(e.target.value);
+                      e.target.value = clean;
+                      setQuickEditFormData({ ...quickEditFormData, cost: clean === '' ? 0 : parseFloat(clean) || 0 });
+                    }}
                     className="input"
                   />
                 </div>
@@ -6578,7 +6140,14 @@ export default function Sales() {
                   min="0"
                   step="0.01"
                   value={quickCustomFormData.price}
-                  onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, price: parseFloat(e.target.value) || 0 })}
+                  onFocus={handleNumericFocus}
+                  onClick={handleNumericClick}
+                  onKeyDown={handleNumericKeyDown}
+                  onChange={(e) => {
+                    const clean = cleanLeadingZeros(e.target.value);
+                    e.target.value = clean;
+                    setQuickCustomFormData({ ...quickCustomFormData, price: clean === '' ? 0 : parseFloat(clean) || 0 });
+                  }}
                   className="input font-bold text-slate-900"
                 />
               </div>
@@ -6590,7 +6159,14 @@ export default function Sales() {
                   min="0"
                   step="0.01"
                   value={quickCustomFormData.cost}
-                  onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, cost: parseFloat(e.target.value) || 0 })}
+                  onFocus={handleNumericFocus}
+                  onClick={handleNumericClick}
+                  onKeyDown={handleNumericKeyDown}
+                  onChange={(e) => {
+                    const clean = cleanLeadingZeros(e.target.value);
+                    e.target.value = clean;
+                    setQuickCustomFormData({ ...quickCustomFormData, cost: clean === '' ? 0 : parseFloat(clean) || 0 });
+                  }}
                   className="input text-emerald-700"
                 />
               </div>
@@ -6603,7 +6179,14 @@ export default function Sales() {
                   type="number"
                   min="1"
                   value={quickCustomFormData.qty}
-                  onChange={(e) => setQuickCustomFormData({ ...quickCustomFormData, qty: parseInt(e.target.value, 10) || 1 })}
+                  onFocus={handleNumericFocus}
+                  onClick={handleNumericClick}
+                  onKeyDown={handleNumericKeyDown}
+                  onChange={(e) => {
+                    const clean = cleanLeadingZeros(e.target.value);
+                    e.target.value = clean;
+                    setQuickCustomFormData({ ...quickCustomFormData, qty: clean === '' ? 1 : parseInt(clean, 10) || 1 });
+                  }}
                   className="input text-center font-bold"
                 />
               </div>
@@ -6732,376 +6315,45 @@ export default function Sales() {
               </div>
             </div>
 
-            {/* Active Item Spotlight at Top */}
-            <ActiveItemSpotlight
-              activeItem={activeRawLineItem}
-              product={activeRawProduct}
-              lineNumber={activeRawLineIndex >= 0 ? activeRawLineIndex + 1 : undefined}
-              isJustAdded={activeRawLineItem ? activeRawLineItem.productId === justAddedRawLineId : false}
+            {/* High-Speed ERP Product Items Manager for Raw Sale */}
+            <ERPProductItemsManager
+              title="Items in Raw Sale"
               mode="sale"
-              onUpdateName={(n) => activeRawLineItem && updateRawLineName(activeRawLineItem.productId, n)}
-              onUpdateHsn={(h) => activeRawLineItem && updateRawLineHsn(activeRawLineItem.productId, h)}
-              onUpdateQty={(q) => activeRawLineItem && updateRawLineQty(activeRawLineItem.productId, q)}
-              onUpdatePrice={(p) => activeRawLineItem && updateRawLinePrice(activeRawLineItem.productId, p)}
-              onRemove={() => activeRawLineItem && removeRawLine(activeRawLineItem.productId)}
+              items={rawInvoiceLines.map((l) => ({
+                productId: l.productId,
+                name: l.name,
+                price: l.price,
+                qty: l.qty,
+                hsnCode: l.hsnCode,
+                rackNumber: products.find((p) => p.id === l.productId)?.rackNumber,
+              }))}
+              products={products}
+              onAddItem={(productId, p) => {
+                const prod = p || products.find((pr) => pr.id === productId);
+                if (prod) addRawProductToInvoice(prod);
+              }}
+              onUpdateQty={(productId, q) => updateRawLineQty(productId, q)}
+              onUpdatePrice={(productId, p) => updateRawLinePrice(productId, p)}
+              onUpdateName={(productId, n) => updateRawLineName(productId, n)}
+              onUpdateHsn={(productId, h) => updateRawLineHsn(productId, h)}
+              onRemoveItem={(productId) => removeRawLine(productId)}
+              onQuickEditProduct={(p) => {
+                setQuickEditProduct(p);
+                setQuickEditFormData({
+                  name: p.name,
+                  supplier: p.supplier || '',
+                  rackNumber: p.rackNumber || '',
+                  cost: p.cost || 0,
+                  price: p.price || 0,
+                  stock: p.stock || 0,
+                  boxCapacity: p.boxCapacity || 1000,
+                  reorderLevel: p.reorderLevel || 100,
+                  hsnCode: p.hsnCode || '7318150',
+                  notes: p.notes || '',
+                });
+                setQuickEditProductModalOpen(true);
+              }}
             />
-
-            {/* Fast Item Entry Bar for Raw Sale with New Product Master Trigger */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-700">Add Items to Raw Sale</span>
-                <button
-                  type="button"
-                  onClick={() => setIsAddingRawProduct(!isAddingRawProduct)}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1 shadow-xs shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Add New Product Master</span>
-                </button>
-              </div>
-
-              {/* Inline New Product Form for Raw Sale (No Category, No Size) */}
-              {isAddingRawProduct && (
-                <div className="p-3 bg-emerald-50/70 rounded-xl border-2 border-emerald-300 space-y-2.5 animate-fade-in shadow-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-emerald-600" />
-                      Add Brand New Product (Auto-creates Master &amp; Adds to Sale)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingRawProduct(false)}
-                      className="text-slate-400 hover:text-slate-600 text-xs font-bold"
-                    >
-                      ✕ Close
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                    <div className="sm:col-span-2">
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Product Name *</label>
-                      <input
-                        type="text"
-                        value={rawNewProdName}
-                        onChange={(e) => setRawNewProdName(e.target.value)}
-                        placeholder="e.g. Hex Bolt M10 x 40mm SS"
-                        className="input text-xs bg-white font-medium"
-                        autoFocus
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Rack Number</label>
-                      <input
-                        type="text"
-                        value={rawNewProdRack}
-                        onChange={(e) => setRawNewProdRack(e.target.value)}
-                        placeholder="e.g. A-1"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Selling Rate (₹) *</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={rawNewProdPrice}
-                        onChange={(e) => setRawNewProdPrice(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Cost Price (₹)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={rawNewProdCost}
-                        onChange={(e) => setRawNewProdCost(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Initial Stock (Pcs)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={rawNewProdInitialStock}
-                        onChange={(e) => setRawNewProdInitialStock(e.target.value)}
-                        placeholder="100"
-                        className="input text-xs bg-white font-mono text-emerald-800"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Sell Qty (Pcs) *</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={rawNewProdSellQty}
-                        onChange={(e) => setRawNewProdSellQty(e.target.value)}
-                        placeholder="1"
-                        className="input text-xs bg-white font-mono font-bold text-emerald-800"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10.5px] text-emerald-800 font-medium">
-                      ✓ Saves to product catalog &amp; immediately adds to cart below.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCreateRawNewProduct}
-                      className="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 flex items-center gap-1.5 shadow-sm"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Save &amp; Add to Sale</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Product Search & Quick Add Bar */}
-              <div className="space-y-2">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={rawProductSearch}
-                    onChange={(e) => setRawProductSearch(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        if (rawSearchResults.length > 0) {
-                          addRawProductToInvoice(rawSearchResults[0]);
-                          setRawProductSearch('');
-                        }
-                      } else if (e.key === 'Escape') {
-                        setRawProductSearch('');
-                      }
-                    }}
-                    placeholder="Search products by name, rack #... Press Enter to Add"
-                    className="input pl-9 pr-8 py-2 bg-white text-xs font-medium w-full border border-slate-300 focus:border-brand-500 rounded-xl shadow-2xs"
-                  />
-                  {rawProductSearch && (
-                    <button
-                      type="button"
-                      onClick={() => setRawProductSearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Instant Search Results Dropdown / Quick-Pick List */}
-                {rawProductSearch.trim() && (
-                  <div className="rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden animate-fade-in divide-y divide-slate-100">
-                    <div className="bg-slate-100/80 px-3 py-1.5 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600 font-semibold">
-                      <span>
-                        Matching Products ({rawSearchResults.length} {rawSearchResults.length === 1 ? 'item' : 'items'} found)
-                      </span>
-                      <span className="text-slate-400 text-[10.5px]">Click &quot;+ Add&quot; or press Enter to add top match</span>
-                    </div>
-
-                    {rawSearchResults.length === 0 ? (
-                      <div className="p-4 flex flex-col sm:flex-row items-center justify-between bg-emerald-50/50 gap-2">
-                        <div className="text-xs text-emerald-900">
-                          <span className="font-semibold">No catalog match for &quot;{rawProductSearch}&quot;.</span>
-                          <span className="text-emerald-700 block text-[11px]">Create it instantly as a permanent product master.</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRawNewProdName(rawProductSearch.trim());
-                            setIsAddingRawProduct(true);
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition whitespace-nowrap shadow-xs flex items-center gap-1"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>+ Create &quot;{rawProductSearch}&quot; as New Product</span>
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
-                        {rawSearchResults.map((p) => {
-                          const addedLine = rawInvoiceLines.find((l) => l.productId === p.id);
-                          return (
-                            <div
-                              key={p.id}
-                              className={`flex items-center justify-between p-2.5 transition text-left text-xs ${
-                                addedLine ? 'bg-emerald-50/50 hover:bg-emerald-50/80' : 'hover:bg-slate-50'
-                              }`}
-                            >
-                              <div className="min-w-0 flex-1 pr-3">
-                                <p className="font-bold text-slate-800 leading-tight truncate">{p.name}</p>
-                                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
-                                  {p.rackNumber && (
-                                    <span className="text-slate-600 font-medium">Rack: <strong className="text-slate-800">{p.rackNumber}</strong></span>
-                                  )}
-                                  <span>
-                                    Avail. Stock:{' '}
-                                    <strong className={p.stock <= 0 ? 'text-rose-600' : 'text-emerald-700'}>
-                                      {p.stock} pcs
-                                    </strong>
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="text-xs font-bold text-emerald-700 font-mono">{money(p.price)}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    addRawProductToInvoice(p);
-                                  }}
-                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-xs ${
-                                    addedLine
-                                      ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                                      : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                                  }`}
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                  <span>{addedLine ? `Added (${addedLine.qty})` : '+ Add'}</span>
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Selected Items Table */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h5 className="font-extrabold text-slate-800">
-                  Cart Items ({rawInvoiceLines.length})
-                </h5>
-                <span className="text-[11px] text-slate-500 font-semibold">
-                  Total Qty: {rawInvoiceLines.reduce((s, l) => s + l.qty, 0)} pcs
-                </span>
-              </div>
-
-              {rawInvoiceLines.length === 0 ? (
-                <div className="p-6 border-2 border-dashed border-slate-200 rounded-xl text-center text-slate-400">
-                  <ShoppingCart className="w-8 h-8 mx-auto mb-1 text-slate-300" />
-                  <p className="font-semibold">No items added to invoice yet</p>
-                  <p className="text-[11px]">Click items above to add them to this raw sale.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-xs">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 text-[11px] font-bold text-slate-600">
-                      <tr>
-                        <th className="px-2 py-2 text-center w-10">Sr.</th>
-                        <th className="px-3 py-2">Item Name</th>
-                        <th className="px-3 py-2 w-28 text-center">Qty</th>
-                        <th className="px-3 py-2 w-28 text-right">Rate (₹)</th>
-                        <th className="px-3 py-2 text-right">Total</th>
-                        <th className="px-2 py-2 w-10 text-center"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {rawInvoiceLines.map((line, idx) => {
-                        const lineTotal = +(line.price * line.qty).toFixed(2);
-                        const prod = products.find((p) => p.id === line.productId);
-                        const isOverStock = prod && line.qty > prod.stock;
-                        const isActive = line.productId === activeRawLineItem?.productId;
-
-                        return (
-                          <tr
-                            key={line.productId}
-                            onClick={() => {
-                              setActiveRawLineProductId(line.productId);
-                              setJustAddedRawLineId(null);
-                            }}
-                            className={`transition cursor-pointer ${
-                              isActive
-                                ? 'bg-brand-50/70 border-l-4 border-l-brand-600 ring-1 ring-brand-300/60'
-                                : isOverStock
-                                ? 'bg-rose-50/40 hover:bg-rose-50/60'
-                                : 'hover:bg-slate-50'
-                            }`}
-                          >
-                            <td className="px-2 py-2 text-center font-bold text-slate-500">
-                              <div className="flex items-center justify-center gap-1">
-                                <span>{idx + 1}</span>
-                                {isActive && (
-                                  <span className="w-1.5 h-1.5 rounded-full bg-brand-600 shrink-0 animate-pulse" title="Active Selected Line" />
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2">
-                              <p className="font-bold text-slate-900">{line.name}</p>
-                              {prod && (
-                                <p className={`text-[10px] ${isOverStock ? 'text-rose-600 font-bold' : 'text-slate-400'}`}>
-                                  In Stock: {prod.stock} {isOverStock && '— (Exceeds stock!)'}
-                                </p>
-                              )}
-                            </td>
-
-                            <td className="px-3 py-2">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => updateRawLineQty(line.productId!, line.qty - 1)}
-                                  className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700"
-                                >
-                                  -
-                                </button>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  value={line.qty}
-                                  onChange={(e) => updateRawLineQty(line.productId!, parseInt(e.target.value, 10) || 1)}
-                                  className="w-12 text-center font-bold input py-0.5 px-1 text-xs"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => updateRawLineQty(line.productId!, line.qty + 1)}
-                                  className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </td>
-
-                            <td className="px-3 py-2 text-right">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={line.price}
-                                onChange={(e) => updateRawLinePrice(line.productId!, parseFloat(e.target.value) || 0)}
-                                className="w-20 text-right font-mono font-bold input py-0.5 px-1 text-xs"
-                              />
-                            </td>
-
-                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900">
-                              {money(lineTotal)}
-                            </td>
-
-                            <td className="px-2 py-2 text-center">
-                              <button
-                                type="button"
-                                onClick={() => removeRawLine(line.productId!)}
-                                className="text-slate-400 hover:text-red-600 p-1 transition"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
 
             {/* Bill Summary & Actions */}
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">

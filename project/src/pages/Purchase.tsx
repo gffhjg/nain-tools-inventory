@@ -3,13 +3,13 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
   Trash2, Minus, Printer, CheckCircle2, Package, X, AlertTriangle, Sparkles,
-  ShoppingCart, ArrowRight, Landmark, CreditCard, Calendar,
+  ShoppingCart, ArrowRight, Landmark, CreditCard, Calendar, Edit3,
   Zap, Wallet, Receipt, SlidersHorizontal, ChevronDown, ChevronUp, RefreshCw
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
-import { ActiveItemSpotlight, FastItemEntryBar } from '@/components/ActiveItemSpotlight';
+import { ERPProductItemsManager } from '@/components/ActiveItemSpotlight';
 import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeDiscountAmount, computeGrandTotal, productCategories } from '@/lib/constants';
@@ -27,6 +27,7 @@ import {
   type DateRange,
 } from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
+import { handleNumericFocus, handleNumericClick, handleNumericKeyDown, cleanLeadingZeros, autoSelectNumberProps } from '@/utils/numberInput';
 import type { PurchaseRecord, PurchaseLineItem, PurchasePaymentMethod, SaleRecord, InvoiceLineItem, DiscountType, Product, ChequeStatus, Supplier } from '@/lib/types';
 
 const paymentTone: Record<PurchasePaymentMethod, string> = {
@@ -181,7 +182,7 @@ const PURCHASE_TIMELINE_STEPS: { id: DateRange; label: string; shortLabel: strin
 ];
 
 export default function Purchase() {
-  const { purchases, products, suppliers, sales, addPurchase, updatePurchase, deletePurchase, addSale, addProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
+  const { purchases, products, suppliers, sales, addPurchase, updatePurchase, deletePurchase, addSale, addProduct, updateProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [activePurchaseSubTab, setActivePurchaseSubTab] = useState<'bills' | 'raw-purchases'>('bills');
@@ -293,6 +294,22 @@ export default function Purchase() {
   const [recordPayChequeNo, setRecordPayChequeNo] = useState('');
   const [recordPayChequeBank, setRecordPayChequeBank] = useState('');
   const [recordPayChequeDate, setRecordPayChequeDate] = useState(todayISO());
+
+  // Quick Edit Product Master directly during Purchase workflows
+  const [quickEditProduct, setQuickEditProduct] = useState<Product | null>(null);
+  const [quickEditProductModalOpen, setQuickEditProductModalOpen] = useState(false);
+  const [quickEditFormData, setQuickEditFormData] = useState({
+    name: '',
+    supplier: '',
+    rackNumber: '',
+    cost: 0,
+    price: 0,
+    stock: 0,
+    boxCapacity: 1000,
+    reorderLevel: 100,
+    hsnCode: '7318150',
+    notes: '',
+  });
 
   const [productSearch, setProductSearch] = useState('');
   const [poCategory, setPoCategory] = useState('All');
@@ -1316,6 +1333,43 @@ export default function Purchase() {
 
   const removeRawPurLine = (productId: string) => {
     setRawPurLines((prev) => prev.filter((l) => l.productId !== productId));
+  };
+
+  const handleSaveQuickEditProduct = async () => {
+    if (!quickEditProduct) return;
+    try {
+      await updateProduct(quickEditProduct.id, {
+        name: quickEditFormData.name.trim(),
+        category: quickEditProduct.category || 'General',
+        size: quickEditProduct.size || 'Standard',
+        supplier: quickEditFormData.supplier?.trim() || quickEditProduct.supplier || 'Unassigned',
+        rackNumber: quickEditFormData.rackNumber.trim(),
+        cost: quickEditFormData.cost,
+        price: quickEditFormData.price,
+        stock: quickEditFormData.stock,
+        boxCapacity: quickEditFormData.boxCapacity || 1000,
+        reorderLevel: quickEditFormData.reorderLevel || 50,
+        hsnCode: quickEditFormData.hsnCode.trim() || '7318150',
+        notes: quickEditFormData.notes.trim(),
+        image: quickEditProduct.image || '',
+      });
+
+      // Synchronize in-memory line items
+      setLines((prev) =>
+        prev.map((l) => (l.productId === quickEditProduct.id ? { ...l, name: quickEditFormData.name.trim(), cost: quickEditFormData.cost } : l))
+      );
+      setPbLines((prev) =>
+        prev.map((l) => (l.productId === quickEditProduct.id ? { ...l, name: quickEditFormData.name.trim(), price: quickEditFormData.cost } : l))
+      );
+      setRawPurLines((prev) =>
+        prev.map((l) => (l.productId === quickEditProduct.id ? { ...l, name: quickEditFormData.name.trim(), price: quickEditFormData.cost } : l))
+      );
+
+      setQuickEditProductModalOpen(false);
+      setQuickEditProduct(null);
+    } catch (err) {
+      alert(`Failed to update product: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
   };
 
   const handleCreateRawPurNewProduct = async () => {
@@ -2926,271 +2980,47 @@ export default function Purchase() {
           </div>
 
           <div>
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-              <label className="block text-sm font-medium text-slate-700">Add Products</label>
-              <button
-                type="button"
-                onClick={() => setIsAddingNewProduct(!isAddingNewProduct)}
-                className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition flex items-center gap-1.5 shadow-xs ${
-                  isAddingNewProduct
-                    ? 'bg-emerald-600 text-white border-emerald-700'
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                }`}
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ Add New Product to Main Inventory</span>
-              </button>
-            </div>
-
-            {/* Inline New Product Creator */}
-            {isAddingNewProduct && (
-              <div className="mb-4 rounded-xl border-2 border-emerald-200 bg-emerald-50/40 p-4 space-y-3 animate-fade-in">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                      Add New Product to Main Inventory
-                    </h4>
-                    <p className="text-[11px] text-emerald-700">
-                      This new product will automatically be added to your <strong>Main Inventory & Catalog</strong> when this purchase order is received.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddingNewProduct(false)}
-                    className="text-emerald-400 hover:text-emerald-700 p-1"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                  <div className="sm:col-span-2">
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Product Name *</label>
-                    <input
-                      type="text"
-                      value={newProdName}
-                      onChange={(e) => setNewProdName(e.target.value)}
-                      placeholder="e.g. Hex Bolt SS 304 M12x50"
-                      className="input bg-white text-xs py-1.5 font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Purchase Cost (₹) *</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={newProdCost}
-                      onChange={(e) => setNewProdCost(e.target.value)}
-                      placeholder="0.00"
-                      className="input bg-white text-xs py-1.5 font-bold text-emerald-700"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Selling Rate (₹)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={newProdPrice}
-                      onChange={(e) => setNewProdPrice(e.target.value)}
-                      placeholder="0.00"
-                      className="input bg-white text-xs py-1.5 font-bold text-brand-600"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddingNewProduct(false)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={addNewProductLine}
-                    disabled={!newProdName.trim() || !newProdCost}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition disabled:opacity-50"
-                  >
-                    Save & Add Item
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Active Item Spotlight at Top */}
-            <ActiveItemSpotlight
-              activeItem={activePoLineItem ? {
-                productId: activePoLineItem.productId,
-                name: activePoLineItem.name,
-                price: activePoLineItem.cost,
-                cost: activePoLineItem.cost,
-                qty: activePoLineItem.qty,
-                hsnCode: activePoLineItem.hsnCode,
-              } : null}
-              product={activePoProduct}
-              lineNumber={activePoLineIndex >= 0 ? activePoLineIndex + 1 : undefined}
-              isJustAdded={activePoLineItem ? activePoLineItem.productId === justAddedPoLineId : false}
+            {/* High-Speed ERP Product Items Manager for Purchase Order */}
+            <ERPProductItemsManager
+              title="Items Added to Purchase Order"
               mode="purchase"
-              onUpdateName={(n) => activePoLineItem && updatePoLineName(activePoLineItem.productId, n)}
-              onUpdateHsn={(h) => activePoLineItem && updatePoLineHsn(activePoLineItem.productId, h)}
-              onUpdateQty={(q) => activePoLineItem && setQty(activePoLineItem.productId, q)}
-              onUpdatePrice={(p) => activePoLineItem && setCost(activePoLineItem.productId, p)}
-              onRemove={() => activePoLineItem && removeLine(activePoLineItem.productId)}
-            />
-
-            {/* Fast Item Entry Bar */}
-            <FastItemEntryBar
+              items={lines.map((l) => ({
+                productId: l.productId,
+                name: l.name,
+                price: l.cost,
+                cost: l.cost,
+                qty: l.qty,
+                hsnCode: l.hsnCode,
+                rackNumber: products.find((p) => p.id === l.productId)?.rackNumber,
+              }))}
               products={products}
-              mode="purchase"
-              placeholder="Fast item entry for purchase order..."
-              onAddItem={(item) => addLine(item.productId, item.qty, item.cost || item.price)}
+              onAddItem={(productId, p) => {
+                const prod = p || products.find((pr) => pr.id === productId);
+                const cost = prod ? prod.cost || prod.price : 0;
+                addLine(productId, 1, cost);
+              }}
+              onUpdateQty={(productId, q) => setQty(productId, q)}
+              onUpdatePrice={(productId, p) => setCost(productId, p)}
+              onUpdateName={(productId, n) => updatePoLineName(productId, n)}
+              onUpdateHsn={(productId, h) => updatePoLineHsn(productId, h)}
+              onRemoveItem={(productId) => removeLine(productId)}
+              onQuickEditProduct={(p) => {
+                setQuickEditProduct(p);
+                setQuickEditFormData({
+                  name: p.name,
+                  supplier: p.supplier || '',
+                  rackNumber: p.rackNumber || '',
+                  cost: p.cost || 0,
+                  price: p.price || 0,
+                  stock: p.stock || 0,
+                  boxCapacity: p.boxCapacity || 1000,
+                  reorderLevel: p.reorderLevel || 100,
+                  hsnCode: p.hsnCode || '7318150',
+                  notes: p.notes || '',
+                });
+                setQuickEditProductModalOpen(true);
+              }}
             />
-          </div>
-
-          {/* Items Added to Purchase Order */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                <ShoppingCart className="w-4 h-4 text-brand-600" />
-                <span>Items Added to Purchase Order</span>
-                <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-extrabold bg-brand-100 text-brand-800 border border-brand-200">
-                  {lines.length} {lines.length === 1 ? 'item' : 'items'}
-                </span>
-              </label>
-              {lines.length > 0 && (
-                <span className="text-xs font-bold text-slate-600">
-                  Subtotal: <strong className="text-brand-700 font-mono">₹{subtotal.toFixed(2)}</strong>
-                </span>
-              )}
-            </div>
-
-            {lines.length > 0 ? (
-              <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 font-bold text-slate-700">
-                    <tr>
-                      <th className="p-2.5 text-center w-12">Sr.</th>
-                      <th className="p-2.5">Product Name</th>
-                      <th className="p-2.5 text-center w-36">Qty (Pieces)</th>
-                      <th className="p-2.5 text-right w-28">Cost / Piece</th>
-                      <th className="p-2.5 text-right w-20">GST</th>
-                      <th className="p-2.5 text-right w-28">Total</th>
-                      <th className="p-2.5 text-center w-24">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {lines.map((l, idx) => {
-                      const isActive = l.productId === activePoLineItem?.productId;
-                      return (
-                        <tr
-                          key={l.productId}
-                          onClick={() => {
-                            setActivePoLineProductId(l.productId);
-                            setJustAddedPoLineId(null);
-                          }}
-                          className={`transition cursor-pointer ${
-                            isActive
-                              ? 'bg-brand-50/70 border-l-4 border-l-brand-600 ring-1 ring-brand-300/60'
-                              : l.isNewProduct
-                              ? 'bg-emerald-50/20 hover:bg-emerald-50/40'
-                              : 'hover:bg-slate-50/50'
-                          }`}
-                        >
-                          <td className="p-2.5 text-center font-bold text-slate-500">
-                            <div className="flex items-center justify-center gap-1">
-                              <span>{idx + 1}</span>
-                              {isActive && (
-                                <span className="w-1.5 h-1.5 rounded-full bg-brand-600 shrink-0 animate-pulse" title="Active Selected Line" />
-                              )}
-                            </div>
-                          </td>
-                          <td className="p-2.5">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <input
-                              type="text"
-                              value={l.name}
-                              onChange={(e) => updatePoLineName(l.productId, e.target.value)}
-                              className="input py-1 px-2 text-xs font-semibold text-slate-800 bg-white"
-                              placeholder="Product Name"
-                            />
-                            {l.isNewProduct && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-700 border border-emerald-200">
-                                + Auto-Adds to Main Inventory
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="p-2.5">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => updateQty(l.productId, -1)}
-                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
-                              title="Decrease quantity"
-                            >
-                              <Minus className="h-3.5 w-3.5" />
-                            </button>
-                            <input
-                              type="number"
-                              min="1"
-                              value={l.qty === 0 ? '' : l.qty}
-                              onChange={(e) => setQty(l.productId, e.target.value)}
-                              className="w-16 rounded-lg border border-slate-200 py-1 text-center text-xs font-bold tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateQty(l.productId, 1)}
-                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100"
-                              title="Increase quantity"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                        <td className="p-2.5 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <span className="text-slate-400 font-mono">₹</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={l.cost || ''}
-                              onChange={(e) => setCost(l.productId, parseFloat(e.target.value) || 0)}
-                              className="w-20 rounded-lg border border-slate-200 py-1 text-right text-xs font-bold tabular-nums focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20 font-mono"
-                            />
-                          </div>
-                        </td>
-                        <td className="p-2.5 text-right tabular-nums text-slate-500 font-mono">{l.gstRate}%</td>
-                        <td className="p-2.5 text-right font-bold tabular-nums text-slate-900 font-mono">
-                          ₹{(l.cost * l.qty).toFixed(2)}
-                        </td>
-                        <td className="p-2.5 text-center">
-                          <button
-                            type="button"
-                            onClick={() => removeLine(l.productId)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition shadow-xs"
-                            title="Remove item"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                            <span>Remove</span>
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 py-8 text-center">
-                <Package className="mx-auto h-8 w-8 text-slate-300" />
-                <p className="mt-2 text-xs font-bold text-slate-600">No products added yet</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;+ Add&quot; on any product in the catalog above to add it to this purchase order.</p>
-              </div>
-            )}
           </div>
 
           <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
@@ -3665,250 +3495,46 @@ export default function Purchase() {
               </div>
             </div>
 
-            {/* Product Selector */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-bold text-slate-700">Add Products to Purchase Bill</label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isAddingPbNewProduct) setPbNewProdName(pbProductSearch.trim());
-                    setIsAddingPbNewProduct(!isAddingPbNewProduct);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold transition flex items-center gap-1 shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Add New Product Master</span>
-                </button>
-              </div>
-
-              {/* Inline New Product Form for Purchase Bill */}
-              {isAddingPbNewProduct && (
-                <div className="mb-3 p-3 bg-emerald-50/60 rounded-xl border-2 border-emerald-300 space-y-2.5 animate-fade-in shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-emerald-900 flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-emerald-600" />
-                      Add Brand New Product Master (Auto-saves to Inventory)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingPbNewProduct(false)}
-                      className="text-slate-400 hover:text-slate-600 text-xs font-bold"
-                    >
-                      ✕ Close
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
-                    <div className="sm:col-span-2">
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Product Name *</label>
-                      <input
-                        type="text"
-                        value={pbNewProdName}
-                        onChange={(e) => setPbNewProdName(e.target.value)}
-                        placeholder="e.g. Hex Bolt M12 x 50mm SS 304"
-                        className="input text-xs bg-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Cost Price (₹)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={pbNewProdCost}
-                        onChange={(e) => setPbNewProdCost(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Selling Price (₹)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={pbNewProdPrice}
-                        onChange={(e) => setPbNewProdPrice(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10.5px] text-emerald-800 font-medium">
-                      ✓ Auto-creates product master in Inventory catalog &amp; appends line item to this bill.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCreatePbNewProduct}
-                      className="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 flex items-center gap-1.5 shadow-sm"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Save &amp; Add to Bill</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Active Item Spotlight (Represents current/last selected item at top) */}
-              <ActiveItemSpotlight
-                activeItem={activePbLineItem}
-                product={activePbProduct}
-                lineNumber={activePbLineIndex >= 0 ? activePbLineIndex + 1 : undefined}
-                isJustAdded={activePbLineItem ? activePbLineItem.productId === justAddedPbLineId : false}
-                mode="purchase"
-                onUpdateName={(n) => activePbLineItem && updatePbLineName(activePbLineItem.productId, n)}
-                onUpdateHsn={(h) => activePbLineItem && setPbLineHsn(activePbLineItem.productId, h)}
-                onUpdateQty={(q) => activePbLineItem && setPbLineQty(activePbLineItem.productId, q)}
-                onUpdatePrice={(p) => activePbLineItem && setPbLinePrice(activePbLineItem.productId, p)}
-                onRemove={() => activePbLineItem && removePbLine(activePbLineItem.productId)}
-              />
-
-              {/* Fast Item Entry Bar */}
-              <FastItemEntryBar
-                products={products}
-                mode="purchase"
-                placeholder="Fast item entry for purchase bill..."
-                onAddItem={(item) => addFastPbLine(item)}
-              />
-            </div>
-
-            {/* Items Added to Purchase Bill */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                  <ShoppingCart className="w-4 h-4 text-indigo-600" />
-                  <span>Items Added to Purchase Bill</span>
-                  <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                    {pbLines.length} {pbLines.length === 1 ? 'item' : 'items'}
-                  </span>
-                </label>
-                {pbLines.length > 0 && (
-                  <span className="text-xs font-bold text-slate-600">
-                    Subtotal: <strong className="text-indigo-700 font-mono">₹{pbSubtotal.toFixed(2)}</strong>
-                  </span>
-                )}
-              </div>
-
-              {pbLines.length > 0 ? (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 font-bold text-slate-700">
-                      <tr>
-                        <th className="p-2.5 text-center w-12">Sr.</th>
-                        <th className="p-2.5">Item Name</th>
-                        <th className="p-2.5 w-28">HSN Code</th>
-                        <th className="p-2.5 w-28 text-center">Qty</th>
-                        <th className="p-2.5 w-28 text-right">Price (₹)</th>
-                        <th className="p-2.5 w-28 text-right">Total (₹)</th>
-                        <th className="p-2.5 w-24 text-center">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {pbLines.map((l, idx) => {
-                        const isActive = l.productId === activePbLineItem?.productId;
-                        return (
-                          <tr
-                            key={l.productId}
-                            onClick={() => {
-                              setActivePbLineProductId(l.productId);
-                              setJustAddedPbLineId(null);
-                            }}
-                            className={`transition cursor-pointer ${
-                              isActive
-                                ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 ring-1 ring-indigo-300/60'
-                                : 'hover:bg-slate-50/50'
-                            }`}
-                          >
-                            <td className="p-2.5 text-center font-bold text-slate-500">
-                              <div className="flex items-center justify-center gap-1">
-                                <span>{idx + 1}</span>
-                                {isActive && (
-                                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 shrink-0 animate-pulse" title="Active Selected Line" />
-                                )}
-                              </div>
-                            </td>
-                          <td className="p-2.5">
-                            <input
-                              type="text"
-                              value={l.name}
-                              onChange={(e) => updatePbLineName(l.productId, e.target.value)}
-                              className="input p-1.5 text-xs font-semibold text-slate-900 bg-white"
-                              placeholder="Item Name"
-                            />
-                          </td>
-                          <td className="p-2.5">
-                            <input
-                              type="text"
-                              value={l.hsnCode || '7318150'}
-                              onChange={(e) => setPbLineHsn(l.productId, e.target.value)}
-                              className="input p-1 text-[11px] font-mono text-center bg-white"
-                            />
-                          </td>
-                          <td className="p-2.5">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => updatePbLineQty(l.productId, -1)}
-                                className="p-1 rounded hover:bg-slate-200 text-slate-500"
-                                title="Decrease quantity"
-                              >
-                                <Minus className="h-3 w-3" />
-                              </button>
-                              <input
-                                type="number"
-                                value={l.qty}
-                                onChange={(e) => setPbLineQty(l.productId, e.target.value)}
-                                className="w-14 text-center font-bold input p-1 bg-white"
-                                min={1}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => updatePbLineQty(l.productId, 1)}
-                                className="p-1 rounded hover:bg-slate-200 text-slate-500"
-                                title="Increase quantity"
-                              >
-                                <Plus className="h-3 w-3" />
-                              </button>
-                            </div>
-                          </td>
-                          <td className="p-2.5 text-right">
-                            <input
-                              type="number"
-                              value={l.price}
-                              onChange={(e) => setPbLinePrice(l.productId, e.target.value)}
-                              className="w-20 text-right font-semibold input p-1 ml-auto bg-white font-mono"
-                              step="0.01"
-                            />
-                          </td>
-                          <td className="p-2.5 text-right font-bold text-slate-900 font-mono">
-                            ₹{(l.price * l.qty).toFixed(2)}
-                          </td>
-                          <td className="p-2.5 text-center">
-                            <button
-                              type="button"
-                              onClick={() => removePbLine(l.productId)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition shadow-xs"
-                              title="Remove item"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                              <span>Remove</span>
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 py-8 text-center">
-                  <Package className="mx-auto h-8 w-8 text-slate-300" />
-                  <p className="mt-2 text-xs font-bold text-slate-600">No products added yet</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;+ Add&quot; on any product in the catalog above to add it to this purchase bill.</p>
-                </div>
-              )}
-            </div>
+            {/* High-Speed ERP Product Items Manager for Purchase Bill */}
+            <ERPProductItemsManager
+              title="Items Added to Purchase Bill"
+              mode="purchase"
+              items={pbLines.map((l) => ({
+                productId: l.productId,
+                name: l.name,
+                price: l.price,
+                cost: l.price,
+                qty: l.qty,
+                hsnCode: l.hsnCode,
+                rackNumber: products.find((p) => p.id === l.productId)?.rackNumber,
+              }))}
+              products={products}
+              onAddItem={(productId, p) => {
+                const prod = p || products.find((pr) => pr.id === productId);
+                if (prod) addPbLine(prod.id);
+              }}
+              onUpdateQty={(productId, q) => setPbLineQty(productId, q)}
+              onUpdatePrice={(productId, p) => setPbLinePrice(productId, p)}
+              onUpdateName={(productId, n) => updatePbLineName(productId, n)}
+              onUpdateHsn={(productId, h) => setPbLineHsn(productId, h)}
+              onRemoveItem={(productId) => removePbLine(productId)}
+              onQuickEditProduct={(p) => {
+                setQuickEditProduct(p);
+                setQuickEditFormData({
+                  name: p.name,
+                  supplier: p.supplier || '',
+                  rackNumber: p.rackNumber || '',
+                  cost: p.cost || 0,
+                  price: p.price || 0,
+                  stock: p.stock || 0,
+                  boxCapacity: p.boxCapacity || 1000,
+                  reorderLevel: p.reorderLevel || 100,
+                  hsnCode: p.hsnCode || '7318150',
+                  notes: p.notes || '',
+                });
+                setQuickEditProductModalOpen(true);
+              }}
+            />
 
             {/* Calculations Breakdown */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
@@ -3962,7 +3588,8 @@ export default function Purchase() {
                     <input
                       type="number"
                       value={pbDiscount}
-                      onChange={(e) => setPbDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                      {...autoSelectNumberProps}
+                      onChange={(e) => setPbDiscount(Math.max(0, parseFloat(cleanLeadingZeros(e.target.value)) || 0))}
                       className="input p-1.5 w-full text-right font-bold"
                       min={0}
                       max={100}
@@ -3983,8 +3610,8 @@ export default function Purchase() {
                       step="1"
                       value={pbFreightCharges}
                       placeholder="0"
-                      onFocus={(e) => e.target.select()}
-                      onChange={(e) => setPbFreightCharges(e.target.value.replace(/^0+(?=\d)/, ''))}
+                      {...autoSelectNumberProps}
+                      onChange={(e) => setPbFreightCharges(cleanLeadingZeros(e.target.value))}
                       className="input p-1.5 w-full text-right font-bold"
                     />
                   </div>
@@ -4375,7 +4002,8 @@ export default function Purchase() {
                 min="1"
                 step="0.01"
                 value={recordPayAmount}
-                onChange={(e) => setRecordPayAmount(e.target.value)}
+                {...autoSelectNumberProps}
+                onChange={(e) => setRecordPayAmount(cleanLeadingZeros(e.target.value))}
                 placeholder="Enter amount being paid"
                 className="input text-sm font-bold"
               />
@@ -4537,274 +4165,46 @@ export default function Purchase() {
               </div>
             </div>
 
-            {/* Product Selector for Raw Purchase */}
-            <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/70 space-y-2.5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <label className="font-extrabold text-slate-800 flex items-center gap-1.5">
-                  <Package className="w-4 h-4 text-emerald-600" />
-                  <span>Select Products to Inward (Adds to Stock)</span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={rawPurCategory}
-                    onChange={(e) => setRawPurCategory(e.target.value)}
-                    className="input py-1 text-xs font-semibold"
-                  >
-                    {availableCategories.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!isAddingRawPurProduct) setRawNewProdName(rawPurProductSearch.trim());
-                      setIsAddingRawPurProduct(!isAddingRawPurProduct);
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1 shadow-xs shrink-0"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ Add New Product</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Inline New Product Form for Raw Purchase */}
-              {isAddingRawPurProduct && (
-                <div className="p-3 bg-emerald-50/70 rounded-xl border-2 border-emerald-300 space-y-2.5 animate-fade-in shadow-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-emerald-600" />
-                      Add Brand New Product (Auto-creates Master &amp; Inwards to Purchase)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingRawPurProduct(false)}
-                      className="text-slate-400 hover:text-slate-600 text-xs font-bold"
-                    >
-                      ✕ Close
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-                    <div className="sm:col-span-2">
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Product Name *</label>
-                      <input
-                        type="text"
-                        value={rawNewProdName}
-                        onChange={(e) => setRawNewProdName(e.target.value)}
-                        placeholder="e.g. Hex Bolt M10 x 40mm SS"
-                        className="input text-xs bg-white font-medium"
-                        autoFocus
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Inward Cost Price (₹)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={rawNewProdCost}
-                        onChange={(e) => setRawNewProdCost(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Selling Price (₹)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={rawNewProdPrice}
-                        onChange={(e) => setRawNewProdPrice(e.target.value)}
-                        placeholder="0.00"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Rack / Shelf</label>
-                      <input
-                        type="text"
-                        value={rawNewProdRack}
-                        onChange={(e) => setRawNewProdRack(e.target.value)}
-                        placeholder="e.g. R-04"
-                        className="input text-xs bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10.5px] font-bold text-slate-700 mb-0.5">Inward Qty (Pcs) *</label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={rawNewProdInwardQty}
-                        onChange={(e) => setRawNewProdInwardQty(e.target.value)}
-                        placeholder="1"
-                        className="input text-xs bg-white font-mono font-bold text-emerald-800"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10.5px] text-emerald-800 font-medium">
-                      ✓ Saves to product catalog &amp; immediately adds to Inward Items below.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCreateRawPurNewProduct}
-                      className="btn-primary bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 flex items-center gap-1.5 shadow-sm"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Save &amp; Inward to Purchase</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Active Item Spotlight (Represents current/last selected item at top) */}
-              <ActiveItemSpotlight
-                activeItem={activeRawPurLineItem}
-                product={activeRawPurProduct}
-                lineNumber={activeRawPurLineIndex >= 0 ? activeRawPurLineIndex + 1 : undefined}
-                isJustAdded={activeRawPurLineItem ? activeRawPurLineItem.productId === justAddedRawPurLineId : false}
-                mode="purchase"
-                onUpdateName={(n) => activeRawPurLineItem && updateRawPurLineName(activeRawPurLineItem.productId, n)}
-                onUpdateHsn={(h) => activeRawPurLineItem && updateRawPurLineHsn(activeRawPurLineItem.productId, h)}
-                onUpdateQty={(q) => activeRawPurLineItem && updateRawPurLineQty(activeRawPurLineItem.productId, q)}
-                onUpdatePrice={(p) => activeRawPurLineItem && updateRawPurLineCost(activeRawPurLineItem.productId, p)}
-                onRemove={() => activeRawPurLineItem && removeRawPurLine(activeRawPurLineItem.productId)}
-              />
-
-              {/* Fast Item Entry Bar */}
-              <FastItemEntryBar
-                products={products}
-                mode="purchase"
-                placeholder="Fast item entry for raw purchase inward..."
-                onAddItem={(item) => addFastRawPurchaseLine(item)}
-              />
-            </div>
-
-            {/* Selected Inward Items Table */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h5 className="font-extrabold text-slate-800">
-                  Inward Items ({rawPurLines.length})
-                </h5>
-                <span className="text-[11px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                  ⚡ Stock to add: +{rawPurLines.reduce((s, l) => s + l.qty, 0)} pcs
-                </span>
-              </div>
-
-              {rawPurLines.length === 0 ? (
-                <div className="p-6 border-2 border-dashed border-slate-200 rounded-xl text-center text-slate-400">
-                  <ShoppingCart className="w-8 h-8 mx-auto mb-1 text-slate-300" />
-                  <p className="font-semibold">No items selected for inward yet</p>
-                  <p className="text-[11px]">Click items above to add them to this raw purchase.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-xs">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 text-[11px] font-bold text-slate-600">
-                      <tr>
-                        <th className="px-2 py-2 text-center w-10">Sr.</th>
-                        <th className="px-3 py-2">Item Name</th>
-                        <th className="px-3 py-2 w-28 text-center">Inward Qty</th>
-                        <th className="px-3 py-2 w-28 text-right">Cost Rate (₹)</th>
-                        <th className="px-3 py-2 text-right">Total</th>
-                        <th className="px-2 py-2 w-10 text-center"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {rawPurLines.map((line, idx) => {
-                        const lineTotal = +(line.price * line.qty).toFixed(2);
-                        const prod = products.find((p) => p.id === line.productId);
-                        const isActive = line.productId === activeRawPurLineItem?.productId;
-
-                        return (
-                          <tr
-                            key={line.productId}
-                            onClick={() => {
-                              if (line.productId) setActiveRawPurLineProductId(line.productId);
-                              setJustAddedRawPurLineId(null);
-                            }}
-                            className={`transition cursor-pointer ${
-                              isActive
-                                ? 'bg-emerald-50/70 border-l-4 border-l-emerald-600 ring-1 ring-emerald-300/60'
-                                : 'hover:bg-slate-50'
-                            }`}
-                          >
-                            <td className="px-2 py-2 text-center font-bold text-slate-500">
-                              <div className="flex items-center justify-center gap-1">
-                                <span>{idx + 1}</span>
-                                {isActive && (
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0 animate-pulse" title="Active Selected Line" />
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2">
-                              <p className="font-bold text-slate-900">{line.name}</p>
-                              {prod && (
-                                <p className="text-[10px] text-slate-400">
-                                  Current Stock: {prod.stock} → New: <strong className="text-emerald-700 font-bold">{prod.stock + line.qty}</strong>
-                                </p>
-                              )}
-                            </td>
-
-                            <td className="px-3 py-2">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => updateRawPurLineQty(line.productId!, line.qty - 1)}
-                                  className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700"
-                                >
-                                  -
-                                </button>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  value={line.qty}
-                                  onChange={(e) => updateRawPurLineQty(line.productId!, parseInt(e.target.value, 10) || 1)}
-                                  className="w-12 text-center font-bold input py-0.5 px-1 text-xs"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => updateRawPurLineQty(line.productId!, line.qty + 1)}
-                                  className="h-6 w-6 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </td>
-
-                            <td className="px-3 py-2 text-right">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={line.price}
-                                onChange={(e) => updateRawPurLineCost(line.productId!, parseFloat(e.target.value) || 0)}
-                                className="w-20 text-right font-mono font-bold input py-0.5 px-1 text-xs"
-                              />
-                            </td>
-
-                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900">
-                              {money(lineTotal)}
-                            </td>
-
-                            <td className="px-2 py-2 text-center">
-                              <button
-                                type="button"
-                                onClick={() => removeRawPurLine(line.productId!)}
-                                className="text-slate-400 hover:text-red-600 p-1 transition"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            {/* High-Speed ERP Product Items Manager for Raw Purchase Inward */}
+            <ERPProductItemsManager
+              title="Inward Items"
+              mode="purchase"
+              items={rawPurLines.map((l) => ({
+                productId: l.productId,
+                name: l.name,
+                price: l.price,
+                cost: l.price,
+                qty: l.qty,
+                hsnCode: l.hsnCode,
+                rackNumber: products.find((p) => p.id === l.productId)?.rackNumber,
+              }))}
+              products={products}
+              onAddItem={(productId, p) => {
+                const prod = p || products.find((pr) => pr.id === productId);
+                if (prod) addRawProductToPurchase(prod);
+              }}
+              onUpdateQty={(productId, q) => updateRawPurLineQty(productId, q)}
+              onUpdatePrice={(productId, p) => updateRawPurLineCost(productId, p)}
+              onUpdateName={(productId, n) => updateRawPurLineName(productId, n)}
+              onUpdateHsn={(productId, h) => updateRawPurLineHsn(productId, h)}
+              onRemoveItem={(productId) => removeRawPurLine(productId)}
+              onQuickEditProduct={(p) => {
+                setQuickEditProduct(p);
+                setQuickEditFormData({
+                  name: p.name,
+                  supplier: p.supplier || '',
+                  rackNumber: p.rackNumber || '',
+                  cost: p.cost || 0,
+                  price: p.price || 0,
+                  stock: p.stock || 0,
+                  boxCapacity: p.boxCapacity || 1000,
+                  reorderLevel: p.reorderLevel || 100,
+                  hsnCode: p.hsnCode || '7318150',
+                  notes: p.notes || '',
+                });
+                setQuickEditProductModalOpen(true);
+              }}
+            />
 
             {/* Bill Summary & Actions */}
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -4924,6 +4324,142 @@ export default function Purchase() {
                 className="btn-secondary text-xs"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Quick Edit Product Master Modal (Inside Purchase Process) */}
+      {quickEditProductModalOpen && quickEditProduct && (
+        <Modal
+          title={`Quick Edit Product Master — ${quickEditProduct.name}`}
+          size="md"
+          onClose={() => setQuickEditProductModalOpen(false)}
+        >
+          <div className="space-y-4 text-xs font-sans">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-900">
+              <p className="font-bold flex items-center gap-1.5">
+                <Edit3 className="w-4 h-4 text-blue-600" />
+                Updating Product Master directly during Purchase
+              </p>
+              <p className="text-[11px] text-blue-700 mt-0.5">
+                Changes saved here will update the master catalog database and immediately sync with your active transaction.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Product Name *</label>
+                <input
+                  type="text"
+                  value={quickEditFormData.name}
+                  onChange={(e) => setQuickEditFormData({ ...quickEditFormData, name: e.target.value })}
+                  className="input font-semibold text-slate-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-indigo-50/70 border border-indigo-200 p-2.5 rounded-xl">
+                  <label className="block font-bold text-indigo-900 mb-1 flex items-center justify-between">
+                    <span>Available Stock (Pcs)</span>
+                    <span className="text-[10px] font-extrabold bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded">Master</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={quickEditFormData.stock}
+                    onFocus={handleNumericFocus}
+                    onClick={handleNumericClick}
+                    onKeyDown={handleNumericKeyDown}
+                    onChange={(e) => {
+                      const clean = cleanLeadingZeros(e.target.value);
+                      e.target.value = clean;
+                      setQuickEditFormData({ ...quickEditFormData, stock: clean === '' ? 0 : parseInt(clean, 10) || 0 });
+                    }}
+                    className="input bg-white font-extrabold text-indigo-900 text-sm border-indigo-300 focus:border-indigo-600"
+                  />
+                  <p className="text-[10px] text-indigo-600 mt-1">Adjust database stock instantly</p>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Purchase Cost (₹) *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={quickEditFormData.cost}
+                    onFocus={handleNumericFocus}
+                    onClick={handleNumericClick}
+                    onKeyDown={handleNumericKeyDown}
+                    onChange={(e) => {
+                      const clean = cleanLeadingZeros(e.target.value);
+                      e.target.value = clean;
+                      setQuickEditFormData({ ...quickEditFormData, cost: clean === '' ? 0 : parseFloat(clean) || 0 });
+                    }}
+                    className="input font-bold text-emerald-700"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Master purchase cost</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Selling Rate (₹)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={quickEditFormData.price}
+                    onFocus={handleNumericFocus}
+                    onClick={handleNumericClick}
+                    onKeyDown={handleNumericKeyDown}
+                    onChange={(e) => {
+                      const clean = cleanLeadingZeros(e.target.value);
+                      e.target.value = clean;
+                      setQuickEditFormData({ ...quickEditFormData, price: clean === '' ? 0 : parseFloat(clean) || 0 });
+                    }}
+                    className="input"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Rack Location</label>
+                  <input
+                    type="text"
+                    value={quickEditFormData.rackNumber}
+                    onChange={(e) => setQuickEditFormData({ ...quickEditFormData, rackNumber: e.target.value })}
+                    placeholder="e.g. A-01"
+                    className="input"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">HSN Code</label>
+                <input
+                  type="text"
+                  value={quickEditFormData.hsnCode}
+                  onChange={(e) => setQuickEditFormData({ ...quickEditFormData, hsnCode: e.target.value })}
+                  className="input font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setQuickEditProductModalOpen(false)}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveQuickEditProduct}
+                className="btn-primary bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                Save & Update Transaction
               </button>
             </div>
           </div>
