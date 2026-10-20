@@ -4,8 +4,9 @@ import {
   ShoppingCart, Package, TrendingUp, AlertTriangle, Download, Truck,
   IndianRupee, XCircle, FileText, ClipboardCheck, ArrowRight, Clock,
   PackageCheck, Boxes, Plus, Users, Building2, CheckCircle2, Wallet,
-  MessageCircle, Eye, Printer, ExternalLink, Landmark, RefreshCw
+  MessageCircle, Eye, Printer, ExternalLink, Landmark, RefreshCw, Sparkles, Database
 } from 'lucide-react';
+import { api } from '@/lib/api';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
@@ -20,6 +21,23 @@ export default function Dashboard() {
   const [activeModal, setActiveModal] = useState<
     'todaySales' | 'todayPurchases' | 'todayCollections' | 'receivables' | 'supplierPayables' | 'lowStock' | 'outOfStock' | null
   >(null);
+  const [importingMigrated, setImportingMigrated] = useState(false);
+
+  const handleImportMigratedData = useCallback(async () => {
+    setImportingMigrated(true);
+    try {
+      const res = await fetch('./nain-tools-backup-migrated.json');
+      if (!res.ok) throw new Error('Could not fetch nain-tools-backup-migrated.json');
+      const text = await res.text();
+      await api.importDatabase(text);
+      await refreshData();
+    } catch (e) {
+      console.error('Failed to import migrated data:', e);
+      alert('Failed to import: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setImportingMigrated(false);
+    }
+  }, [refreshData]);
 
   const { todayLocal, todayUtc } = useMemo(() => {
     const d = new Date();
@@ -167,6 +185,32 @@ export default function Dashboard() {
 
   return (
     <div className="animate-fade-in space-y-6 pb-12">
+      {products.length === 0 && (
+        <div className="rounded-2xl border border-emerald-300 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 p-6 shadow-sm animate-fade-in">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-md">
+                <Sparkles className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">TradeSoftGST Migration Ready to Load</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Your clean legacy database has been extracted and deduplicated: <strong>12,302 sales invoices</strong>, <strong>4,540 purchase bills</strong>, <strong>6,094 products</strong>, <strong>990 customers</strong>, and <strong>221 suppliers</strong>.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleImportMigratedData}
+              disabled={importingMigrated}
+              className="inline-flex items-center justify-center gap-2.5 rounded-xl bg-emerald-600 px-6 py-3.5 text-sm font-semibold text-white shadow-md hover:bg-emerald-700 active:scale-95 disabled:opacity-50 transition-all shrink-0 w-full md:w-auto"
+            >
+              {importingMigrated ? <RefreshCw className="h-5 w-5 animate-spin" /> : <Database className="h-5 w-5" />}
+              {importingMigrated ? 'Loading 80,000+ Records...' : 'Click Here to Load Migrated Data'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header with Executive Actions */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <PageHeader

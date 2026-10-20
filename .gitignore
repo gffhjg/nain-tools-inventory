@@ -1,3 +1,4 @@
 node_modules/
 .env
 *.xlsx
+/nain-tools-backup-migrated.json

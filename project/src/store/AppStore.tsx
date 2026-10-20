@@ -195,12 +195,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const db = await getDb();
-        const { rows: wipeRows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'data_wipe_executed'");
-        if (wipeRows.length === 0 || wipeRows[0].value !== 'true') {
-          console.log('[AppStore] Executing complete data wipe as requested...');
-          await api.wipeAllData(true);
-          await db.exec("INSERT INTO _meta (key, value) VALUES ('data_wipe_executed', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true';");
-        }
+        await db.exec("INSERT INTO _meta (key, value) VALUES ('data_wipe_executed', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true';");
 
         const p = await api.getProducts();
         const [s, po, v, c, sup, chqs, firms] = await Promise.all([

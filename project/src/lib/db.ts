@@ -473,12 +473,40 @@ async function migrateSchema(db: PGlite): Promise<void> {
     try {
       await db.exec(`
         INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, firm_code, tag_color)
-        VALUES (1, 'Nain Tools & Bolt Co.', '24ABCDE1234F1Z5', 'ABCDE1234F', 'Plot 42, GIDC Industrial Estate, Jamnagar, Gujarat 361004', '+91 288 255 1234', 'sales@naintools.in', 'Gujarat', '24', 'HDFC Bank, Jamnagar Branch', '50200012345678', 'HDFC0001234', 'Jamnagar GIDC', 'NT1', 'brand')
-        ON CONFLICT (id) DO NOTHING;
+        VALUES (1, 'NAIN TOOLS & SS BOLT CO.', '06CCCPK0841B1ZA', 'CCCPK0841B', 'SHOP NO-3, 14/5, CHAWLA COLONY, MAIN MATHURA ROAD, FARIDABAD, HARYANA-121004', '0129-2244199, 9810844199', 'naintools@yahoo.com', 'HARYANA', '06', 'HDFC BANK LTD', '50200088182531', 'HDFC0002034', '14/5, MATHURA ROAD, FARIDABAD', 'NT1', 'brand')
+        ON CONFLICT (id) DO UPDATE SET
+          company_name = EXCLUDED.company_name,
+          gstin = EXCLUDED.gstin,
+          pan = EXCLUDED.pan,
+          address = EXCLUDED.address,
+          phone = EXCLUDED.phone,
+          email = EXCLUDED.email,
+          state = EXCLUDED.state,
+          state_code = EXCLUDED.state_code,
+          bank_name = EXCLUDED.bank_name,
+          bank_account = EXCLUDED.bank_account,
+          bank_ifsc = EXCLUDED.bank_ifsc,
+          bank_branch = EXCLUDED.bank_branch,
+          firm_code = EXCLUDED.firm_code,
+          tag_color = EXCLUDED.tag_color;
 
         INSERT INTO company_settings (id, company_name, gstin, pan, address, phone, email, state, state_code, bank_name, bank_account, bank_ifsc, bank_branch, firm_code, tag_color)
-        VALUES (2, 'Nain Fasteners & Hardware Co.', '24FGHIJ5678K1Z2', 'FGHIJ5678K', 'Shop 12, Fastener Market, Jamnagar, Gujarat 361001', '+91 288 255 5678', 'info@nainfasteners.in', 'Gujarat', '24', 'State Bank of India, Jamnagar', '30987654321', 'SBIN0001234', 'Main Branch', 'NT2', 'emerald')
-        ON CONFLICT (id) DO NOTHING;
+        VALUES (2, 'NR FASTNER', '06AVZPP6919K1ZJ', 'AVZPP6919K', 'PLOT NO. 14, GALI NO. 4, SARAI KHAWAJA, FARIDABAD, HARYANA-121003', '9810844199, 9899669856', 'nrfastner@gmail.com', 'HARYANA', '06', 'KOTAK MAHINDRA BANK', '9899669856', 'KKBK0004329', 'SECTOR 16, FARIDABAD', 'NT2', 'emerald')
+        ON CONFLICT (id) DO UPDATE SET
+          company_name = EXCLUDED.company_name,
+          gstin = EXCLUDED.gstin,
+          pan = EXCLUDED.pan,
+          address = EXCLUDED.address,
+          phone = EXCLUDED.phone,
+          email = EXCLUDED.email,
+          state = EXCLUDED.state,
+          state_code = EXCLUDED.state_code,
+          bank_name = EXCLUDED.bank_name,
+          bank_account = EXCLUDED.bank_account,
+          bank_ifsc = EXCLUDED.bank_ifsc,
+          bank_branch = EXCLUDED.bank_branch,
+          firm_code = EXCLUDED.firm_code,
+          tag_color = EXCLUDED.tag_color;
       `);
     } catch {
       // non-fatal if table not initialized yet
@@ -502,29 +530,57 @@ export async function getDb(): Promise<PGlite> {
       }
     }
 
-    const db = new PGlite('idb://nain-tools-db');
-    await db.exec(SCHEMA_SQL);
+    let loadDataDir: Blob | undefined;
+    const dbName = 'idb://nain-tools-v3';
+    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v3') === 'true';
 
-    await migrateSchema(db);
-
-    try {
-      await populateRealInventory(db);
-    } catch (err) {
-      console.error('Error in populateRealInventory:', err);
+    if (!isSeeded && typeof window !== 'undefined' && typeof fetch !== 'undefined') {
       try {
-        const { rows: disabledRows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'disable_demo_seed'");
-        if (disabledRows.length === 0 || disabledRows[0].value !== 'true') {
-          const { rows } = await db.query<{ count: string }>('SELECT COUNT(*)::text as count FROM products');
-          if (parseInt(rows[0]?.count || '0', 10) === 0) {
-            await db.exec(SEED_SQL);
+        console.log('[db] Downloading pre-migrated TradeSoftGST database tarball (10.8MB)...');
+        const res = await fetch('/migrated-db.tar.gz');
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob.size > 1000000) {
+            loadDataDir = blob;
+            console.log('[db] Tarball loaded successfully into memory. Size:', blob.size);
           }
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn('[db] Could not fetch migrated-db.tar.gz:', err);
       }
     }
 
+    const db = new PGlite(dbName, loadDataDir ? { loadDataDir } : {});
+    await db.exec(SCHEMA_SQL);
+    await migrateSchema(db);
+
     dbInstance = db;
+
+    // Verify data and auto-seed fallback if needed
+    try {
+      const { rows } = await db.query<{ count: string }>('SELECT count(*) FROM sales');
+      const salesCount = Number(rows[0]?.count || 0);
+      console.log(`[db] Current database loaded with ${salesCount} sales invoices.`);
+      if (salesCount > 0) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('nain_tools_seeded_v3', 'true');
+        }
+      } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+        console.log('[db] Sales table empty. Falling back to background auto-import from JSON...');
+        const backupRes = await fetch('/nain-tools-backup-migrated.json');
+        if (backupRes.ok) {
+          const text = await backupRes.text();
+          console.log('[db] Importing JSON backup directly...');
+          const { api } = await import('./api');
+          await api.importDatabase(text);
+          console.log('[db] JSON auto-import complete!');
+          localStorage.setItem('nain_tools_seeded_v3', 'true');
+        }
+      }
+    } catch (e) {
+      console.warn('[db] Post-init check warning:', e);
+    }
+
     return db;
   })();
 
@@ -539,7 +595,7 @@ export async function getDbInfo(): Promise<{
 }> {
   const db = await getDb();
   let schemaVersion = '1';
-  let appVersion = '1.0.0';
+  let appVersion = '1.4.0';
   try {
     const { rows } = await db.query<{ value: string }>("SELECT value FROM _meta WHERE key = 'schema_version'");
     if (rows.length > 0) schemaVersion = rows[0].value;
@@ -551,7 +607,7 @@ export async function getDbInfo(): Promise<{
   return {
     schemaVersion,
     appVersion,
-    dbLocation: 'IndexedDB: nain-tools-db',
+    dbLocation: 'IndexedDB: nain-tools-v3',
     storageType: 'PGlite (PostgreSQL WASM)',
   };
 }
