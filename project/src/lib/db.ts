@@ -531,12 +531,12 @@ export async function getDb(): Promise<PGlite> {
     }
 
     let loadDataDir: Blob | undefined;
-    const dbName = 'idb://nain-tools-v4';
-    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v4') === 'true';
+    const dbName = 'idb://nain-tools-v5';
+    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v5') === 'true';
 
     if (!isSeeded && typeof window !== 'undefined' && typeof fetch !== 'undefined') {
       try {
-        console.log('[db] Downloading pre-migrated TradeSoftGST database tarball (10.8MB)...');
+        console.log('[db] Downloading pre-migrated TradeSoftGST database tarball (6.4MB)...');
         const res = await fetch('/migrated-db.tar.gz');
         if (res.ok) {
           const blob = await res.blob();
@@ -563,7 +563,7 @@ export async function getDb(): Promise<PGlite> {
       console.log(`[db] Current database loaded with ${salesCount} sales invoices.`);
       if (salesCount > 0) {
         if (typeof window !== 'undefined') {
-          localStorage.setItem('nain_tools_seeded_v4', 'true');
+          localStorage.setItem('nain_tools_seeded_v5', 'true');
         }
       } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
         console.log('[db] Sales table empty. Falling back to background auto-import from JSON...');
@@ -574,7 +574,7 @@ export async function getDb(): Promise<PGlite> {
           const { api } = await import('./api');
           await api.importDatabase(text);
           console.log('[db] JSON auto-import complete!');
-          localStorage.setItem('nain_tools_seeded_v4', 'true');
+          localStorage.setItem('nain_tools_seeded_v5', 'true');
         }
       }
     } catch (e) {

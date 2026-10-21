@@ -94,12 +94,18 @@ export default function Dashboard() {
       .filter((s) => s.status !== 'draft' && s.status !== 'cancelled')
       .reduce((s, r) => s + r.grandTotal, 0);
 
+    // Build quick cost map to avoid O(N*M) linear search across 6,000+ products
+    const costMap = new Map<string, number>();
+    for (const p of products) {
+      costMap.set(p.id, p.cost);
+    }
+
     const totalProfit = sales
       .filter((s) => s.status !== 'draft' && s.status !== 'cancelled')
       .reduce((s, r) => {
         const cogs = r.items.reduce((cs, item) => {
-          const prod = products.find((p) => p.id === item.productId);
-          return cs + (prod ? prod.cost * item.qty : 0);
+          const cost = costMap.get(item.productId) ?? item.cost ?? 0;
+          return cs + (cost * item.qty);
         }, 0);
         return s + (r.subtotal - r.discount - cogs);
       }, 0);
