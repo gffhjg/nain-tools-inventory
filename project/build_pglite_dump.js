@@ -111,7 +111,7 @@ async function buildDump() {
   const p = JSON.parse(jsonText);
   const data = p.data;
 
-  const insertOrder = ['company_settings', 'categories', 'products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items'];
+  const insertOrder = ['company_settings', 'categories', 'products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items', 'cheques'];
   
   await db.exec('BEGIN;');
   await db.exec('DELETE FROM company_settings;');

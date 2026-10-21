@@ -531,8 +531,8 @@ export async function getDb(): Promise<PGlite> {
     }
 
     let loadDataDir: Blob | undefined;
-    const dbName = 'idb://nain-tools-v3';
-    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v3') === 'true';
+    const dbName = 'idb://nain-tools-v4';
+    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v4') === 'true';
 
     if (!isSeeded && typeof window !== 'undefined' && typeof fetch !== 'undefined') {
       try {
@@ -563,7 +563,7 @@ export async function getDb(): Promise<PGlite> {
       console.log(`[db] Current database loaded with ${salesCount} sales invoices.`);
       if (salesCount > 0) {
         if (typeof window !== 'undefined') {
-          localStorage.setItem('nain_tools_seeded_v3', 'true');
+          localStorage.setItem('nain_tools_seeded_v4', 'true');
         }
       } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
         console.log('[db] Sales table empty. Falling back to background auto-import from JSON...');
@@ -574,7 +574,7 @@ export async function getDb(): Promise<PGlite> {
           const { api } = await import('./api');
           await api.importDatabase(text);
           console.log('[db] JSON auto-import complete!');
-          localStorage.setItem('nain_tools_seeded_v3', 'true');
+          localStorage.setItem('nain_tools_seeded_v4', 'true');
         }
       }
     } catch (e) {
@@ -607,7 +607,7 @@ export async function getDbInfo(): Promise<{
   return {
     schemaVersion,
     appVersion,
-    dbLocation: 'IndexedDB: nain-tools-v3',
+    dbLocation: 'IndexedDB: nain-tools-v4',
     storageType: 'PGlite (PostgreSQL WASM)',
   };
 }
