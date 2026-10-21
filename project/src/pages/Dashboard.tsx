@@ -4,15 +4,18 @@ import {
   ShoppingCart, Package, TrendingUp, AlertTriangle, Download, Truck,
   IndianRupee, XCircle, FileText, ClipboardCheck, ArrowRight, Clock,
   PackageCheck, Boxes, Plus, Users, Building2, CheckCircle2, Wallet,
-  MessageCircle, Eye, Printer, ExternalLink, Landmark, RefreshCw, Sparkles, Database
+  MessageCircle, Eye, Printer, ExternalLink, Landmark, RefreshCw, Sparkles, Database,
+  Search, ChevronDown, ChevronRight, X, Calendar, User, Phone
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
+import InvoiceDetailsModal from '@/components/InvoiceDetailsModal';
 import { useStore } from '@/store/AppStore';
 import { moneyShort, downloadCSV, toCSV, money } from '@/utils/analytics';
 import { printInvoice } from '@/components/PrintableInvoice';
+import type { SaleRecord } from '@/lib/types';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -21,6 +24,9 @@ export default function Dashboard() {
   const [activeModal, setActiveModal] = useState<
     'todaySales' | 'todayPurchases' | 'todayCollections' | 'receivables' | 'supplierPayables' | 'lowStock' | 'outOfStock' | null
   >(null);
+  const [receivablesSearch, setReceivablesSearch] = useState('');
+  const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
+  const [selectedSaleForDetails, setSelectedSaleForDetails] = useState<SaleRecord | null>(null);
   const [importingMigrated, setImportingMigrated] = useState(false);
 
   const handleImportMigratedData = useCallback(async () => {
@@ -153,9 +159,97 @@ export default function Dashboard() {
   );
 
   const receivablesItems = useMemo(
-    () => sales.filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft' && (s.grandTotal - s.amountPaid) > 0),
+    () => sales.filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft' && (s.grandTotal - (s.amountPaid || 0)) > 0),
     [sales]
   );
+
+  // Group receivables by unique customer to merge repeated clients
+  const groupedReceivables = useMemo(() => {
+    const map = new Map<string, {
+      customer: string;
+      phone: string;
+      gstin: string;
+      totalGrand: number;
+      totalPaid: number;
+      totalBalance: number;
+      invoices: SaleRecord[];
+      latestDate: string;
+      oldestDate: string;
+    }>();
+
+    for (const s of receivablesItems) {
+      const custName = (s.customer || 'Unknown Customer').trim();
+      const custKey = custName.toUpperCase();
+      const bal = s.grandTotal - (s.amountPaid || 0);
+      if (bal <= 0) continue;
+
+      if (!map.has(custKey)) {
+        map.set(custKey, {
+          customer: custName,
+          phone: s.phone || '',
+          gstin: s.customerGstin || '',
+          totalGrand: 0,
+          totalPaid: 0,
+          totalBalance: 0,
+          invoices: [],
+          latestDate: s.date,
+          oldestDate: s.date,
+        });
+      }
+
+      const entry = map.get(custKey)!;
+      if (!entry.phone && s.phone) entry.phone = s.phone;
+      if (!entry.gstin && s.customerGstin) entry.gstin = s.customerGstin;
+      entry.totalGrand += s.grandTotal;
+      entry.totalPaid += (s.amountPaid || 0);
+      entry.totalBalance += bal;
+      entry.invoices.push(s);
+      if (s.date > entry.latestDate) entry.latestDate = s.date;
+      if (s.date < entry.oldestDate) entry.oldestDate = s.date;
+    }
+
+    // Sort invoices inside each group newest to oldest
+    for (const entry of map.values()) {
+      entry.invoices.sort((a, b) => b.date.localeCompare(a.date));
+    }
+
+    // Sort groups descending by total balance due
+    return Array.from(map.values()).sort((a, b) => b.totalBalance - a.totalBalance);
+  }, [receivablesItems]);
+
+  // Filtered grouped clients by search term (name, phone, GSTIN, invoice #)
+  const filteredGroupedReceivables = useMemo(() => {
+    const q = receivablesSearch.trim().toLowerCase();
+    if (!q) return groupedReceivables;
+
+    return groupedReceivables.filter((g) => {
+      const matchName = g.customer.toLowerCase().includes(q);
+      const matchPhone = g.phone.toLowerCase().includes(q);
+      const matchGstin = g.gstin.toLowerCase().includes(q);
+      const matchInvoice = g.invoices.some((inv) => inv.invoice.toLowerCase().includes(q));
+      return matchName || matchPhone || matchGstin || matchInvoice;
+    });
+  }, [groupedReceivables, receivablesSearch]);
+
+  const toggleClientExpanded = useCallback((clientKey: string) => {
+    setExpandedClients((prev) => {
+      const next = new Set(prev);
+      if (next.has(clientKey)) {
+        next.delete(clientKey);
+      } else {
+        next.add(clientKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleExpandAll = useCallback((expand: boolean) => {
+    if (expand) {
+      setExpandedClients(new Set(groupedReceivables.map((g) => g.customer.toUpperCase())));
+    } else {
+      setExpandedClients(new Set());
+    }
+  }, [groupedReceivables]);
 
   const supplierPayablesItems = useMemo(
     () => purchases.filter((p) => p.paymentStatus === 'Pending'),
@@ -185,7 +279,14 @@ export default function Dashboard() {
   const getWhatsAppReminderLink = (phone: string, customer: string, invoice: string, balance: number) => {
     const cleanPhone = phone.replace(/[^0-9]/g, '');
     const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    const msg = `Hello ${customer}, payment reminder for Invoice #${invoice} from Nain Tools & Bolt Co. Balance due: ₹${balance.toFixed(2)}. Please make the payment at your earliest convenience. Thank you!`;
+    const msg = `Hello ${customer}, payment reminder for Invoice #${invoice} from Nain Tools & SS Bolt Co. Balance due: ₹${balance.toFixed(2)}. Please make the payment at your earliest convenience. Thank you!`;
+    return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
+  };
+
+  const getWhatsAppClientSummaryReminderLink = (phone: string, customer: string, invoiceCount: number, totalBalance: number) => {
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+    const msg = `Hello ${customer}, payment reminder from Nain Tools & SS Bolt Co. You have ${invoiceCount} pending invoice${invoiceCount > 1 ? 's' : ''} with a total balance due of ₹${totalBalance.toFixed(2)}. Kindly arrange the payment at your earliest convenience. Thank you!`;
     return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
   };
 
@@ -530,81 +631,246 @@ export default function Dashboard() {
       {/* 1. Who Owes Me Money (Customer Receivables) */}
       {activeModal === 'receivables' && (
         <Modal
-          title={`Customer Receivables - Overdue Balances (${money(stats.outstandingSales)})`}
+          title={`Customer Receivables – Overdue Balances (${money(stats.outstandingSales)})`}
           size="xl"
-          onClose={() => setActiveModal(null)}
+          onClose={() => { setActiveModal(null); setReceivablesSearch(''); }}
         >
           <div className="space-y-4">
-            <div className="flex items-center justify-between bg-amber-50 p-3 rounded-xl border border-amber-200 text-xs text-amber-800 font-medium">
-              <span>List of customers with pending invoice payments. Click the WhatsApp Remind button to send an instant payment reminder.</span>
+            {/* Top Toolbar: Search Bar + Client Count + Expand All */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-gradient-to-r from-amber-50/90 via-white to-amber-50/90 p-3.5 rounded-2xl border border-amber-200/90 shadow-xs">
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={receivablesSearch}
+                  onChange={(e) => setReceivablesSearch(e.target.value)}
+                  placeholder="Search client by name, phone, invoice #..."
+                  className="w-full pl-10 pr-9 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition shadow-xs"
+                />
+                {receivablesSearch && (
+                  <button
+                    onClick={() => setReceivablesSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                    title="Clear search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center justify-between sm:justify-end gap-2 text-xs">
+                <span className="font-bold text-slate-700 px-3 py-1.5 rounded-xl bg-amber-100/70 text-amber-900">
+                  {filteredGroupedReceivables.length} {filteredGroupedReceivables.length === 1 ? 'Client' : 'Clients'}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleExpandAll(true)}
+                    className="px-2.5 py-1 text-[11px] font-bold text-amber-800 hover:bg-amber-100/60 rounded-lg transition"
+                  >
+                    Expand All
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleExpandAll(false)}
+                    className="px-2.5 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                  >
+                    Collapse
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600">Invoice #</th>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600">Customer</th>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600">Date</th>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600">Grand Total</th>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600">Paid</th>
-                    <th className="px-3.5 py-2.5 font-bold text-amber-700">Balance Due</th>
-                    <th className="px-3.5 py-2.5 font-bold text-slate-600 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {receivablesItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-xs text-slate-400">
-                        No outstanding customer receivables found.
-                      </td>
-                    </tr>
-                  ) : (
-                    receivablesItems.map((s) => {
-                      const bal = s.grandTotal - (s.amountPaid || 0);
-                      return (
-                        <tr key={s.id} className="hover:bg-amber-50/40">
-                          <td className="px-3.5 py-3 font-bold text-brand-600">{s.invoice}</td>
-                          <td className="px-3.5 py-3">
-                            <p className="font-bold text-slate-900">{s.customer}</p>
-                            {s.phone && <p className="text-[11px] font-mono text-slate-500">{s.phone}</p>}
-                          </td>
-                          <td className="px-3.5 py-3 font-mono text-slate-600">{s.date}</td>
-                          <td className="px-3.5 py-3 font-semibold text-slate-900">{money(s.grandTotal)}</td>
-                          <td className="px-3.5 py-3 font-semibold text-emerald-600">{money(s.amountPaid || 0)}</td>
-                          <td className="px-3.5 py-3 font-black text-amber-600 text-sm">{money(bal)}</td>
-                          <td className="px-3.5 py-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              {s.phone && (
-                                <a
-                                  href={getWhatsAppReminderLink(s.phone, s.customer, s.invoice, bal)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="btn-secondary py-1 px-2.5 text-[11px] bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 font-bold flex items-center gap-1"
-                                  title="Send WhatsApp Reminder"
-                                >
-                                  <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
-                                  <span>Remind</span>
-                                </a>
+
+            {/* Hint Banner */}
+            <div className="flex items-center justify-between bg-amber-50/70 p-3 rounded-xl border border-amber-200 text-xs text-amber-900 font-medium">
+              <span>💡 Merged repeated clients into single balances. Click on any client to view their individual bill entries with dates. Click <strong>Bill Details</strong> to view complete line items.</span>
+            </div>
+
+            {/* Merged Clients List (Collapsible Accordion Cards) */}
+            <div className="space-y-2.5 max-h-[62vh] overflow-y-auto pr-1">
+              {filteredGroupedReceivables.length === 0 ? (
+                <div className="py-12 text-center text-xs text-slate-400 bg-slate-50/60 rounded-2xl border border-dashed border-slate-200">
+                  <User className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                  {receivablesSearch ? `No overdue clients matching "${receivablesSearch}"` : 'No outstanding customer receivables found.'}
+                </div>
+              ) : (
+                filteredGroupedReceivables.map((group) => {
+                  const clientKey = group.customer.toUpperCase();
+                  const isExpanded = expandedClients.has(clientKey);
+
+                  return (
+                    <div
+                      key={clientKey}
+                      className="rounded-2xl border border-slate-200/90 bg-white overflow-hidden shadow-xs hover:border-amber-300 transition-all duration-200"
+                    >
+                      {/* Client Header Row (Clickable to expand individual entries) */}
+                      <div
+                        onClick={() => toggleClientExpanded(clientKey)}
+                        className={`p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 cursor-pointer select-none transition-colors ${
+                          isExpanded ? 'bg-amber-50/50 border-b border-amber-100' : 'hover:bg-slate-50/70'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
+                          <div className="mt-0.5 p-1 rounded-lg text-slate-400">
+                            {isExpanded ? (
+                              <ChevronDown className="h-4 w-4 text-amber-600 transition-transform duration-200" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4 text-slate-400 transition-transform duration-200" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="font-black text-sm text-slate-900 tracking-tight">{group.customer}</h4>
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold text-amber-800">
+                                {group.invoices.length} {group.invoices.length === 1 ? 'Bill' : 'Bills'} Due
+                              </span>
+                              {group.phone && (
+                                <span className="font-mono text-xs text-slate-500 flex items-center gap-1">
+                                  <Phone className="h-3 w-3 text-slate-400" />
+                                  {group.phone}
+                                </span>
                               )}
-                              <button
-                                onClick={() => printInvoice(s, undefined, companySettings)}
-                                className="p-1.5 text-brand-600 hover:bg-brand-50 rounded-lg transition"
-                                title="Print Invoice"
-                              >
-                                <Printer className="h-4 w-4" />
-                              </button>
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              When owed: <span className="font-mono font-medium text-slate-700">{group.oldestDate}</span> {group.oldestDate !== group.latestDate ? ` to ${group.latestDate}` : ''}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Totals & WhatsApp Summary Button */}
+                        <div className="flex items-center justify-between md:justify-end gap-4 w-full md:w-auto shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+                          <div className="text-left md:text-right">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Total Balance Due</span>
+                            <span className="text-base font-black text-amber-600 tracking-tight">{money(group.totalBalance)}</span>
+                          </div>
+
+                          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                            {group.phone && (
+                              <a
+                                href={getWhatsAppClientSummaryReminderLink(group.phone, group.customer, group.invoices.length, group.totalBalance)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn-secondary py-1.5 px-3 text-[11px] bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 font-bold flex items-center gap-1.5 shadow-xs"
+                                title="Send WhatsApp reminder for total pending balance"
+                              >
+                                <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
+                                <span>Remind Total</span>
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => toggleClientExpanded(clientKey)}
+                              className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
+                            >
+                              {isExpanded ? 'Hide Bills' : 'View Bills'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Expanded Sub-Table: Entries When Did They Owe Money */}
+                      {isExpanded && (
+                        <div className="bg-slate-50/70 p-3.5 border-t border-slate-100 animate-fade-in">
+                          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-slate-100/70 text-[11px] font-bold text-slate-600">
+                                <tr>
+                                  <th className="px-3.5 py-2.5">Invoice #</th>
+                                  <th className="px-3.5 py-2.5">When Owed (Invoice Date)</th>
+                                  <th className="px-3.5 py-2.5">Grand Total</th>
+                                  <th className="px-3.5 py-2.5">Paid</th>
+                                  <th className="px-3.5 py-2.5 text-amber-700">Balance Due</th>
+                                  <th className="px-3.5 py-2.5 text-right">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {group.invoices.map((s) => {
+                                  const bal = s.grandTotal - (s.amountPaid || 0);
+                                  return (
+                                    <tr key={s.id} className="hover:bg-amber-50/30 transition-colors">
+                                      <td className="px-3.5 py-3 font-bold text-brand-600">
+                                        <div className="flex items-center gap-1.5">
+                                          <span>{s.invoice}</span>
+                                          {s.invoice.includes('OPBL') && (
+                                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9.5px] font-bold text-amber-800">
+                                              Opening Balance
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-3.5 py-3">
+                                        <div className="flex items-center gap-1.5 font-mono text-slate-700 font-semibold">
+                                          <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                                          <span>{s.date}</span>
+                                        </div>
+                                        {s.notes && (
+                                          <p className="text-[10.5px] text-slate-400 italic line-clamp-1 mt-0.5">{s.notes}</p>
+                                        )}
+                                      </td>
+                                      <td className="px-3.5 py-3 font-semibold text-slate-800">{money(s.grandTotal)}</td>
+                                      <td className="px-3.5 py-3 font-semibold text-emerald-600">{money(s.amountPaid || 0)}</td>
+                                      <td className="px-3.5 py-3 font-black text-amber-600">{money(bal)}</td>
+                                      <td className="px-3.5 py-3 text-right">
+                                        <div className="flex items-center justify-end gap-1.5">
+                                          {/* Bill Details button near Remind button */}
+                                          <button
+                                            type="button"
+                                            onClick={() => setSelectedSaleForDetails(s)}
+                                            className="btn-secondary py-1 px-2.5 text-[11px] bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 font-bold flex items-center gap-1 transition shadow-2xs"
+                                            title="View Complete Bill Details & Items"
+                                          >
+                                            <Eye className="h-3.5 w-3.5 text-blue-600" />
+                                            <span>Bill Details</span>
+                                          </button>
+
+                                          {/* Remind button */}
+                                          {s.phone && (
+                                            <a
+                                              href={getWhatsAppReminderLink(s.phone, s.customer, s.invoice, bal)}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="btn-secondary py-1 px-2.5 text-[11px] bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 font-bold flex items-center gap-1 shadow-2xs"
+                                              title="Send WhatsApp Reminder for this invoice"
+                                            >
+                                              <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
+                                              <span>Remind</span>
+                                            </a>
+                                          )}
+
+                                          {/* Print button */}
+                                          <button
+                                            type="button"
+                                            onClick={() => printInvoice(s, undefined, companySettings)}
+                                            className="p-1.5 text-slate-500 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition"
+                                            title="Print Invoice"
+                                          >
+                                            <Printer className="h-4 w-4" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button className="btn-secondary" onClick={() => setActiveModal(null)}>Close</button>
-              <button className="btn-primary" onClick={() => { setActiveModal(null); navigate('/sales'); }}>Go to Sales Management</button>
+
+            {/* Bottom Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-200">
+              <span className="text-xs text-slate-500 font-medium">
+                Showing {filteredGroupedReceivables.length} clients with total overdue of <strong>{money(stats.outstandingSales)}</strong>
+              </span>
+              <div className="flex items-center gap-2">
+                <button className="btn-secondary" onClick={() => { setActiveModal(null); setReceivablesSearch(''); }}>Close</button>
+                <button className="btn-primary" onClick={() => { setActiveModal(null); navigate('/sales'); }}>Go to Sales Management</button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -951,6 +1217,15 @@ export default function Dashboard() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Complete Bill / Invoice Details Modal */}
+      {selectedSaleForDetails && (
+        <InvoiceDetailsModal
+          sale={selectedSaleForDetails}
+          onClose={() => setSelectedSaleForDetails(null)}
+          companySettings={companySettings}
+        />
       )}
     </div>
   );
