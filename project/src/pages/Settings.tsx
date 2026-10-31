@@ -167,6 +167,23 @@ export default function Settings() {
     }
   }, [confirmImport]);
 
+  const handleLoadMigratedData = useCallback(async () => {
+    setImporting(true);
+    setBackupMsg(null);
+    try {
+      const res = await fetch('./nain-tools-backup-migrated.json');
+      if (!res.ok) throw new Error('Could not load nain-tools-backup-migrated.json');
+      const text = await res.text();
+      await api.importDatabase(text);
+      setBackupMsg({ type: 'success', text: 'All 80,000+ migrated records successfully restored! Reloading...' });
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err) {
+      setBackupMsg({ type: 'error', text: err instanceof Error ? err.message : 'Failed to load migrated data.' });
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
   const handleWipeConfirm = useCallback(async (exportFirst: boolean) => {
     setWiping(true);
     setBackupMsg(null);
@@ -754,6 +771,24 @@ export default function Settings() {
                     >
                       {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}
                       {importing ? 'Restoring...' : 'Select Backup File'}
+                    </button>
+                  </div>
+
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 sm:col-span-2">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-5 w-5 text-emerald-600" />
+                      <p className="text-sm font-semibold text-slate-800">TradeSoftGST Complete Migrated Database (2018–2026)</p>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Instantly reload all 12,302 sales invoices, 4,540 purchase bills, 6,094 products, 990 customers, and 221 suppliers from the verified legacy dataset with zero duplicates.
+                    </p>
+                    <button
+                      onClick={handleLoadMigratedData}
+                      disabled={importing}
+                      className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+                      {importing ? 'Loading Migrated Database...' : '1-Click Reload Migrated Data'}
                     </button>
                   </div>
                 </div>

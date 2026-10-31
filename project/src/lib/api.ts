@@ -1141,6 +1141,9 @@ export const api = {
   },
 
   async importDatabase(jsonText: string): Promise<void> {
+    if (jsonText.charCodeAt(0) === 0xFEFF) {
+      jsonText = jsonText.slice(1);
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonText);
@@ -1164,30 +1167,92 @@ export const api = {
       }
     }
     const db = await getDb();
-    await db.exec(`
-      DELETE FROM cheques;
-      DELETE FROM sale_items;
-      DELETE FROM purchase_items;
-      DELETE FROM verifications;
-      DELETE FROM sales;
-      DELETE FROM purchases;
-      DELETE FROM products;
-      DELETE FROM customers;
-      DELETE FROM suppliers;
-      DELETE FROM categories;
-    `);
+    await db.exec('BEGIN;');
+    try {
+      await db.exec(`
+        DELETE FROM cheques;
+        DELETE FROM sale_items;
+        DELETE FROM purchase_items;
+        DELETE FROM verifications;
+        DELETE FROM sales;
+        DELETE FROM purchases;
+        DELETE FROM products;
+        DELETE FROM customers;
+        DELETE FROM suppliers;
+        DELETE FROM categories;
+      `);
 
-    const insertOrder = ['products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items', 'verifications', 'categories', 'cheques'];
-    for (const table of insertOrder) {
-      const rows = data[table];
-      if (!rows || rows.length === 0) continue;
-      for (const row of rows) {
-        const obj = row as Record<string, unknown>;
-        const columns = Object.keys(obj);
-        const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
-        const values = columns.map((c) => obj[c]);
-        await db.query(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`, values);
+      if (data.company_settings && Array.isArray(data.company_settings) && data.company_settings.length > 0) {
+        await db.exec('DELETE FROM company_settings;');
+        for (const row of data.company_settings) {
+          const obj = row as Record<string, unknown>;
+          const columns = Object.keys(obj);
+          const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+          const values = columns.map((c) => obj[c]);
+          await db.query(`INSERT INTO company_settings (${columns.join(', ')}) VALUES (${placeholders})`, values);
+        }
       }
+
+      const insertOrder = ['products', 'customers', 'suppliers', 'sales', 'sale_items', 'purchases', 'purchase_items', 'verifications', 'categories', 'cheques'];
+      for (const table of insertOrder) {
+        const rows = data[table];
+        if (!rows || rows.length === 0) continue;
+
+        const columnSet = new Set<string>();
+        for (const r of rows) {
+          if (r && typeof r === 'object') {
+            for (const k of Object.keys(r as Record<string, unknown>)) {
+              columnSet.add(k);
+            }
+          }
+        }
+        const columns = Array.from(columnSet);
+        if (columns.length === 0) continue;
+        const colList = columns.join(', ');
+
+        const chunkSize = 50;
+        for (let i = 0; i < rows.length; i += chunkSize) {
+          const chunk = rows.slice(i, i + chunkSize);
+          const valueClauses: string[] = [];
+          const allParams: unknown[] = [];
+          let paramIdx = 1;
+
+          for (const row of chunk) {
+            const obj = row as Record<string, unknown>;
+            const placeholders: string[] = [];
+            for (const col of columns) {
+              placeholders.push(`$${paramIdx++}`);
+              let val = obj[col];
+              if (col === 'item_count' && (val === null || val === undefined)) val = 1;
+              if ((col === 'subtotal' || col === 'grand_total' || col === 'amount_paid' || col === 'gst_amount' || col === 'cgst_amount' || col === 'sgst_amount' || col === 'igst_amount' || col === 'discount' || col === 'cost' || col === 'price' || col === 'selling_price' || col === 'stock' || col === 'box_capacity' || col === 'reorder_level') && (val === null || val === undefined)) val = 0;
+              if (col === 'qty' && (val === null || val === undefined)) val = 1;
+              if (col === 'firm_id' && (val === null || val === undefined)) val = 1;
+              if (val === undefined) val = null;
+              allParams.push(val);
+            }
+            valueClauses.push(`(${placeholders.join(', ')})`);
+          }
+
+          await db.query(
+            `INSERT INTO ${table} (${colList}) VALUES ${valueClauses.join(', ')}`,
+            allParams
+          );
+        }
+      }
+
+      await db.exec(`
+        INSERT INTO _meta (key, value) VALUES ('excel_inventory_imported', 'true')
+        ON CONFLICT (key) DO UPDATE SET value = 'true';
+        INSERT INTO _meta (key, value) VALUES ('disable_demo_seed', 'true')
+        ON CONFLICT (key) DO UPDATE SET value = 'true';
+        INSERT INTO _meta (key, value) VALUES ('migrated_data_imported', 'true')
+        ON CONFLICT (key) DO UPDATE SET value = 'true';
+      `);
+
+      await db.exec('COMMIT;');
+    } catch (err) {
+      await db.exec('ROLLBACK;');
+      throw err;
     }
 
     try {
