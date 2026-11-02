@@ -61,3 +61,4 @@
 * **Purchase Bills:** `Gas_PurcExMas` & `Gas_PurcExDet`
 * **Payment Adjustments:** `AdjustMas` (contains exact bill-to-payment mappings)
 * **Vouchers & Cheques:** `VouchMas` (Cash, Bank, Cheque receipts and payments)
+

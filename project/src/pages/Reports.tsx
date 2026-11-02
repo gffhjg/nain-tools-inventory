@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Download,
@@ -134,7 +134,7 @@ export default function Reports() {
       case 'profit':
         return [
           { label: 'Net Sales Revenue', value: money(stats.totalRevenue), icon: DollarSign, tone: 'bg-brand-50 text-brand-600' },
-          { label: 'Cost of Goods Sold', value: money(stats.totalRevenue - stats.grossProfit - filteredSales.reduce((s, r) => s + r.gstAmount + computeDiscountAmount(r.subtotal, r.discount, r.discountType), 0)), icon: TrendingDown, tone: 'bg-err-50 text-err-600' },
+          { label: 'Cost of Goods Sold', value: money(stats.costOfGoods ?? 0), icon: TrendingDown, tone: 'bg-err-50 text-err-600' },
           { label: 'Gross Profit', value: money(stats.grossProfit), icon: TrendingUp, tone: 'bg-accent-50 text-accent-600' },
           { label: 'Profit Margin', value: `${stats.profitMargin.toFixed(1)}%`, icon: Percent, tone: 'bg-amber-50 text-amber-600' },
         ];
@@ -237,11 +237,14 @@ export default function Reports() {
         }));
         filename = 'inventory-report.csv';
         break;
-      case 'profit':
+      case 'profit': {
+        const prodCostMap = new Map<string, number>(products.map((p) => [p.id, p.cost]));
         rows = filteredSales.map((s) => {
           const cogs = s.items.reduce((sum, item) => {
-            const prod = products.find((p) => p.id === item.productId);
-            return sum + (prod ? prod.cost * item.qty : 0);
+            const cost = item.isCustom || (item.cost !== undefined && item.cost > 0)
+              ? (item.cost || 0)
+              : (prodCostMap.get(item.productId) ?? 0);
+            return sum + cost * item.qty;
           }, 0);
           const revenue = s.subtotal - computeDiscountAmount(s.subtotal, s.discount, s.discountType);
           return {
@@ -253,6 +256,7 @@ export default function Reports() {
         });
         filename = 'profit-loss-report.csv';
         break;
+      }
       case 'lowstock':
         rows = products
           .filter((p) => p.status !== 'in-stock')
@@ -373,12 +377,15 @@ export default function Reports() {
         bodyHTML += '</tbody></table>';
         bodyHTML += `<div class="totals"><div class="totals-row grand"><span>Total Inventory Value</span><span>${money(stats.inventoryValue)}</span></div></div>`;
         break;
-      case 'profit':
+      case 'profit': {
+        const prodCostMap = new Map<string, number>(products.map((p) => [p.id, p.cost]));
         bodyHTML += '<table><thead><tr><th>Invoice</th><th>Customer</th><th>Revenue</th><th style="text-align:right;">COGS</th><th style="text-align:right;">Profit</th><th style="text-align:right;">Margin</th></tr></thead><tbody>';
         for (const s of filteredSales) {
           const cogs = s.items.reduce((sum, item) => {
-            const prod = products.find((p) => p.id === item.productId);
-            return sum + (prod ? prod.cost * item.qty : 0);
+            const cost = item.isCustom || (item.cost !== undefined && item.cost > 0)
+              ? (item.cost || 0)
+              : (prodCostMap.get(item.productId) ?? 0);
+            return sum + cost * item.qty;
           }, 0);
           const revenue = s.subtotal - computeDiscountAmount(s.subtotal, s.discount, s.discountType);
           const profit = revenue - cogs;
@@ -387,6 +394,7 @@ export default function Reports() {
         bodyHTML += '</tbody></table>';
         bodyHTML += `<div class="totals"><div class="totals-row"><span>Gross Profit</span><span>${money(stats.grossProfit)}</span></div><div class="totals-row grand"><span>Profit Margin</span><span>${stats.profitMargin.toFixed(1)}%</span></div></div>`;
         break;
+      }
       case 'lowstock':
         bodyHTML += '<table><thead><tr><th>Name</th><th>Stock</th><th>Reorder Level</th><th>Supplier</th><th>Status</th></tr></thead><tbody>';
         for (const p of products.filter((p) => p.status !== 'in-stock')) {
@@ -596,6 +604,52 @@ export default function Reports() {
   );
 }
 
+function TablePagination({
+  currentPage,
+  pageSize,
+  totalItems,
+  onPageChange,
+  itemName = 'records',
+}: {
+  currentPage: number;
+  pageSize: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+  itemName?: string;
+}) {
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  if (totalItems <= pageSize) return null;
+
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-100 px-4 py-3 gap-2 bg-white">
+      <p className="text-xs text-slate-500">
+        Showing <span className="font-semibold text-slate-700">{(currentPage - 1) * pageSize + 1}</span> to{' '}
+        <span className="font-semibold text-slate-700">{Math.min(totalItems, currentPage * pageSize)}</span> of{' '}
+        <span className="font-semibold text-slate-700">{totalItems}</span> {itemName}
+      </p>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          disabled={currentPage <= 1}
+          className="btn-secondary px-3 py-1 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Previous
+        </button>
+        <span className="text-xs font-semibold text-slate-600 px-2">
+          Page {currentPage} of {totalPages}
+        </span>
+        <button
+          onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+          disabled={currentPage >= totalPages}
+          className="btn-secondary px-3 py-1 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function addMonthsToDate(dateStr: string, months: number = 1): string {
   try {
     const d = new Date(dateStr || new Date());
@@ -610,6 +664,12 @@ function ProformaReport({ sales, companySettings }: { sales: SaleRecord[]; compa
   const { sales: allSales, updateSaleDocumentType } = useStore();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'converted' | 'active' | 'expired'>('all');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterStatus, search]);
 
   const [convertTarget, setConvertTarget] = useState<SaleRecord | null>(null);
   const [convertInvoiceNumber, setConvertInvoiceNumber] = useState('');
@@ -657,6 +717,11 @@ function ProformaReport({ sales, companySettings }: { sales: SaleRecord[]; compa
       );
     });
   }, [piList, filterStatus, search]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
 
   const summary = useMemo(() => {
     const totalGiven = piList.length;
@@ -723,7 +788,7 @@ function ProformaReport({ sales, companySettings }: { sales: SaleRecord[]; compa
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {filtered.map((s) => {
+              {paginated.map((s) => {
                 const today = new Date().toISOString().slice(0, 10);
                 const isConverted = Boolean(s.convertedFromPiNumber);
                 const isExpired = s.documentType === 'PROFORMA INVOICE' && s.piExpirationDate && s.piExpirationDate <= today;
@@ -794,6 +859,13 @@ function ProformaReport({ sales, companySettings }: { sales: SaleRecord[]; compa
             </tbody>
           </table>
         </div>
+        <TablePagination
+          currentPage={page}
+          pageSize={pageSize}
+          totalItems={filtered.length}
+          onPageChange={setPage}
+          itemName="quotes"
+        />
       </div>
 
       {/* Confirmation Modal to Convert to Tax Invoice */}
@@ -884,11 +956,27 @@ function SalesReport({
   onSelectRange?: (range: DateRange) => void;
   allSales?: SaleRecord[];
 }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [sales.length, dateRange]);
+
   const latestSaleDate = useMemo(() => {
     if (!allSales || allSales.length === 0) return undefined;
     const sorted = [...allSales].filter((s) => s.date).sort((a, b) => b.date.localeCompare(a.date));
     return sorted[0]?.date;
   }, [allSales]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sales.slice(start, start + pageSize);
+  }, [sales, page, pageSize]);
+
+  const totalRevenue = useMemo(() => {
+    return sales.reduce((s, r) => s + r.grandTotal, 0);
+  }, [sales]);
 
   if (sales.length === 0) {
     return (
@@ -919,7 +1007,7 @@ function SalesReport({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {sales.map((s) => (
+            {paginated.map((s) => (
               <tr key={s.id} className="transition hover:bg-slate-50/50">
                 <td className="table-td font-semibold text-brand-600">{s.invoice}</td>
                 <td className="table-td font-medium text-slate-800">{s.customer}</td>
@@ -938,13 +1026,20 @@ function SalesReport({
             <tr className="border-t-2 border-slate-200 bg-slate-50">
               <td colSpan={7} className="table-td text-right font-semibold text-slate-700">Total Revenue:</td>
               <td className="table-td text-right text-lg font-bold text-slate-900">
-                {money(sales.reduce((s, r) => s + r.grandTotal, 0))}
+                {money(totalRevenue)}
               </td>
               <td colSpan={2}></td>
             </tr>
           </tfoot>
         </table>
       </div>
+      <TablePagination
+        currentPage={page}
+        pageSize={pageSize}
+        totalItems={sales.length}
+        onPageChange={setPage}
+        itemName="sales orders"
+      />
     </div>
   );
 }
@@ -960,11 +1055,27 @@ function PurchaseReport({
   onSelectRange?: (range: DateRange) => void;
   allPurchases?: PurchaseRecord[];
 }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [purchases.length, dateRange]);
+
   const latestPurchaseDate = useMemo(() => {
     if (!allPurchases || allPurchases.length === 0) return undefined;
     const sorted = [...allPurchases].filter((p) => p.date).sort((a, b) => b.date.localeCompare(a.date));
     return sorted[0]?.date;
   }, [allPurchases]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return purchases.slice(start, start + pageSize);
+  }, [purchases, page, pageSize]);
+
+  const totalPurchases = useMemo(() => {
+    return purchases.reduce((s, p) => s + p.grandTotal, 0);
+  }, [purchases]);
 
   if (purchases.length === 0) {
     return (
@@ -994,7 +1105,7 @@ function PurchaseReport({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {purchases.map((p) => (
+            {paginated.map((p) => (
               <tr key={p.id} className="transition hover:bg-slate-50/50">
                 <td className="table-td font-semibold text-brand-600">{p.poNumber}</td>
                 <td className="table-td font-medium text-slate-800">{p.supplier}</td>
@@ -1017,13 +1128,20 @@ function PurchaseReport({
             <tr className="border-t-2 border-slate-200 bg-slate-50">
               <td colSpan={6} className="table-td text-right font-semibold text-slate-700">Total Purchases:</td>
               <td className="table-td text-right text-lg font-bold text-slate-900">
-                {money(purchases.reduce((s, p) => s + p.grandTotal, 0))}
+                {money(totalPurchases)}
               </td>
               <td colSpan={2}></td>
             </tr>
           </tfoot>
         </table>
       </div>
+      <TablePagination
+        currentPage={page}
+        pageSize={pageSize}
+        totalItems={purchases.length}
+        onPageChange={setPage}
+        itemName="purchase orders"
+      />
     </div>
   );
 }
@@ -1118,23 +1236,49 @@ function InventoryReport({ products }: { products: Product[] }) {
 }
 
 function ProfitReport({ sales, products }: { sales: SaleRecord[]; products: Product[] }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [sales.length]);
+
+  const productCostMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of products) {
+      map.set(p.id, p.cost);
+    }
+    return map;
+  }, [products]);
+
+  const { rows, totalRevenue, totalCOGS, totalProfit, overallMargin } = useMemo(() => {
+    let totRev = 0;
+    let totCogs = 0;
+    const computedRows = sales.map((s) => {
+      const cogs = s.items.reduce((sum, item) => {
+        const cost = item.isCustom || (item.cost !== undefined && item.cost > 0)
+          ? (item.cost || 0)
+          : (productCostMap.get(item.productId) ?? 0);
+        return sum + cost * item.qty;
+      }, 0);
+      const revenue = s.subtotal - computeDiscountAmount(s.subtotal, s.discount, s.discountType);
+      const profit = revenue - cogs;
+      const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+      totRev += revenue;
+      totCogs += cogs;
+      return { s, cogs, revenue, profit, margin };
+    });
+    const totProf = totRev - totCogs;
+    const margin = totRev > 0 ? (totProf / totRev) * 100 : 0;
+    return { rows: computedRows, totalRevenue: totRev, totalCOGS: totCogs, totalProfit: totProf, overallMargin: margin };
+  }, [sales, productCostMap]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, page, pageSize]);
+
   if (sales.length === 0) return <EmptyReport />;
-
-  const rows = sales.map((s) => {
-    const cogs = s.items.reduce((sum, item) => {
-      const prod = products.find((p) => p.id === item.productId);
-      return sum + (prod ? prod.cost * item.qty : 0);
-    }, 0);
-    const revenue = s.subtotal - computeDiscountAmount(s.subtotal, s.discount, s.discountType);
-    const profit = revenue - cogs;
-    const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
-    return { s, cogs, revenue, profit, margin };
-  });
-
-  const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0);
-  const totalCOGS = rows.reduce((s, r) => s + r.cogs, 0);
-  const totalProfit = rows.reduce((s, r) => s + r.profit, 0);
-  const overallMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
 
   return (
     <div className="space-y-4">
@@ -1170,7 +1314,7 @@ function ProfitReport({ sales, products }: { sales: SaleRecord[]; products: Prod
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {rows.map((r) => (
+              {paginated.map((r) => (
                 <tr key={r.s.id} className="transition hover:bg-slate-50/50">
                   <td className="table-td font-semibold text-brand-600">{r.s.invoice}</td>
                   <td className="table-td font-medium text-slate-800">{r.s.customer}</td>
@@ -1188,6 +1332,13 @@ function ProfitReport({ sales, products }: { sales: SaleRecord[]; products: Prod
             </tbody>
           </table>
         </div>
+        <TablePagination
+          currentPage={page}
+          pageSize={pageSize}
+          totalItems={rows.length}
+          onPageChange={setPage}
+          itemName="profit entries"
+        />
       </div>
     </div>
   );
@@ -1319,11 +1470,29 @@ function TopSellingReport({ topProducts }: { topProducts: { name: string; sold: 
 }
 
 function GSTReport({ sales, purchases }: { sales: SaleRecord[]; purchases: PurchaseRecord[] }) {
-  const outputGst = sales.reduce((s, r) => s + r.gstAmount, 0);
-  const inputGst = purchases.reduce((s, p) => s + p.gstAmount, 0);
+  const [activeTab, setActiveTab] = useState<'sales' | 'purchases'>('sales');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeTab, sales.length, purchases.length]);
+
+  const outputGst = useMemo(() => sales.reduce((s, r) => s + r.gstAmount, 0), [sales]);
+  const inputGst = useMemo(() => purchases.reduce((s, p) => s + p.gstAmount, 0), [purchases]);
   const netGst = Math.max(0, outputGst - inputGst);
-  const outputTaxable = sales.reduce((s, r) => s + r.subtotal - computeDiscountAmount(r.subtotal, r.discount, r.discountType), 0);
-  const inputTaxable = purchases.reduce((s, p) => s + p.subtotal, 0);
+  const outputTaxable = useMemo(() => sales.reduce((s, r) => s + r.subtotal - computeDiscountAmount(r.subtotal, r.discount, r.discountType), 0), [sales]);
+  const inputTaxable = useMemo(() => purchases.reduce((s, p) => s + p.subtotal, 0), [purchases]);
+
+  const paginatedSales = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sales.slice(start, start + pageSize);
+  }, [sales, page, pageSize]);
+
+  const paginatedPurchases = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return purchases.slice(start, start + pageSize);
+  }, [purchases, page, pageSize]);
 
   return (
     <div className="space-y-4">
@@ -1344,50 +1513,98 @@ function GSTReport({ sales, purchases }: { sales: SaleRecord[]; purchases: Purch
           <p className="mt-1 text-xs text-slate-400">Output - Input</p>
         </div>
       </div>
+
       <div className="card overflow-hidden">
+        <div className="flex border-b border-slate-200 bg-slate-50/50">
+          <button
+            onClick={() => setActiveTab('sales')}
+            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition ${
+              activeTab === 'sales'
+                ? 'border-brand-600 text-brand-700 bg-white shadow-xs'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Output GST — Sales ({sales.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('purchases')}
+            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition ${
+              activeTab === 'purchases'
+                ? 'border-err-600 text-err-700 bg-white shadow-xs'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Input GST — Purchases ({purchases.length})
+          </button>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-slate-50/80">
               <tr>
-                <th className="table-th">Type</th>
+                <th className="table-th">{activeTab === 'sales' ? 'Invoice & Customer' : 'PO & Supplier'}</th>
                 <th className="table-th text-right">Taxable Value</th>
                 <th className="table-th text-right">GST Rate</th>
                 <th className="table-th text-right">GST Amount</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              <tr className="bg-brand-50/30">
-                <td className="table-td font-semibold text-slate-800" colSpan={4}>Output GST (Sales)</td>
-              </tr>
-              {sales.map((s) => (
-                <tr key={s.id} className="transition hover:bg-slate-50/50">
-                  <td className="table-td font-medium text-slate-800">{s.invoice} · {s.customer}</td>
-                  <td className="table-td text-right tabular-nums">{money(s.subtotal - computeDiscountAmount(s.subtotal, s.discount, s.discountType))}</td>
-                  <td className="table-td text-right tabular-nums text-slate-500">{s.gstRate}%</td>
-                  <td className="table-td text-right font-semibold tabular-nums text-slate-900">{money(s.gstAmount)}</td>
-                </tr>
-              ))}
-              <tr className="bg-err-50/30">
-                <td className="table-td font-semibold text-slate-800" colSpan={4}>Input GST (Purchases)</td>
-              </tr>
-              {purchases.map((p) => (
-                <tr key={p.id} className="transition hover:bg-slate-50/50">
-                  <td className="table-td font-medium text-slate-800">{p.poNumber} · {p.supplier}</td>
-                  <td className="table-td text-right tabular-nums">{money(p.subtotal)}</td>
-                  <td className="table-td text-right tabular-nums text-slate-500">{p.gstRate}%</td>
-                  <td className="table-td text-right font-semibold tabular-nums text-slate-900">{money(p.gstAmount)}</td>
-                </tr>
-              ))}
+              {activeTab === 'sales' ? (
+                paginatedSales.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-sm text-slate-400">No sales in this period</td>
+                  </tr>
+                ) : (
+                  paginatedSales.map((s) => (
+                    <tr key={s.id} className="transition hover:bg-slate-50/50">
+                      <td className="table-td font-medium text-slate-800">{s.invoice} · {s.customer}</td>
+                      <td className="table-td text-right tabular-nums">{money(s.subtotal - computeDiscountAmount(s.subtotal, s.discount, s.discountType))}</td>
+                      <td className="table-td text-right tabular-nums text-slate-500">{s.gstRate}%</td>
+                      <td className="table-td text-right font-semibold tabular-nums text-slate-900">{money(s.gstAmount)}</td>
+                    </tr>
+                  ))
+                )
+              ) : (
+                paginatedPurchases.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-sm text-slate-400">No purchases in this period</td>
+                  </tr>
+                ) : (
+                  paginatedPurchases.map((p) => (
+                    <tr key={p.id} className="transition hover:bg-slate-50/50">
+                      <td className="table-td font-medium text-slate-800">{p.poNumber} · {p.supplier}</td>
+                      <td className="table-td text-right tabular-nums">{money(p.subtotal)}</td>
+                      <td className="table-td text-right tabular-nums text-slate-500">{p.gstRate}%</td>
+                      <td className="table-td text-right font-semibold tabular-nums text-slate-900">{money(p.gstAmount)}</td>
+                    </tr>
+                  ))
+                )
+              )}
             </tbody>
             <tfoot>
               <tr className="border-t-2 border-slate-200 bg-slate-50">
-                <td className="table-td font-semibold text-slate-700">Net GST Payable</td>
-                <td colSpan={2}></td>
-                <td className="table-td text-right text-lg font-bold text-slate-900">{money(netGst)}</td>
+                <td className="table-td font-semibold text-slate-700">
+                  {activeTab === 'sales' ? 'Total Output GST (Sales)' : 'Total Input GST (Purchases)'}
+                </td>
+                <td className="table-td text-right font-bold text-slate-800">
+                  {money(activeTab === 'sales' ? outputTaxable : inputTaxable)}
+                </td>
+                <td></td>
+                <td className="table-td text-right text-lg font-bold text-slate-900">
+                  {money(activeTab === 'sales' ? outputGst : inputGst)}
+                </td>
               </tr>
             </tfoot>
           </table>
         </div>
+
+        <TablePagination
+          currentPage={page}
+          pageSize={pageSize}
+          totalItems={activeTab === 'sales' ? sales.length : purchases.length}
+          onPageChange={setPage}
+          itemName={activeTab === 'sales' ? 'sales invoices' : 'purchase orders'}
+        />
       </div>
     </div>
   );
@@ -1465,6 +1682,12 @@ function CustomerOutstandingReport({ sales, customers, companySettings }: { sale
   const [selectedCust, setSelectedCust] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
   const [viewingSale, setViewingSale] = useState<SaleRecord | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
 
   const customerList = useMemo(() => {
     const names = new Set<string>();
@@ -1473,15 +1696,31 @@ function CustomerOutstandingReport({ sales, customers, companySettings }: { sale
     return Array.from(names).sort();
   }, [customers, sales]);
 
-  const customerSummaries = useMemo(() => {
+  // Fast single-pass summary generation (O(C + S) instead of O(C * S) = 12M+ ops)
+  const allSummaries = useMemo(() => {
+    const custMap = new Map(customers.map((c) => [c.name, c]));
+    const salesMap = new Map<string, { totalBilled: number; totalPaid: number; count: number; lastDate: string }>();
+
+    for (const s of sales) {
+      if (!s.customer || s.status === 'draft' || s.status === 'cancelled') continue;
+      let agg = salesMap.get(s.customer);
+      if (!agg) {
+        agg = { totalBilled: 0, totalPaid: 0, count: 0, lastDate: '' };
+        salesMap.set(s.customer, agg);
+      }
+      agg.totalBilled += s.grandTotal;
+      agg.totalPaid += s.amountPaid;
+      agg.count += 1;
+      if (!agg.lastDate || (s.date && s.date > agg.lastDate)) {
+        agg.lastDate = s.date;
+      }
+    }
+
     return customerList.map((name) => {
-      const custInfo = customers.find((c) => c.name === name);
-      const custSales = sales.filter((s) => s.customer === name && s.status !== 'draft' && s.status !== 'cancelled');
-      const totalBilled = custSales.reduce((sum, s) => sum + s.grandTotal, 0);
-      const totalPaid = custSales.reduce((sum, s) => sum + s.amountPaid, 0);
-      const balance = totalBilled - totalPaid;
-      const invoiceCount = custSales.length;
-      const lastDate = custSales.length > 0 ? custSales.sort((a, b) => b.date.localeCompare(a.date))[0].date : '—';
+      const custInfo = custMap.get(name);
+      const agg = salesMap.get(name);
+      const totalBilled = agg?.totalBilled ?? 0;
+      const totalPaid = agg?.totalPaid ?? 0;
       return {
         id: custInfo?.id,
         name,
@@ -1489,16 +1728,23 @@ function CustomerOutstandingReport({ sales, customers, companySettings }: { sale
         gstin: custInfo?.gstin || '—',
         totalBilled,
         totalPaid,
-        balance,
-        invoiceCount,
-        lastDate,
+        balance: totalBilled - totalPaid,
+        invoiceCount: agg?.count ?? 0,
+        lastDate: agg?.lastDate || '—',
       };
-    }).filter((c) => {
-      if (!search.trim()) return true;
-      const q = search.toLowerCase();
-      return c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.gstin.toLowerCase().includes(q);
     });
-  }, [customerList, customers, sales, search]);
+  }, [customerList, customers, sales]);
+
+  const customerSummaries = useMemo(() => {
+    if (!search.trim()) return allSummaries;
+    const q = search.toLowerCase();
+    return allSummaries.filter((c) => c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.gstin.toLowerCase().includes(q));
+  }, [allSummaries, search]);
+
+  const paginatedCustomers = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return customerSummaries.slice(start, start + pageSize);
+  }, [customerSummaries, page, pageSize]);
 
   const singleCustomerDetails = useMemo(() => {
     if (selectedCust === 'all') return null;
@@ -1630,7 +1876,7 @@ function CustomerOutstandingReport({ sales, customers, companySettings }: { sale
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {customerSummaries.map((c) => (
+                {paginatedCustomers.map((c) => (
                   <tr key={c.name} className="transition hover:bg-slate-50/50">
                     <td className="table-td font-bold text-slate-900">{c.name}</td>
                     <td className="table-td text-slate-600">{c.phone}</td>
@@ -1671,6 +1917,13 @@ function CustomerOutstandingReport({ sales, customers, companySettings }: { sale
               </tfoot>
             </table>
           </div>
+          <TablePagination
+            currentPage={page}
+            pageSize={pageSize}
+            totalItems={customerSummaries.length}
+            onPageChange={setPage}
+            itemName="customers"
+          />
         </div>
       ) : singleCustomerDetails ? (
         <div className="space-y-4">
@@ -1817,6 +2070,12 @@ function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { 
   const [selectedSup, setSelectedSup] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
   const [viewingPO, setViewingPO] = useState<PurchaseRecord | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
 
   const supplierList = useMemo(() => {
     const names = new Set<string>();
@@ -1825,15 +2084,33 @@ function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { 
     return Array.from(names).sort();
   }, [suppliers, purchases]);
 
-  const supplierSummaries = useMemo(() => {
+  // Fast single-pass summary generation (O(Suppliers + Purchases))
+  const allSummaries = useMemo(() => {
+    const supMap = new Map(suppliers.map((s) => [s.name, s]));
+    const purchasesMap = new Map<string, { totalPurchased: number; totalPaid: number; count: number; lastDate: string }>();
+
+    for (const p of purchases) {
+      if (!p.supplier || p.status === 'cancelled') continue;
+      let agg = purchasesMap.get(p.supplier);
+      if (!agg) {
+        agg = { totalPurchased: 0, totalPaid: 0, count: 0, lastDate: '' };
+        purchasesMap.set(p.supplier, agg);
+      }
+      agg.totalPurchased += p.grandTotal;
+      if (p.paymentStatus === 'Paid') {
+        agg.totalPaid += p.grandTotal;
+      }
+      agg.count += 1;
+      if (!agg.lastDate || (p.date && p.date > agg.lastDate)) {
+        agg.lastDate = p.date;
+      }
+    }
+
     return supplierList.map((name) => {
-      const supInfo = suppliers.find((s) => s.name === name);
-      const supPurchases = purchases.filter((p) => p.supplier === name && p.status !== 'cancelled');
-      const totalPurchased = supPurchases.reduce((sum, p) => sum + p.grandTotal, 0);
-      const totalPaid = supPurchases.filter((p) => p.paymentStatus === 'Paid').reduce((sum, p) => sum + p.grandTotal, 0);
-      const payable = totalPurchased - totalPaid;
-      const poCount = supPurchases.length;
-      const lastDate = supPurchases.length > 0 ? supPurchases.sort((a, b) => b.date.localeCompare(a.date))[0].date : '—';
+      const supInfo = supMap.get(name);
+      const agg = purchasesMap.get(name);
+      const totalPurchased = agg?.totalPurchased ?? 0;
+      const totalPaid = agg?.totalPaid ?? 0;
       return {
         id: supInfo?.id,
         name,
@@ -1841,16 +2118,23 @@ function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { 
         gstin: supInfo?.gstin || '—',
         totalPurchased,
         totalPaid,
-        payable,
-        poCount,
-        lastDate,
+        payable: totalPurchased - totalPaid,
+        poCount: agg?.count ?? 0,
+        lastDate: agg?.lastDate || '—',
       };
-    }).filter((s) => {
-      if (!search.trim()) return true;
-      const q = search.toLowerCase();
-      return s.name.toLowerCase().includes(q) || s.phone.toLowerCase().includes(q) || s.gstin.toLowerCase().includes(q);
     });
-  }, [supplierList, suppliers, purchases, search]);
+  }, [supplierList, suppliers, purchases]);
+
+  const supplierSummaries = useMemo(() => {
+    if (!search.trim()) return allSummaries;
+    const q = search.toLowerCase();
+    return allSummaries.filter((s) => s.name.toLowerCase().includes(q) || s.phone.toLowerCase().includes(q) || s.gstin.toLowerCase().includes(q));
+  }, [allSummaries, search]);
+
+  const paginatedSuppliers = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return supplierSummaries.slice(start, start + pageSize);
+  }, [supplierSummaries, page, pageSize]);
 
   const singleSupplierDetails = useMemo(() => {
     if (selectedSup === 'all') return null;
@@ -1967,7 +2251,7 @@ function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { 
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {supplierSummaries.map((s) => (
+                {paginatedSuppliers.map((s) => (
                   <tr key={s.name} className="transition hover:bg-slate-50/50">
                     <td className="table-td font-bold text-slate-900">{s.name}</td>
                     <td className="table-td text-slate-600">{s.phone}</td>
@@ -1997,6 +2281,13 @@ function SupplierOutstandingReport({ purchases, suppliers, companySettings }: { 
               </tfoot>
             </table>
           </div>
+          <TablePagination
+            currentPage={page}
+            pageSize={pageSize}
+            totalItems={supplierSummaries.length}
+            onPageChange={setPage}
+            itemName="suppliers"
+          />
         </div>
       ) : singleSupplierDetails ? (
         <div className="space-y-4">
@@ -2135,6 +2426,12 @@ function ChequesReport({
   const [search, setSearch] = useState('');
   const [bouncingCheque, setBouncingCheque] = useState<ChequeRecord | null>(null);
   const [bounceReasonInput, setBounceReasonInput] = useState('Insufficient funds / Signature mismatch');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterType, filterStatus, search]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -2151,6 +2448,11 @@ function ChequesReport({
       );
     });
   }, [cheques, filterType, filterStatus, search]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
 
   const summary = useMemo(() => {
     const totalAmount = filtered.reduce((s, c) => s + c.amount, 0);
@@ -2263,7 +2565,7 @@ function ChequesReport({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((chq) => {
+              {paginated.map((chq) => {
                 const isCleared = chq.status === 'cleared';
                 const isBounced = chq.status === 'bounced';
                 const isClaimableToday = chq.status === 'pending_clearance' && chq.chequeDate <= new Date().toISOString().slice(0, 10);
@@ -2365,6 +2667,13 @@ function ChequesReport({
             </tfoot>
           </table>
         </div>
+        <TablePagination
+          currentPage={page}
+          pageSize={pageSize}
+          totalItems={filtered.length}
+          onPageChange={setPage}
+          itemName="cheques"
+        />
       </div>
 
       {/* Confirmation Modal for Cheque Bounce */}

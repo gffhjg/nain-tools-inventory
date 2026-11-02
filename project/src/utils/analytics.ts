@@ -70,46 +70,65 @@ export function moneyShort(n: number): string {
 }
 
 export function computeStats(products: Product[], sales: SaleRecord[], purchases: PurchaseRecord[]) {
-  const totalRevenue = sales
-    .filter((s) => s.status !== 'draft' && s.status !== 'cancelled')
-    .reduce((s, r) => s + r.grandTotal, 0);
-  const totalSalesCount = sales.length;
-  const totalUnitsInStock = products.reduce((s, p) => s + p.stock, 0);
-  const lowStockItems = products.filter((p) => p.status === 'low-stock' || p.status === 'out-of-stock');
-  const totalPurchaseValue = purchases.reduce((s, p) => s + p.grandTotal, 0);
-  const inventoryValue = products.reduce((s, p) => s + p.stock * p.cost, 0);
-  const pendingPayments = sales
-    .filter((s) => s.status !== 'paid' && s.status !== 'cancelled' && s.status !== 'draft')
-    .reduce((s, r) => s + (r.grandTotal - r.amountPaid), 0);
+  // Pre-index product cost for O(1) lookup (avoids 300M+ operations on 12k sales x 6k products)
+  const productCostMap = new Map<string, number>();
+  let totalUnitsInStock = 0;
+  let inventoryValue = 0;
+  const lowStockItems: Product[] = [];
 
-  // Profit = sales revenue (subtotal minus discount) - cost of goods sold
-  const costOfGoods = sales
-    .filter((s) => s.status !== 'draft' && s.status !== 'cancelled')
-    .reduce((sum, sale) => {
-    return sum + sale.items.reduce((s, item) => {
-      // If item is custom or has specific sourcing cost recorded
+  for (const p of products) {
+    productCostMap.set(p.id, p.cost);
+    totalUnitsInStock += p.stock;
+    inventoryValue += p.stock * p.cost;
+    if (p.status === 'low-stock' || p.status === 'out-of-stock') {
+      lowStockItems.push(p);
+    }
+  }
+
+  let totalRevenue = 0;
+  let pendingPayments = 0;
+  let costOfGoods = 0;
+  let netSalesRevenue = 0;
+
+  // Single-pass computation over sales
+  for (const sale of sales) {
+    if (sale.status === 'draft' || sale.status === 'cancelled') continue;
+
+    totalRevenue += sale.grandTotal;
+    netSalesRevenue += (sale.subtotal - sale.discount);
+
+    if (sale.status !== 'paid') {
+      pendingPayments += (sale.grandTotal - sale.amountPaid);
+    }
+
+    for (const item of sale.items) {
       if (item.isCustom || (item.cost !== undefined && item.cost > 0)) {
-        return s + (item.cost || 0) * item.qty;
+        costOfGoods += (item.cost || 0) * item.qty;
+      } else {
+        const cost = productCostMap.get(item.productId) ?? 0;
+        costOfGoods += cost * item.qty;
       }
-      const product = products.find((p) => p.id === item.productId);
-      return s + (product ? product.cost * item.qty : 0);
-    }, 0);
-  }, 0);
-  const netSalesRevenue = sales
-    .filter((s) => s.status !== 'draft' && s.status !== 'cancelled')
-    .reduce((s, r) => s + r.subtotal - r.discount, 0);
+    }
+  }
+
+  let totalPurchaseValue = 0;
+  for (const p of purchases) {
+    totalPurchaseValue += p.grandTotal;
+  }
+
   const grossProfit = netSalesRevenue - costOfGoods;
   const profitMargin = netSalesRevenue > 0 ? (grossProfit / netSalesRevenue) * 100 : 0;
 
   return {
     totalRevenue,
-    totalSalesCount,
+    totalSalesCount: sales.length,
     totalUnitsInStock,
     lowStockCount: lowStockItems.length,
     lowStockItems,
     totalPurchaseValue,
     inventoryValue,
     pendingPayments,
+    costOfGoods,
     grossProfit,
     profitMargin,
   };
@@ -147,17 +166,17 @@ export function salesByMonth(sales: SaleRecord[]): { month: string; value: numbe
 }
 
 export function categoryBreakdownFromSales(sales: SaleRecord[], products: Product[]) {
+  // Pre-index product categories for O(1) lookup
+  const categoryMap = new Map<string, string>();
+  for (const p of products) {
+    categoryMap.set(p.id, p.category || 'Other');
+  }
+
   const map = new Map<string, { category: string; count: number; revenue: number }>();
   for (const sale of sales) {
     if (sale.status === 'draft' || sale.status === 'cancelled') continue;
     for (const item of sale.items) {
-      let category = 'Other';
-      if (item.isCustom) {
-        category = 'Custom & Sourced';
-      } else {
-        const product = products.find((p) => p.id === item.productId);
-        category = product?.category ?? 'Other';
-      }
+      const category = item.isCustom ? 'Custom & Sourced' : (categoryMap.get(item.productId) ?? 'Other');
       const existing = map.get(category) ?? { category, count: 0, revenue: 0 };
       existing.count += item.qty;
       existing.revenue += item.price * item.qty;
