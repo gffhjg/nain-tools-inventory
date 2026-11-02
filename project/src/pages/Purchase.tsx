@@ -9,6 +9,7 @@ import {
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
+import TimelineFilter from '@/components/TimelineFilter';
 import { ERPProductItemsManager } from '@/components/ActiveItemSpotlight';
 import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
@@ -25,6 +26,12 @@ import {
   formatRelativeDate,
   incrementInvoiceNumber,
   type DateRange,
+  type PeriodFilter,
+  getTodayISO,
+  getCurrentMonthISO,
+  getCurrentYearISO,
+  filterByPeriod,
+  getPeriodFilterLabel,
 } from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
 import { handleNumericFocus, handleNumericClick, handleNumericKeyDown, cleanLeadingZeros, autoSelectNumberProps } from '@/utils/numberInput';
@@ -171,24 +178,21 @@ interface PurchaseOrderDraftData {
   savedAt: number;
 }
 
-const PURCHASE_TIMELINE_STEPS: { id: DateRange; label: string; shortLabel: string }[] = [
-  { id: 'today', label: 'Today', shortLabel: 'Today' },
-  { id: '3d', label: 'Past 3 Days', shortLabel: '3D' },
-  { id: '7d', label: 'Past 7 Days', shortLabel: '7D' },
-  { id: '14d', label: 'Past 14 Days', shortLabel: '14D' },
-  { id: '30d', label: 'Past 30 Days', shortLabel: '30D' },
-  { id: '90d', label: 'Past 90 Days', shortLabel: '90D' },
-  { id: 'all', label: 'All Time', shortLabel: 'All' },
-];
 
 export default function Purchase() {
   const { purchases, products, suppliers, sales, addPurchase, updatePurchase, deletePurchase, addSale, addProduct, updateProduct, addSupplier, deleteSale, updatePurchasePayment, companySettings } = useStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [activePurchaseSubTab, setActivePurchaseSubTab] = useState<'bills' | 'raw-purchases'>('bills');
-  const [timelineRange, setTimelineRange] = useState<DateRange>('all');
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(() => ({
+    mode: 'date',
+    date: getTodayISO(),
+    month: getCurrentMonthISO(),
+    year: getCurrentYearISO(),
+  }));
   const [isTimelineOpen, setIsTimelineOpen] = useState<boolean>(() => {
-    return localStorage.getItem('nain_purchase_timeline_open') === 'true';
+    const saved = localStorage.getItem('nain_purchase_timeline_open');
+    return saved !== null ? saved === 'true' : true;
   });
 
   const toggleTimeline = () => {
@@ -517,18 +521,18 @@ export default function Purchase() {
   }, [purchases, sales]);
 
   const timelineFilteredPurchases = useMemo(() => {
-    if (timelineRange === 'all') return combinedRecords;
-    return filterByDateRange(combinedRecords, timelineRange);
-  }, [combinedRecords, timelineRange]);
+    if (periodFilter.mode === 'all') return combinedRecords;
+    return filterByPeriod(combinedRecords, periodFilter);
+  }, [combinedRecords, periodFilter]);
 
   const timelineSummary = useMemo(() => {
     const total = timelineFilteredPurchases.reduce((s, r) => s + r.grandTotal, 0);
     return {
       count: timelineFilteredPurchases.length,
       total,
-      label: getDateRangeLabel(timelineRange),
+      label: getPeriodFilterLabel(periodFilter),
     };
-  }, [timelineFilteredPurchases, timelineRange]);
+  }, [timelineFilteredPurchases, periodFilter]);
 
   const latestPurchaseDate = useMemo(() => {
     const valid = combinedRecords
@@ -538,7 +542,17 @@ export default function Purchase() {
     return valid[0] || null;
   }, [combinedRecords]);
 
-  const sliderIndex = PURCHASE_TIMELINE_STEPS.findIndex((s) => s.id === timelineRange);
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    const current = getCurrentYearISO();
+    years.add(current);
+    for (const p of purchases) {
+      if (p.date && p.date.length >= 4) {
+        years.add(p.date.slice(0, 4));
+      }
+    }
+    return Array.from(years).sort().reverse();
+  }, [purchases]);
 
   const filtered = useMemo(() => {
     let list = timelineFilteredPurchases;
@@ -560,7 +574,7 @@ export default function Purchase() {
 
   useEffect(() => {
     setPage(1);
-  }, [deferredSearch, activeTab, timelineRange, pageSize]);
+  }, [deferredSearch, activeTab, periodFilter, pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const paginatedPurchases = useMemo(() => {
@@ -583,7 +597,7 @@ export default function Purchase() {
   }, [combinedRecords]);
 
   const summary = useMemo(() => {
-    const activeRecords = timelineRange === 'all' ? combinedRecords : timelineFilteredPurchases;
+    const activeRecords = periodFilter.mode === 'all' ? combinedRecords : timelineFilteredPurchases;
     const totalInward = activeRecords.reduce((s, r) => s + r.grandTotal, 0);
     const totalPB = activeRecords
       .filter((r) => r.typeLabel === 'PURCHASE BILL')
@@ -601,7 +615,7 @@ export default function Purchase() {
       countCN,
       allTimeTotalInward: allTimeSummary.totalInward,
     };
-  }, [combinedRecords, timelineFilteredPurchases, timelineRange, allTimeSummary]);
+  }, [combinedRecords, timelineFilteredPurchases, periodFilter.mode, allTimeSummary]);
 
   const statCards = [
     { label: 'Total Purchase Value', value: `₹${summary.totalInward.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: Truck, tone: 'bg-brand-50 text-brand-600' },
@@ -1945,11 +1959,11 @@ export default function Purchase() {
               <Truck className="h-5 w-5" />
             </div>
             <span className={`text-[10.5px] font-extrabold px-2 py-0.5 rounded-md ${
-              timelineRange === 'all'
+              periodFilter.mode === 'all'
                 ? 'text-brand-700 bg-brand-50'
                 : 'text-brand-800 bg-brand-100 border border-brand-200'
             }`}>
-              {timelineRange === 'all' ? 'All Inward' : timelineSummary.label}
+              {periodFilter.mode === 'all' ? 'All Inward' : timelineSummary.label}
             </span>
           </div>
           <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">
@@ -1957,7 +1971,7 @@ export default function Purchase() {
           </p>
           <div className="mt-1 flex items-center justify-between text-xs text-slate-500 font-semibold">
             <span>Total Purchase Value</span>
-            {timelineRange !== 'all' && (
+            {periodFilter.mode !== 'all' && (
               <span className="text-[10px] text-slate-400 font-medium" title={`All-time Total: ${money(summary.allTimeTotalInward)}`}>
                 All: {moneyShort(summary.allTimeTotalInward)}
               </span>
@@ -1985,7 +1999,7 @@ export default function Purchase() {
             {money(summary.totalPB)}
           </p>
           <p className="mt-1 text-xs text-slate-500 font-semibold">
-            {timelineRange === 'all' ? 'Purchase Bills' : `Inward (${timelineSummary.label})`}
+            {periodFilter.mode === 'all' ? 'Purchase Bills' : `Inward (${timelineSummary.label})`}
           </p>
         </div>
 
@@ -2009,7 +2023,7 @@ export default function Purchase() {
             {money(summary.totalCN)}
           </p>
           <p className="mt-1 text-xs text-slate-500 font-semibold">
-            {timelineRange === 'all' ? 'Credit Notes' : `Adjustments (${timelineSummary.label})`}
+            {periodFilter.mode === 'all' ? 'Credit Notes' : `Adjustments (${timelineSummary.label})`}
           </p>
         </div>
 
@@ -2036,154 +2050,23 @@ export default function Purchase() {
         </div>
       </div>
 
-      {/* Collapsible Purchase & Inward Timeline Slider */}
+      {/* Timeline Filter (Date / Month / Year / All Time) */}
       <div className="mt-4">
-        {!isTimelineOpen ? (
-          /* Compact Collapsed Bar (Minimalist, 0 clutter for daily work) */
-          <div className="flex items-center justify-between px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 backdrop-blur-xs shadow-2xs">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
-                <Calendar className="h-3.5 w-3.5" />
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-bold text-slate-800">
-                  Timeline Filter:
-                </span>
-                <span className={`px-2 py-0.5 rounded-md font-extrabold text-[11px] ${
-                  timelineRange === 'all'
-                    ? 'bg-slate-100 text-slate-700'
-                    : 'bg-brand-50 text-brand-700 border border-brand-200'
-                }`}>
-                  {timelineSummary.label}
-                </span>
-                <span className="text-[11px] text-slate-500 font-semibold">
-                  ({timelineSummary.count} bills · {money(timelineSummary.total)})
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {timelineRange !== 'all' && (
-                <button
-                  type="button"
-                  onClick={() => setTimelineRange('all')}
-                  className="px-2 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-slate-100 transition cursor-pointer"
-                  title="Reset timeline to All Time"
-                >
-                  Reset All
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={toggleTimeline}
-                className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition flex items-center gap-1.5 cursor-pointer"
-                title="Expand purchase date slider"
-              >
-                <SlidersHorizontal className="w-3 h-3 text-slate-500" />
-                <span>Timeline Slider</span>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
-              </button>
-            </div>
-          </div>
-        ) : (
-          /* Expanded View (Full interactive slider with Collapse button) */
-          <div className="rounded-2xl border border-brand-200/80 bg-gradient-to-br from-brand-50/50 via-white to-slate-50/70 p-4 shadow-2xs space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-xs">
-                  <Calendar className="h-4 w-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
-                      Purchase &amp; Inward Timeline Tracker
-                    </h3>
-                    <span className="rounded-md bg-brand-100 px-2 py-0.5 text-[10.5px] font-extrabold text-brand-800 border border-brand-200">
-                      {timelineSummary.label}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 font-medium">
-                    Slide to track purchases by timeframe · <strong className="text-slate-800">{timelineSummary.count} bills</strong> ({money(timelineSummary.total)})
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 self-start sm:self-auto">
-                {timelineRange !== 'all' && (
-                  <button
-                    type="button"
-                    onClick={() => setTimelineRange('all')}
-                    className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-white border border-slate-200 transition shadow-2xs flex items-center gap-1 cursor-pointer"
-                  >
-                    <RefreshCw className="w-3 h-3 text-slate-400" />
-                    <span>Show All Time</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={toggleTimeline}
-                  className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition shadow-2xs flex items-center gap-1 cursor-pointer"
-                  title="Collapse slider to save screen space"
-                >
-                  <span>Collapse</span>
-                  <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
-                </button>
-              </div>
-            </div>
-
-            {/* Slider Track and Thumb */}
-            <div className="px-1 pt-1 pb-1">
-              <input
-                type="range"
-                min={0}
-                max={PURCHASE_TIMELINE_STEPS.length - 1}
-                step={1}
-                value={sliderIndex >= 0 ? sliderIndex : PURCHASE_TIMELINE_STEPS.length - 1}
-                onChange={(e) => setTimelineRange(PURCHASE_TIMELINE_STEPS[Number(e.target.value)].id)}
-                className="w-full accent-brand-600 cursor-pointer h-2.5 bg-slate-200 rounded-lg appearance-none transition-all shadow-inner"
-                title="Slide to track when purchases/bills were recorded"
-              />
-
-              {/* Milestone Buttons below slider */}
-              <div className="mt-2 grid grid-cols-7 gap-1">
-                {PURCHASE_TIMELINE_STEPS.map((step) => {
-                  const isActive = timelineRange === step.id;
-                  return (
-                    <button
-                      key={step.id}
-                      type="button"
-                      onClick={() => setTimelineRange(step.id)}
-                      className={`flex flex-col items-center py-1.5 px-1 rounded-xl transition-all text-center cursor-pointer ${
-                        isActive
-                          ? 'bg-brand-600 text-white font-extrabold shadow-sm scale-105'
-                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80 font-semibold'
-                      }`}
-                    >
-                      <span className="text-[11.5px] leading-none">{step.shortLabel}</span>
-                      <span className={`mt-0.5 text-[9.5px] hidden sm:inline ${isActive ? 'text-brand-100' : 'text-slate-400'}`}>
-                        {step.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Helpful notice if 0 bills found in range */}
-            {timelineRange !== 'all' && timelineFilteredPurchases.length === 0 && (
-              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-center justify-between">
-                <span>No purchase bills found in the selected timeframe ({timelineSummary.label}).</span>
-                <button
-                  type="button"
-                  onClick={() => setTimelineRange('all')}
-                  className="font-bold underline text-amber-900 hover:text-amber-950 cursor-pointer"
-                >
-                  Show All Time
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <TimelineFilter
+          title="Purchase Timeline"
+          entityName="bills"
+          entitySingular="purchase bill"
+          filter={periodFilter}
+          onChange={setPeriodFilter}
+          count={timelineSummary.count}
+          total={timelineSummary.total}
+          allTimeTotal={summary.allTimeTotalInward}
+          latestDate={latestPurchaseDate}
+          isOpen={isTimelineOpen}
+          onToggleOpen={toggleTimeline}
+          availableYears={availableYears}
+          themeColor="brand"
+        />
       </div>
 
       <div className="sticky top-[8.5rem] z-10 mt-4 -mx-4 px-4 py-3 bg-slate-50/90 backdrop-blur-md rounded-lg lg:-mx-8 lg:px-8">
@@ -2357,28 +2240,30 @@ export default function Purchase() {
                       <div className="max-w-md mx-auto space-y-3">
                         <Clock className="w-8 h-8 text-slate-300 mx-auto mb-1" />
                         <p className="font-bold text-slate-700">No purchase records found matching current filter</p>
-                        {timelineRange !== 'all' && (
+                        {periodFilter.mode !== 'all' && (
                           <div className="text-xs text-slate-500 space-y-2">
                             <p>Active period: <span className="font-bold text-brand-700">{timelineSummary.label}</span></p>
                             {latestPurchaseDate && (
                               <p className="text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
-                                Your latest purchase was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago). Slide to 14 Days to view it!
+                                Your most recent purchase bill was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago).
                               </p>
                             )}
                             <div className="flex items-center justify-center gap-2 pt-1">
+                              {latestPurchaseDate && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPeriodFilter({ ...periodFilter, mode: 'date', date: latestPurchaseDate })}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 text-white hover:bg-amber-700 shadow-xs cursor-pointer"
+                                >
+                                  View Latest Date ({latestPurchaseDate})
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => setTimelineRange('14d')}
-                                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-600 text-white hover:bg-brand-700 shadow-xs cursor-pointer"
-                              >
-                                Slide to 14 Days
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setTimelineRange('all')}
+                                onClick={() => setPeriodFilter({ ...periodFilter, mode: 'all' })}
                                 className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 cursor-pointer"
                               >
-                                Reset to All Time
+                                Show All Time
                               </button>
                             </div>
                           </div>

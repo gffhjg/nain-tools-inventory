@@ -2,6 +2,148 @@ import type { Product, SaleRecord, PurchaseRecord } from '@/lib/types';
 
 export type DateRange = 'today' | '3d' | '7d' | '14d' | '30d' | '90d' | 'all';
 
+export type PeriodFilterMode = 'date' | 'month' | 'year' | 'all';
+
+export interface PeriodFilter {
+  mode: PeriodFilterMode;
+  date: string;  // YYYY-MM-DD
+  month: string; // YYYY-MM
+  year: string;  // YYYY
+}
+
+export function getTodayISO(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function getCurrentMonthISO(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+export function getCurrentYearISO(): string {
+  return String(new Date().getFullYear());
+}
+
+export function shiftISODate(dateStr: string, days: number): string {
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    if (isNaN(d.getTime())) return dateStr;
+    d.setDate(d.getDate() + days);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch {
+    return dateStr;
+  }
+}
+
+export function shiftISOMonth(monthStr: string, months: number): string {
+  try {
+    const [y, m] = monthStr.split('-').map(Number);
+    const d = new Date(y, m - 1 + months, 1);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  } catch {
+    return monthStr;
+  }
+}
+
+export function shiftISOYear(yearStr: string, years: number): string {
+  try {
+    const y = parseInt(yearStr, 10);
+    if (isNaN(y)) return yearStr;
+    return String(y + years);
+  } catch {
+    return yearStr;
+  }
+}
+
+export function formatFriendlyDate(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
+export function formatFriendlyMonth(monthStr: string): string {
+  if (!monthStr) return '';
+  try {
+    const [y, m] = monthStr.split('-').map(Number);
+    const d = new Date(y, m - 1, 1);
+    if (isNaN(d.getTime())) return monthStr;
+    return d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  } catch {
+    return monthStr;
+  }
+}
+
+export function getPeriodFilterLabel(filter: PeriodFilter): string {
+  if (filter.mode === 'all') return 'All Time';
+  if (filter.mode === 'date') {
+    if (!filter.date) return 'Select Date';
+    const today = getTodayISO();
+    if (filter.date === today) {
+      return `Today (${formatFriendlyDate(filter.date)})`;
+    }
+    const yesterday = shiftISODate(today, -1);
+    if (filter.date === yesterday) {
+      return `Yesterday (${formatFriendlyDate(filter.date)})`;
+    }
+    return formatFriendlyDate(filter.date);
+  }
+  if (filter.mode === 'month') {
+    return formatFriendlyMonth(filter.month);
+  }
+  if (filter.mode === 'year') {
+    return `Year ${filter.year}`;
+  }
+  return 'All Time';
+}
+
+export function filterByPeriod<T extends { date?: string; convertedAt?: string }>(
+  items: T[],
+  filter: PeriodFilter
+): T[] {
+  if (filter.mode === 'all') return items;
+  if (filter.mode === 'date') {
+    const target = filter.date;
+    if (!target) return items;
+    return items.filter((i) => {
+      const d = (i.date || i.convertedAt || '').slice(0, 10);
+      return d === target;
+    });
+  }
+  if (filter.mode === 'month') {
+    const target = filter.month;
+    if (!target) return items;
+    return items.filter((i) => {
+      const d = (i.date || i.convertedAt || '').slice(0, 7);
+      return d === target;
+    });
+  }
+  if (filter.mode === 'year') {
+    const target = filter.year;
+    if (!target) return items;
+    return items.filter((i) => {
+      const d = (i.date || i.convertedAt || '').slice(0, 4);
+      return d === target;
+    });
+  }
+  return items;
+}
+
 export function getDaysAgo(dateStr: string): number {
   if (!dateStr) return 0;
   const now = new Date();

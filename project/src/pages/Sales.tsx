@@ -10,6 +10,7 @@ import {
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
+import TimelineFilter from '@/components/TimelineFilter';
 import { printInvoice } from '@/components/PrintableInvoice';
 import { ERPProductItemsManager } from '@/components/ActiveItemSpotlight';
 import { useStore } from '@/store/AppStore';
@@ -25,6 +26,12 @@ import {
   getDaysAgo,
   incrementInvoiceNumber,
   type DateRange,
+  type PeriodFilter,
+  getTodayISO,
+  getCurrentMonthISO,
+  getCurrentYearISO,
+  filterByPeriod,
+  getPeriodFilterLabel,
 } from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
 import { handleNumericFocus, handleNumericClick, handleNumericKeyDown, cleanLeadingZeros, autoSelectNumberProps } from '@/utils/numberInput';
@@ -205,9 +212,15 @@ export default function Sales() {
       }
     } catch {}
   }, [location.search]);
-  const [timelineRange, setTimelineRange] = useState<DateRange>('all');
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>(() => ({
+    mode: 'date',
+    date: getTodayISO(),
+    month: getCurrentMonthISO(),
+    year: getCurrentYearISO(),
+  }));
   const [isTimelineOpen, setIsTimelineOpen] = useState<boolean>(() => {
-    return localStorage.getItem('nain_sales_timeline_open') === 'true';
+    const saved = localStorage.getItem('nain_sales_timeline_open');
+    return saved !== null ? saved === 'true' : true;
   });
 
   const toggleTimeline = () => {
@@ -594,8 +607,8 @@ export default function Sales() {
 
   const filtered = useMemo(() => {
     let list = sales.filter((s) => s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE');
-    if (timelineRange !== 'all') {
-      list = filterByDateRange(list, timelineRange);
+    if (periodFilter.mode !== 'all') {
+      list = filterByPeriod(list, periodFilter);
     }
     if (activeFilterTab === 'paid') {
       list = list.filter((s) => s.status === 'paid');
@@ -618,28 +631,28 @@ export default function Sales() {
         s.phone.toLowerCase().includes(q) ||
         (s.items && s.items.some((i) => i.name.toLowerCase().includes(q)))
     );
-  }, [sales, deferredSearch, activeFilterTab, timelineRange]);
+  }, [sales, deferredSearch, activeFilterTab, periodFilter]);
 
   useEffect(() => {
     setSalesPage(1);
-  }, [deferredSearch, activeFilterTab, timelineRange, salesPageSize]);
+  }, [deferredSearch, activeFilterTab, periodFilter, salesPageSize]);
 
   const timelineFilteredInvoices = useMemo(() => {
     let list = sales.filter((s) => s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE');
-    if (timelineRange !== 'all') {
-      list = filterByDateRange(list, timelineRange);
+    if (periodFilter.mode !== 'all') {
+      list = filterByPeriod(list, periodFilter);
     }
     return list;
-  }, [sales, timelineRange]);
+  }, [sales, periodFilter]);
 
   const timelineSummary = useMemo(() => {
     const total = timelineFilteredInvoices.reduce((s, r) => s + r.grandTotal, 0);
     return {
       count: timelineFilteredInvoices.length,
       total,
-      label: getDateRangeLabel(timelineRange),
+      label: getPeriodFilterLabel(periodFilter),
     };
-  }, [timelineFilteredInvoices, timelineRange]);
+  }, [timelineFilteredInvoices, periodFilter]);
 
   const latestPurchaseDate = useMemo(() => {
     const valid = sales
@@ -649,7 +662,17 @@ export default function Sales() {
     return valid[0] || null;
   }, [sales]);
 
-  const sliderIndex = SALES_TIMELINE_STEPS.findIndex((s) => s.id === timelineRange);
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    const current = getCurrentYearISO();
+    years.add(current);
+    for (const s of sales) {
+      if (s.date && s.date.length >= 4) {
+        years.add(s.date.slice(0, 4));
+      }
+    }
+    return Array.from(years).sort().reverse();
+  }, [sales]);
 
   const totalSalesPages = Math.max(1, Math.ceil(filtered.length / salesPageSize));
   const paginatedSales = useMemo(() => {
@@ -669,7 +692,7 @@ export default function Sales() {
   }, [timelineFilteredInvoices]);
 
   const summary = useMemo(() => {
-    const activeInvoices = timelineRange === 'all'
+    const activeInvoices = periodFilter.mode === 'all'
       ? sales.filter((s) => s.documentType !== 'PROFORMA INVOICE' && s.documentType !== 'PURCHASE ORDER' && s.documentType !== 'RAW INVOICE' && s.documentType !== 'RAW PURCHASE')
       : timelineFilteredInvoices;
     const total = activeInvoices.reduce((s, r) => s + r.grandTotal, 0);
@@ -690,7 +713,7 @@ export default function Sales() {
     const allTimeTotal = allTimeInvoices.reduce((s, r) => s + r.grandTotal, 0);
 
     return { total, paid, outstanding, count: activeInvoices.length, dnCount, dnTotal, dnList, cnCount, cnTotal, cnList, allTimeTotal };
-  }, [sales, timelineRange, timelineFilteredInvoices]);
+  }, [sales, periodFilter, timelineFilteredInvoices]);
 
   // Raw Sales (Counter / Cash & UPI Sales without GST bill)
   const rawSalesList = useMemo(
@@ -2271,17 +2294,17 @@ export default function Sales() {
                   <ShoppingCart className="h-5 w-5" />
                 </div>
                 <span className={`text-[10.5px] font-extrabold px-2 py-0.5 rounded-md ${
-                  timelineRange === 'all'
+                  periodFilter.mode === 'all'
                     ? 'text-brand-700 bg-brand-50'
                     : 'text-brand-800 bg-brand-100 border border-brand-200'
                 }`}>
-                  {timelineRange === 'all' ? 'All Sales' : timelineSummary.label}
+                  {periodFilter.mode === 'all' ? 'All Sales' : timelineSummary.label}
                 </span>
               </div>
               <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(summary.total)}</p>
               <div className="mt-1 flex items-center justify-between text-xs text-slate-500 font-semibold">
                 <span>Total Revenue ({statusCounts.all})</span>
-                {timelineRange !== 'all' && (
+                {periodFilter.mode !== 'all' && (
                   <span className="text-[10px] text-slate-400 font-medium" title={`All-time Total: ${money(summary.allTimeTotal)}`}>
                     All: {moneyShort(summary.allTimeTotal)}
                   </span>
@@ -2307,7 +2330,7 @@ export default function Sales() {
               </div>
               <p className="mt-3 text-2xl font-black tracking-tight text-slate-900">{money(summary.paid)}</p>
               <p className="mt-1 text-xs text-slate-500 font-semibold">
-                {timelineRange === 'all' ? 'Collected Payments' : `Collected (${timelineSummary.label})`}
+                {periodFilter.mode === 'all' ? 'Collected Payments' : `Collected (${timelineSummary.label})`}
               </p>
             </div>
 
@@ -2376,186 +2399,46 @@ export default function Sales() {
 
           {/* Sales List Table */}
           <div className="card p-6 space-y-4">
-            {/* Collapsible Purchase & Sales Timeline Slider */}
-            {!isTimelineOpen ? (
-              /* Compact Collapsed Bar (Minimalist, 0 clutter for daily work) */
-              <div className="flex items-center justify-between px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 backdrop-blur-xs shadow-2xs">
+            {/* Timeline Filter (Date / Month / Year / All Time) */}
+            <TimelineFilter
+              title="Sales Timeline"
+              entityName="invoices"
+              entitySingular="tax invoice"
+              filter={periodFilter}
+              onChange={setPeriodFilter}
+              count={timelineSummary.count}
+              total={timelineSummary.total}
+              allTimeTotal={summary.allTimeTotal}
+              latestDate={latestPurchaseDate}
+              isOpen={isTimelineOpen}
+              onToggleOpen={toggleTimeline}
+              availableYears={availableYears}
+              themeColor="brand"
+            />
+
+            {periodFilter.mode !== 'all' && timelineFilteredInvoices.length === 0 && orderQuoteList.length > 0 && (
+              <div className="p-3 rounded-xl bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border-2 border-blue-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-blue-950 shadow-xs">
                 <div className="flex items-center gap-2.5">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
-                    <Calendar className="h-3.5 w-3.5" />
+                  <div className="h-8 w-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                    <ShoppingBag className="w-4 h-4" />
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className="font-bold text-slate-800">
-                      Timeline Filter:
+                  <div>
+                    <span className="font-extrabold text-blue-900 text-sm">
+                      Looking for your {money(orderQuoteTotalValue)} sale?
                     </span>
-                    <span className={`px-2 py-0.5 rounded-md font-extrabold text-[11px] ${
-                      timelineRange === 'all'
-                        ? 'bg-slate-100 text-slate-700'
-                        : 'bg-brand-50 text-brand-700 border border-brand-200'
-                    }`}>
-                      {timelineSummary.label}
-                    </span>
-                    <span className="text-[11px] text-slate-500 font-semibold">
-                      ({timelineSummary.count} invoices · {money(timelineSummary.total)})
-                    </span>
+                    <p className="text-[11.5px] text-blue-800 font-medium">
+                      It is saved in <strong className="text-blue-900">Orders &amp; Estimates (PO &amp; PI)</strong> ({orderQuoteList.length} total). Tax invoices only show finalized bills.
+                    </p>
                   </div>
                 </div>
-
-                <div className="flex items-center gap-2">
-                  {timelineRange !== 'all' && (
-                    <button
-                      type="button"
-                      onClick={() => setTimelineRange('all')}
-                      className="px-2 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-slate-100 transition"
-                      title="Reset timeline to All Time"
-                    >
-                      Reset All
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={toggleTimeline}
-                    className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition flex items-center gap-1.5"
-                    title="Expand purchase date slider"
-                  >
-                    <SlidersHorizontal className="w-3 h-3 text-slate-500" />
-                    <span>Timeline Slider</span>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* Expanded View (Full interactive slider with Collapse button) */
-              <div className="rounded-2xl border border-brand-200/80 bg-gradient-to-br from-brand-50/50 via-white to-slate-50/70 p-4 shadow-2xs space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-xs">
-                      <Calendar className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
-                          Purchase Timeline Tracker
-                        </h3>
-                        <span className="rounded-md bg-brand-100 px-2 py-0.5 text-[10.5px] font-extrabold text-brand-800 border border-brand-200">
-                          {timelineSummary.label}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 font-medium">
-                        Slide to track purchases by timeframe · <strong className="text-slate-800">{timelineSummary.count} invoices</strong> ({money(timelineSummary.total)})
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 self-start sm:self-auto">
-                    {timelineRange !== 'all' && (
-                      <button
-                        type="button"
-                        onClick={() => setTimelineRange('all')}
-                        className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-brand-600 hover:bg-white border border-slate-200 transition shadow-2xs flex items-center gap-1"
-                      >
-                        <RefreshCw className="w-3 h-3 text-slate-400" />
-                        <span>Show All Time</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={toggleTimeline}
-                      className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition shadow-2xs flex items-center gap-1 cursor-pointer"
-                      title="Collapse slider to save screen space"
-                    >
-                      <span>Collapse</span>
-                      <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Slider Track and Thumb */}
-                <div className="px-1 pt-1 pb-1">
-                  <input
-                    type="range"
-                    min={0}
-                    max={SALES_TIMELINE_STEPS.length - 1}
-                    step={1}
-                    value={sliderIndex >= 0 ? sliderIndex : SALES_TIMELINE_STEPS.length - 1}
-                    onChange={(e) => setTimelineRange(SALES_TIMELINE_STEPS[Number(e.target.value)].id)}
-                    className="w-full accent-brand-600 cursor-pointer h-2.5 bg-slate-200 rounded-lg appearance-none transition-all shadow-inner"
-                    title="Slide to track when sales/orders were purchased"
-                  />
-
-                  {/* Milestone Buttons below slider */}
-                  <div className="mt-2 grid grid-cols-7 gap-1">
-                    {SALES_TIMELINE_STEPS.map((step) => {
-                      const isActive = timelineRange === step.id;
-                      return (
-                        <button
-                          key={step.id}
-                          type="button"
-                          onClick={() => setTimelineRange(step.id)}
-                          className={`flex flex-col items-center py-1.5 px-1 rounded-xl transition-all text-center ${
-                            isActive
-                              ? 'bg-brand-600 text-white font-extrabold shadow-sm scale-105'
-                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80 font-semibold'
-                          }`}
-                        >
-                          <span className="text-[11.5px] leading-none">{step.shortLabel}</span>
-                          <span className={`mt-0.5 text-[9.5px] hidden sm:inline ${isActive ? 'text-brand-100' : 'text-slate-400'}`}>
-                            {step.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Helpful notice if 0 orders found in selected range or if orders/quotes exist */}
-                {timelineRange !== 'all' && timelineFilteredInvoices.length === 0 && (
-                  <div className="space-y-2">
-                    {orderQuoteList.length > 0 && (
-                      <div className="p-3 rounded-xl bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border-2 border-blue-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-blue-950 shadow-xs">
-                        <div className="flex items-center gap-2.5">
-                          <div className="h-8 w-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
-                            <ShoppingBag className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <span className="font-extrabold text-blue-900 text-sm">
-                              Looking for your {money(orderQuoteTotalValue)} sale?
-                            </span>
-                            <p className="text-[11.5px] text-blue-800 font-medium">
-                              It is saved in <strong className="text-blue-900">Orders &amp; Estimates (PO &amp; PI)</strong> ({orderQuoteList.length} total). Tax invoices only show finalized bills.
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setActiveSalesSubTab('orders')}
-                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shrink-0 transition shadow-xs flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <span>Open Orders &amp; Estimates ({money(orderQuoteTotalValue)})</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    )}
-
-                    {latestPurchaseDate && (
-                      <div className="p-2.5 rounded-xl bg-amber-50/90 border border-amber-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-950">
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-                          <span>
-                            0 tax invoices in this window. Most recent customer invoice was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago).
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setTimelineRange('14d')}
-                          className="px-3 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700 font-bold text-[11px] shrink-0 transition shadow-2xs"
-                        >
-                          Slide to 14 Days (Includes 09 Sep)
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setActiveSalesSubTab('orders')}
+                  className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shrink-0 transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>Open Orders &amp; Estimates ({money(orderQuoteTotalValue)})</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 
@@ -2674,28 +2557,30 @@ export default function Sales() {
                             </div>
                           )}
 
-                          {timelineRange !== 'all' && (
+                          {periodFilter.mode !== 'all' && (
                             <div className="text-xs text-slate-500 space-y-2">
                               <p>Active period: <span className="font-bold text-brand-700">{timelineSummary.label}</span></p>
                               {latestPurchaseDate && (
                                 <p className="text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
-                                  Your latest order was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago). Slide to 14 Days to view it!
+                                  Your most recent customer invoice was on <strong>{latestPurchaseDate}</strong> ({getDaysAgo(latestPurchaseDate)} days ago).
                                 </p>
                               )}
                               <div className="flex items-center justify-center gap-2 pt-1">
+                                {latestPurchaseDate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPeriodFilter({ ...periodFilter, mode: 'date', date: latestPurchaseDate })}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 text-white hover:bg-amber-700 shadow-xs"
+                                  >
+                                    View Latest Date ({latestPurchaseDate})
+                                  </button>
+                                )}
                                 <button
                                   type="button"
-                                  onClick={() => setTimelineRange('14d')}
-                                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-600 text-white hover:bg-brand-700 shadow-xs"
-                                >
-                                  Slide to 14 Days
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setTimelineRange('all')}
+                                  onClick={() => setPeriodFilter({ ...periodFilter, mode: 'all' })}
                                   className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200"
                                 >
-                                  Reset to All Time
+                                  Show All Time
                                 </button>
                               </div>
                             </div>
