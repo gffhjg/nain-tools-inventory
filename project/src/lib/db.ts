@@ -531,12 +531,12 @@ export async function getDb(): Promise<PGlite> {
     }
 
     let loadDataDir: Blob | undefined;
-    const dbName = 'idb://nain-tools-v5';
-    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v5') === 'true';
+    const dbName = 'idb://nain-tools-v6';
+    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v6') === 'true';
 
     if (!isSeeded && typeof window !== 'undefined' && typeof fetch !== 'undefined') {
       try {
-        console.log('[db] Downloading pre-migrated TradeSoftGST database tarball (6.4MB)...');
+        console.log('[db] Downloading pre-migrated TradeSoftGST database tarball (7.6MB)...');
         const res = await fetch('/migrated-db.tar.gz');
         if (res.ok) {
           const blob = await res.blob();
@@ -561,12 +561,12 @@ export async function getDb(): Promise<PGlite> {
       const { rows } = await db.query<{ count: string }>('SELECT count(*) FROM sales');
       const salesCount = Number(rows[0]?.count || 0);
       console.log(`[db] Current database loaded with ${salesCount} sales invoices.`);
-      if (salesCount > 0) {
+      if (salesCount >= 5000) {
         if (typeof window !== 'undefined') {
-          localStorage.setItem('nain_tools_seeded_v5', 'true');
+          localStorage.setItem('nain_tools_seeded_v6', 'true');
         }
       } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-        console.log('[db] Sales table empty. Falling back to background auto-import from JSON...');
+        console.log(`[db] Database has ${salesCount} invoices (< 5000). Updating to latest 5,376+ TradeSoft dataset...`);
         const backupRes = await fetch('/nain-tools-backup-migrated.json');
         if (backupRes.ok) {
           const text = await backupRes.text();
@@ -574,7 +574,7 @@ export async function getDb(): Promise<PGlite> {
           const { api } = await import('./api');
           await api.importDatabase(text);
           console.log('[db] JSON auto-import complete!');
-          localStorage.setItem('nain_tools_seeded_v5', 'true');
+          localStorage.setItem('nain_tools_seeded_v6', 'true');
         }
       }
     } catch (e) {
@@ -607,7 +607,7 @@ export async function getDbInfo(): Promise<{
   return {
     schemaVersion,
     appVersion,
-    dbLocation: 'IndexedDB: nain-tools-v4',
+    dbLocation: 'IndexedDB: nain-tools-v6',
     storageType: 'PGlite (PostgreSQL WASM)',
   };
 }
