@@ -226,7 +226,7 @@ export default function TimelineFilter({
                 }`}
               >
                 <Calendar className="w-3.5 h-3.5" />
-                <span>1. Date (Day)</span>
+                <span>Date</span>
               </button>
 
               <button
@@ -239,7 +239,7 @@ export default function TimelineFilter({
                 }`}
               >
                 <CalendarRange className="w-3.5 h-3.5" />
-                <span>2. Month</span>
+                <span>Month</span>
               </button>
 
               <button
@@ -252,7 +252,7 @@ export default function TimelineFilter({
                 }`}
               >
                 <CalendarDays className="w-3.5 h-3.5" />
-                <span>3. Year</span>
+                <span>Year</span>
               </button>
 
               <button
