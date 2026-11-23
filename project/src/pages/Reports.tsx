@@ -23,6 +23,8 @@ import {
   Landmark,
   Eye,
   ArrowLeft,
+  ArrowRight,
+  Search,
   ExternalLink,
   User,
   RefreshCw,
@@ -53,11 +55,10 @@ import {
   type DateRange,
 } from '@/utils/analytics';
 
-type ReportType = 'sales' | 'financial-years' | 'proforma' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding' | 'cheques';
+type ReportType = 'sales' | 'proforma' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding' | 'cheques';
 
 const reportTypes: { id: ReportType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'sales', label: 'Sales Report', icon: ShoppingCart },
-  { id: 'financial-years', label: 'Financial Years (FY)', icon: Calendar },
   { id: 'proforma', label: 'Proforma & Quote Conversion', icon: FileText },
   { id: 'purchase', label: 'Purchase Report', icon: Truck },
   { id: 'cheques', label: 'Cheque Register', icon: Landmark },
@@ -105,20 +106,6 @@ export default function Reports() {
           { label: 'Pending Payments', value: money(stats.pendingPayments), icon: Clock, tone: 'bg-warn-50 text-warn-600' },
           { label: 'Avg. Order Value', value: stats.totalSalesCount > 0 ? money(stats.totalRevenue / stats.totalSalesCount) : '₹0.00', icon: TrendingUp, tone: 'bg-slate-100 text-slate-600' },
         ];
-      case 'financial-years': {
-        const liveSales = sales.filter((s) => !s.invoice?.startsWith('OP-BAL') && s.status !== 'cancelled' && s.status !== 'draft');
-        const livePurc = purchases.filter((p) => !p.poNumber?.startsWith('OP-PAYABLE') && p.status !== 'cancelled');
-        const opbalSales = sales.filter((s) => s.invoice?.startsWith('OP-BAL'));
-        const opbalPurc = purchases.filter((p) => p.poNumber?.startsWith('OP-PAYABLE'));
-        const opbalSalesTotal = opbalSales.reduce((sum, s) => sum + s.grandTotal, 0);
-        const opbalPurcTotal = opbalPurc.reduce((sum, p) => sum + p.grandTotal, 0);
-        return [
-          { label: 'FY 2026-27 Active Sales', value: money(liveSales.reduce((s, r) => s + r.grandTotal, 0)), icon: ShoppingCart, tone: 'bg-emerald-50 text-emerald-600' },
-          { label: 'FY 2026-27 Purchases', value: money(livePurc.reduce((s, p) => s + p.grandTotal, 0)), icon: Truck, tone: 'bg-blue-50 text-blue-600' },
-          { label: 'Carried Forward Receivables', value: `${opbalSales.length} Parties (${money(opbalSalesTotal)})`, icon: Users, tone: 'bg-purple-50 text-purple-600' },
-          { label: 'Carried Forward Payables', value: `${opbalPurc.length} Suppliers (${money(opbalPurcTotal)})`, icon: Wallet, tone: 'bg-amber-50 text-amber-600' },
-        ];
-      }
       case 'proforma': {
         const totalPi = filteredSales.filter((s) => s.documentType === 'PROFORMA INVOICE' || s.convertedFromPiNumber || (s.invoice && s.invoice.startsWith('PI-')));
         const convertedPi = filteredSales.filter((s) => Boolean(s.convertedFromPiNumber));
@@ -588,12 +575,6 @@ export default function Reports() {
             allSales={sales}
           />
         )}
-        {activeReport === 'financial-years' && (
-          <FinancialYearsReport
-            sales={sales}
-            purchases={purchases}
-          />
-        )}
         {activeReport === 'proforma' && (
           <ProformaReport
             sales={filteredSales}
@@ -616,7 +597,14 @@ export default function Reports() {
           />
         )}
         {activeReport === 'inventory' && <InventoryReport products={products} />}
-        {activeReport === 'profit' && <ProfitReport sales={filteredSales} products={products} />}
+        {activeReport === 'profit' && (
+          <ProfitReport
+            sales={sales}
+            filteredSales={filteredSales}
+            products={products}
+            purchases={purchases}
+          />
+        )}
         {activeReport === 'lowstock' && <LowStockReport products={products} />}
         {activeReport === 'topselling' && <TopSellingReport topProducts={topProducts} />}
         {activeReport === 'gst' && <GSTReport sales={filteredSales} purchases={filteredPurchases} />}
@@ -1258,13 +1246,51 @@ function InventoryReport({ products }: { products: Product[] }) {
   );
 }
 
-function ProfitReport({ sales, products }: { sales: SaleRecord[]; products: Product[] }) {
+function ProfitReport({
+  sales,
+  filteredSales,
+  products,
+  purchases,
+}: {
+  sales: SaleRecord[];
+  filteredSales: SaleRecord[];
+  products: Product[];
+  purchases: PurchaseRecord[];
+}) {
+  type FYOption = '2026-27' | '2025-26' | '2024-25' | 'multi-year';
+  const [selectedFY, setSelectedFY] = useState<FYOption>('2026-27');
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
-  useEffect(() => {
-    setPage(1);
-  }, [sales.length]);
+  const [multiYearSubTab, setMultiYearSubTab] = useState<'overview' | 'opbal-customers' | 'opbal-suppliers'>('overview');
+  const [opbalSearch, setOpbalSearch] = useState('');
+
+  // Live FY 2026-27 sales (excluding OP-BAL opening balances)
+  const fy26LiveSales = useMemo(
+    () => sales.filter((s) => !s.invoice?.startsWith('OP-BAL') && s.status !== 'cancelled' && s.status !== 'draft'),
+    [sales]
+  );
+  const fy26LiveSalesTotal = useMemo(
+    () => fy26LiveSales.reduce((acc, s) => acc + s.grandTotal, 0),
+    [fy26LiveSales]
+  );
+
+  // Live FY 2026-27 purchases (excluding OP-PAYABLE opening balances)
+  const fy26LivePurchases = useMemo(
+    () => purchases.filter((p) => !p.poNumber?.startsWith('OP-PAYABLE') && p.status !== 'cancelled'),
+    [purchases]
+  );
+  const fy26LivePurchasesTotal = useMemo(
+    () => fy26LivePurchases.reduce((acc, p) => acc + p.grandTotal, 0),
+    [fy26LivePurchases]
+  );
+
+  // Opening Balances carried forward as of 01-04-2026
+  const opbalSales = useMemo(() => sales.filter((s) => s.invoice?.startsWith('OP-BAL')), [sales]);
+  const opbalSalesTotal = useMemo(() => opbalSales.reduce((acc, s) => acc + s.grandTotal, 0), [opbalSales]);
+
+  const opbalPurchases = useMemo(() => purchases.filter((p) => p.poNumber?.startsWith('OP-PAYABLE')), [purchases]);
+  const opbalPurchasesTotal = useMemo(() => opbalPurchases.reduce((acc, p) => acc + p.grandTotal, 0), [opbalPurchases]);
 
   const productCostMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -1277,7 +1303,8 @@ function ProfitReport({ sales, products }: { sales: SaleRecord[]; products: Prod
   const { rows, totalRevenue, totalCOGS, totalProfit, overallMargin } = useMemo(() => {
     let totRev = 0;
     let totCogs = 0;
-    const computedRows = sales.map((s) => {
+    const activeSales = filteredSales.filter((s) => !s.invoice?.startsWith('OP-BAL'));
+    const computedRows = activeSales.map((s) => {
       const cogs = s.items.reduce((sum, item) => {
         const cost = item.isCustom || (item.cost !== undefined && item.cost > 0)
           ? (item.cost || 0)
@@ -1294,75 +1321,720 @@ function ProfitReport({ sales, products }: { sales: SaleRecord[]; products: Prod
     const totProf = totRev - totCogs;
     const margin = totRev > 0 ? (totProf / totRev) * 100 : 0;
     return { rows: computedRows, totalRevenue: totRev, totalCOGS: totCogs, totalProfit: totProf, overallMargin: margin };
-  }, [sales, productCostMap]);
+  }, [filteredSales, productCostMap]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [rows.length]);
 
   const paginated = useMemo(() => {
     const start = (page - 1) * pageSize;
     return rows.slice(start, start + pageSize);
   }, [rows, page, pageSize]);
 
-  if (sales.length === 0) return <EmptyReport />;
+  const fyDataList = [
+    {
+      fy: 'FY 2026-27',
+      period: '01 Apr 2026 – 31 Mar 2027 (Active)',
+      sales: fy26LiveSalesTotal,
+      salesCount: fy26LiveSales.length,
+      purchases: fy26LivePurchasesTotal,
+      purchasesCount: fy26LivePurchases.length,
+      margin: fy26LiveSalesTotal - fy26LivePurchasesTotal,
+      marginPct: fy26LiveSalesTotal > 0 ? ((fy26LiveSalesTotal - fy26LivePurchasesTotal) / fy26LiveSalesTotal) * 100 : 0,
+      status: 'Current Active FY',
+      tone: 'emerald',
+      badge: 'Active & In-Progress',
+      note: `Live bill storage with full item details. Receivables carried forward from FY 2025-26: ${money(opbalSalesTotal)} (${opbalSales.length} parties).`,
+    },
+    {
+      fy: 'FY 2025-26',
+      period: '01 Apr 2025 – 31 Mar 2026',
+      sales: 29748970.0,
+      salesCount: 2033,
+      purchases: 24687746.0,
+      purchasesCount: 580,
+      margin: 29748970.0 - 24687746.0,
+      marginPct: ((29748970.0 - 24687746.0) / 29748970.0) * 100,
+      status: 'Audited & Closed',
+      tone: 'blue',
+      badge: 'Audited Final',
+      note: `Closed year. All unsettled dues (${money(opbalSalesTotal)}) rolled into FY 2026-27 opening balance.`,
+    },
+    {
+      fy: 'FY 2024-25',
+      period: '01 Apr 2024 – 31 Mar 2025',
+      sales: 26763180.0,
+      salesCount: 1966,
+      purchases: 26085913.06,
+      purchasesCount: 585,
+      margin: 26763180.0 - 26085913.06,
+      marginPct: ((26763180.0 - 26085913.06) / 26763180.0) * 100,
+      status: 'Audited & Closed',
+      tone: 'slate',
+      badge: 'Audited Historical',
+      note: 'Closed year. Historical trade benchmark preserved.',
+    },
+  ];
+
+  const filteredOpbalCust = useMemo(() => {
+    if (!opbalSearch.trim()) return opbalSales;
+    const q = opbalSearch.toLowerCase();
+    return opbalSales.filter(
+      (c) =>
+        c.customer.toLowerCase().includes(q) ||
+        c.invoice.toLowerCase().includes(q) ||
+        (c.phone && c.phone.includes(q))
+    );
+  }, [opbalSales, opbalSearch]);
+
+  const filteredOpbalSupp = useMemo(() => {
+    if (!opbalSearch.trim()) return opbalPurchases;
+    const q = opbalSearch.toLowerCase();
+    return opbalPurchases.filter(
+      (p) =>
+        p.supplier.toLowerCase().includes(q) ||
+        p.poNumber.toLowerCase().includes(q) ||
+        (p.phone && p.phone.includes(q))
+    );
+  }, [opbalPurchases, opbalSearch]);
+
+  const handleExportCSV = () => {
+    if (selectedFY === 'multi-year') {
+      if (multiYearSubTab === 'overview') {
+        const csv = toCSV(
+          fyDataList.map((y) => ({
+            'Financial Year': y.fy,
+            Period: y.period,
+            'Sales Turnover (₹)': y.sales.toFixed(2),
+            'Sales Invoices': y.salesCount,
+            'Purchases Total (₹)': y.purchases.toFixed(2),
+            'Purchase Bills': y.purchasesCount,
+            'Gross Trade Profit (₹)': y.margin.toFixed(2),
+            'Margin %': y.marginPct.toFixed(1) + '%',
+            Status: y.status,
+            Notes: y.note,
+          }))
+        );
+        downloadCSV(csv, 'Financial_Years_Profit_Loss_Summary.csv');
+      } else if (multiYearSubTab === 'opbal-customers') {
+        const csv = toCSV(
+          opbalSales.map((c) => ({
+            'Customer Name': c.customer,
+            'Opening Balance Invoice': c.invoice,
+            'Phone Number': c.phone || '—',
+            'Carried Forward Date': c.date,
+            'Carried Due Amount (₹)': c.grandTotal.toFixed(2),
+            Status: 'Carried Forward into FY 2026-27',
+          }))
+        );
+        downloadCSV(csv, 'FY26_Carried_Forward_Customer_Balances.csv');
+      } else {
+        const csv = toCSV(
+          opbalPurchases.map((s) => ({
+            'Supplier Name': s.supplier,
+            'Opening Payable Ref': s.poNumber,
+            'Phone Number': s.phone || '—',
+            'Carried Forward Date': s.date,
+            'Carried Payable Debt (₹)': s.grandTotal.toFixed(2),
+            Status: 'Carried Forward into FY 2026-27',
+          }))
+        );
+        downloadCSV(csv, 'FY26_Carried_Forward_Supplier_Payables.csv');
+      }
+    } else {
+      const csv = toCSV(
+        rows.map((r) => ({
+          Invoice: r.s.invoice,
+          Customer: r.s.customer,
+          Date: r.s.date,
+          'Revenue (₹)': r.revenue.toFixed(2),
+          'COGS (₹)': r.cogs.toFixed(2),
+          'Profit (₹)': r.profit.toFixed(2),
+          'Margin (%)': r.margin.toFixed(1),
+        }))
+      );
+      downloadCSV(csv, `Profit_Report_${selectedFY}.csv`);
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-slate-500"><DollarSign className="h-4 w-4" /><span className="text-sm">Net Revenue</span></div>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{money(totalRevenue)}</p>
-        </div>
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-slate-500"><TrendingDown className="h-4 w-4" /><span className="text-sm">Cost of Goods Sold</span></div>
-          <p className="mt-2 text-2xl font-bold text-err-600">{money(totalCOGS)}</p>
-        </div>
-        <div className="card p-5">
-          <div className="flex items-center gap-2 text-slate-500"><TrendingUp className="h-4 w-4" /><span className="text-sm">Gross Profit · {overallMargin.toFixed(1)}%</span></div>
-          <p className={`mt-2 text-2xl font-bold ${totalProfit >= 0 ? 'text-accent-600' : 'text-err-600'}`}>{money(totalProfit)}</p>
+    <div className="space-y-5 animate-fade-in">
+      {/* Financial Year Segmented Slider / Selector */}
+      <div className="card p-3 rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 px-2 text-slate-800">
+            <Calendar className="h-4 w-4 text-brand-600" />
+            <span className="text-xs font-black uppercase tracking-wider text-slate-700">Financial Year (FY):</span>
+          </div>
+
+          <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200 overflow-x-auto no-scrollbar">
+            <button
+              type="button"
+              id="fy-slider-2026-27"
+              onClick={() => setSelectedFY('2026-27')}
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                selectedFY === '2026-27'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <span>FY 2026-27</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                selectedFY === '2026-27' ? 'bg-brand-500 text-white' : 'bg-emerald-100 text-emerald-800'
+              }`}>
+                Active
+              </span>
+            </button>
+
+            <button
+              type="button"
+              id="fy-slider-2025-26"
+              onClick={() => setSelectedFY('2025-26')}
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                selectedFY === '2025-26'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <span>FY 2025-26</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                selectedFY === '2025-26' ? 'bg-brand-500 text-white' : 'bg-blue-100 text-blue-800'
+              }`}>
+                Audited
+              </span>
+            </button>
+
+            <button
+              type="button"
+              id="fy-slider-2024-25"
+              onClick={() => setSelectedFY('2024-25')}
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                selectedFY === '2024-25'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <span>FY 2024-25</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                selectedFY === '2024-25' ? 'bg-brand-500 text-white' : 'bg-slate-200 text-slate-700'
+              }`}>
+                Audited
+              </span>
+            </button>
+
+            <button
+              type="button"
+              id="fy-slider-multi-year"
+              onClick={() => setSelectedFY('multi-year')}
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                selectedFY === 'multi-year'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+            >
+              <span>Multi-Year Comparison</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                selectedFY === 'multi-year' ? 'bg-brand-500 text-white' : 'bg-purple-100 text-purple-800'
+              }`}>
+                All
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Detail table */}
-      <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50/80">
-              <tr>
-                <th className="table-th">Invoice</th>
-                <th className="table-th">Customer</th>
-                <th className="table-th">Date</th>
-                <th className="table-th text-right">Revenue</th>
-                <th className="table-th text-right">COGS</th>
-                <th className="table-th text-right">Profit</th>
-                <th className="table-th text-right">Margin</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {paginated.map((r) => (
-                <tr key={r.s.id} className="transition hover:bg-slate-50/50">
-                  <td className="table-td font-semibold text-brand-600">{r.s.invoice}</td>
-                  <td className="table-td font-medium text-slate-800">{r.s.customer}</td>
-                  <td className="table-td text-slate-600">{r.s.date}</td>
-                  <td className="table-td text-right tabular-nums">{money(r.revenue)}</td>
-                  <td className="table-td text-right tabular-nums text-err-600">{money(r.cogs)}</td>
-                  <td className={`table-td text-right font-semibold tabular-nums ${r.profit >= 0 ? 'text-accent-600' : 'text-err-600'}`}>{money(r.profit)}</td>
-                  <td className="table-td text-right tabular-nums">
-                    <span className={`badge ${r.margin >= 30 ? 'bg-accent-100 text-accent-700' : r.margin >= 15 ? 'bg-warn-100 text-warn-600' : 'bg-err-100 text-err-600'}`}>
-                      {r.margin.toFixed(1)}%
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* VIEW 1: FY 2026-27 (Current Active Financial Year) */}
+      {selectedFY === '2026-27' && (
+        <div className="space-y-4 animate-fade-in">
+          {/* Active FY Ribbon */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200/80 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-black bg-emerald-600 text-white uppercase tracking-wide">
+                FY 2026-27 Active (1 Apr 2026 – 31 Mar 2027)
+              </span>
+              <span className="text-xs font-semibold text-emerald-900">
+                {rows.length} Detailed Customer Invoices
+              </span>
+            </div>
+            <span className="text-xs text-emerald-800 font-medium">
+              Carried-forward opening dues from FY 2025-26: <strong>{money(opbalSalesTotal)}</strong> ({opbalSales.length} parties)
+            </span>
+          </div>
+
+          {/* Summary cards */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center gap-2 text-slate-500">
+                <DollarSign className="h-4 w-4 text-brand-600" />
+                <span className="text-xs font-bold uppercase tracking-wider">Net Sales Revenue</span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-slate-900">{money(totalRevenue)}</p>
+            </div>
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center gap-2 text-slate-500">
+                <TrendingDown className="h-4 w-4 text-rose-600" />
+                <span className="text-xs font-bold uppercase tracking-wider">Cost of Goods Sold (COGS)</span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-rose-600">{money(totalCOGS)}</p>
+            </div>
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-slate-500">
+                  <TrendingUp className="h-4 w-4 text-emerald-600" />
+                  <span className="text-xs font-bold uppercase tracking-wider">Gross Profit</span>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${
+                  overallMargin >= 25 ? 'bg-emerald-100 text-emerald-800' : overallMargin >= 10 ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+                }`}>
+                  {overallMargin.toFixed(1)}% Margin
+                </span>
+              </div>
+              <p className={`mt-2 text-2xl font-black ${totalProfit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                {money(totalProfit)}
+              </p>
+            </div>
+          </div>
+
+          {/* Detail table */}
+          <div className="card overflow-hidden border border-slate-200 rounded-2xl shadow-xs">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-sm text-slate-900">FY 2026-27 Invoices Profitability</h4>
+                <p className="text-xs text-slate-500 mt-0.5">Calculated from individual items, line costs, and discount deductions</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Export CSV</span>
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="table-full text-xs">
+                <thead className="bg-slate-50/90 text-slate-600 border-b border-slate-200">
+                  <tr>
+                    <th className="table-th">Invoice</th>
+                    <th className="table-th">Customer</th>
+                    <th className="table-th">Date</th>
+                    <th className="table-th text-right">Revenue</th>
+                    <th className="table-th text-right">COGS</th>
+                    <th className="table-th text-right">Gross Profit</th>
+                    <th className="table-th text-right">Margin</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {paginated.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-500">
+                        No sales invoices found for selected date filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginated.map((r) => (
+                      <tr key={r.s.id} className="transition hover:bg-slate-50/60">
+                        <td className="table-td font-bold font-mono text-brand-600">{r.s.invoice}</td>
+                        <td className="table-td font-semibold text-slate-800">{r.s.customer}</td>
+                        <td className="table-td text-slate-600">{r.s.date}</td>
+                        <td className="table-td text-right tabular-nums font-bold text-slate-900">{money(r.revenue)}</td>
+                        <td className="table-td text-right tabular-nums text-rose-600 font-medium">{money(r.cogs)}</td>
+                        <td className={`table-td text-right font-black tabular-nums ${r.profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                          {money(r.profit)}
+                        </td>
+                        <td className="table-td text-right tabular-nums">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            r.margin >= 30 ? 'bg-emerald-100 text-emerald-800' : r.margin >= 15 ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+                          }`}>
+                            {r.margin.toFixed(1)}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <TablePagination
+              currentPage={page}
+              pageSize={pageSize}
+              totalItems={rows.length}
+              onPageChange={setPage}
+              itemName="profit entries"
+            />
+          </div>
         </div>
-        <TablePagination
-          currentPage={page}
-          pageSize={pageSize}
-          totalItems={rows.length}
-          onPageChange={setPage}
-          itemName="profit entries"
-        />
-      </div>
+      )}
+
+      {/* VIEW 2: FY 2025-26 (Audited & Closed Year) */}
+      {selectedFY === '2025-26' && (
+        <div className="space-y-4 animate-fade-in">
+          <div className="card p-5 rounded-2xl bg-gradient-to-r from-blue-50/90 via-sky-50/60 to-indigo-50/80 border border-blue-200/90 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-xs">
+                  <CheckCircle2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-200 text-blue-900 uppercase">
+                      Audited &amp; Closed
+                    </span>
+                    <h3 className="font-bold text-sm text-blue-950">FY 2025-26 Financial Year Overview</h3>
+                  </div>
+                  <p className="text-xs text-blue-900/80 mt-1 leading-relaxed max-w-2xl">
+                    Historical financial year (01 Apr 2025 – 31 Mar 2026). Individual bill rows are archived to keep your software lightning fast. 
+                    All <strong>35 customer accounts with pending balances ({money(opbalSalesTotal)})</strong> and <strong>16 supplier debts ({money(opbalPurchasesTotal)})</strong> have been rolled forward into FY 2026-27 opening balances.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedFY('multi-year');
+                  setMultiYearSubTab('opbal-customers');
+                }}
+                className="btn-secondary text-xs py-2 px-3.5 bg-white border-blue-200 hover:bg-blue-50 text-blue-900 font-bold whitespace-nowrap self-start sm:self-center shadow-2xs"
+              >
+                <span>View Carried Opening Dues</span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Net Sales Turnover</span>
+                <span className="text-xs font-bold text-slate-500">2,033 Bills</span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-slate-900">₹2,97,48,970.00</p>
+            </div>
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Purchases</span>
+                <span className="text-xs font-bold text-slate-500">580 Bills</span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-slate-900">₹2,46,87,746.00</p>
+            </div>
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Gross Trade Profit</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800">
+                  20.5% Margin
+                </span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-blue-700">₹50,61,224.00</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 3: FY 2024-25 (Audited & Closed Year) */}
+      {selectedFY === '2024-25' && (
+        <div className="space-y-4 animate-fade-in">
+          <div className="card p-5 rounded-2xl bg-gradient-to-r from-slate-100 via-slate-50 to-slate-100 border border-slate-200/90 shadow-xs">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-700 text-white shadow-xs">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-200 text-slate-800 uppercase">
+                    Audited Historical Benchmark
+                  </span>
+                  <h3 className="font-bold text-sm text-slate-900">FY 2024-25 Financial Year Summary</h3>
+                </div>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed max-w-2xl">
+                  Historical financial year (01 Apr 2024 – 31 Mar 2025). Closed and archived trade performance benchmark.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Net Sales Turnover</span>
+                <span className="text-xs font-bold text-slate-500">1,966 Bills</span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-slate-900">₹2,67,63,180.00</p>
+            </div>
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Purchases</span>
+                <span className="text-xs font-bold text-slate-500">585 Bills</span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-slate-900">₹2,60,85,913.06</p>
+            </div>
+            <div className="card p-5 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Gross Trade Profit</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-200 text-slate-700">
+                  2.6% Margin
+                </span>
+              </div>
+              <p className="mt-2 text-2xl font-black text-slate-800">₹6,77,266.94</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 4: Multi-Year Comparison & Opening Balances */}
+      {selectedFY === 'multi-year' && (
+        <div className="space-y-4 animate-fade-in">
+          {/* Sub Tab Buttons */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setMultiYearSubTab('overview')}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  multiYearSubTab === 'overview'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Multi-Year Comparison Table
+              </button>
+              <button
+                type="button"
+                onClick={() => setMultiYearSubTab('opbal-customers')}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+                  multiYearSubTab === 'opbal-customers'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>Opening Receivables</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-purple-100 text-purple-800 font-extrabold">
+                  {opbalSales.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMultiYearSubTab('opbal-suppliers')}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+                  multiYearSubTab === 'opbal-suppliers'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>Opening Payables</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-100 text-amber-800 font-extrabold">
+                  {opbalPurchases.length}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {multiYearSubTab !== 'overview' && (
+                <div className="relative w-48 sm:w-60">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={opbalSearch}
+                    onChange={(e) => setOpbalSearch(e.target.value)}
+                    placeholder="Search party or ref..."
+                    className="input pl-8 text-xs py-1.5 w-full"
+                  />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 shrink-0"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Export CSV</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Sub Tab Content: Multi-Year Table */}
+          {multiYearSubTab === 'overview' && (
+            <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+              <div className="overflow-x-auto">
+                <table className="table-full text-xs">
+                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                    <tr>
+                      <th className="table-th">Financial Year</th>
+                      <th className="table-th">Period</th>
+                      <th className="table-th text-right">Sales Turnover</th>
+                      <th className="table-th text-center">Invoices</th>
+                      <th className="table-th text-right">Purchases Total</th>
+                      <th className="table-th text-center">Bills</th>
+                      <th className="table-th text-right">Gross Profit</th>
+                      <th className="table-th text-right">Margin %</th>
+                      <th className="table-th text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {fyDataList.map((y) => (
+                      <tr key={y.fy} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="table-td font-black text-slate-900">{y.fy}</td>
+                        <td className="table-td text-slate-600 font-medium">{y.period}</td>
+                        <td className="table-td text-right font-black text-slate-900">{money(y.sales)}</td>
+                        <td className="table-td text-center font-bold text-slate-700">{y.salesCount}</td>
+                        <td className="table-td text-right font-bold text-slate-800">{money(y.purchases)}</td>
+                        <td className="table-td text-center font-bold text-slate-700">{y.purchasesCount}</td>
+                        <td className="table-td text-right font-black text-emerald-700">{money(y.margin)}</td>
+                        <td className="table-td text-right font-bold text-slate-700">{y.marginPct.toFixed(1)}%</td>
+                        <td className="table-td text-center">
+                          <span
+                            className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                              y.tone === 'emerald'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-blue-100 text-blue-800'
+                            }`}
+                          >
+                            {y.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-slate-100/90 font-bold border-t-2 border-slate-300">
+                    <tr>
+                      <td className="table-td font-black text-slate-900" colSpan={2}>All-Time Grand Total</td>
+                      <td className="table-td text-right font-black text-slate-900">
+                        {money(fyDataList.reduce((s, y) => s + y.sales, 0))}
+                      </td>
+                      <td className="table-td text-center font-black text-slate-900">
+                        {fyDataList.reduce((s, y) => s + y.salesCount, 0)}
+                      </td>
+                      <td className="table-td text-right font-black text-slate-900">
+                        {money(fyDataList.reduce((s, y) => s + y.purchases, 0))}
+                      </td>
+                      <td className="table-td text-center font-black text-slate-900">
+                        {fyDataList.reduce((s, y) => s + y.purchasesCount, 0)}
+                      </td>
+                      <td className="table-td text-right font-black text-emerald-800">
+                        {money(fyDataList.reduce((s, y) => s + y.margin, 0))}
+                      </td>
+                      <td className="table-td text-right font-black text-emerald-800">
+                        {((fyDataList.reduce((s, y) => s + y.margin, 0) / fyDataList.reduce((s, y) => s + y.sales, 0)) * 100).toFixed(1)}%
+                      </td>
+                      <td className="table-td text-center text-[11px] text-slate-600">3 Financial Years</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Sub Tab: Customer Opening Receivables */}
+          {multiYearSubTab === 'opbal-customers' && (
+            <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+              <div className="p-3.5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-bold text-xs text-slate-900">
+                    Carried Forward Customer Receivables as of 01-04-2026
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Unsettled sales dues from FY 2025-26 rolled forward into FY 2026-27 opening balance</p>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-lg bg-purple-50 text-purple-900 border border-purple-200 text-xs font-black">
+                  Total: {money(opbalSalesTotal)} ({opbalSales.length} Parties)
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="table-full text-xs">
+                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                    <tr>
+                      <th className="table-th">Customer Name</th>
+                      <th className="table-th">Opening Ref Invoice</th>
+                      <th className="table-th">Phone Number</th>
+                      <th className="table-th">Effective Date</th>
+                      <th className="table-th text-right">Carried Opening Due</th>
+                      <th className="table-th text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {filteredOpbalCust.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-6 text-center text-slate-500">
+                          No customer opening balances matching search.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredOpbalCust.map((c) => (
+                        <tr key={c.id} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="table-td font-bold text-slate-900">{c.customer}</td>
+                          <td className="table-td font-mono text-brand-700 font-bold">{c.invoice}</td>
+                          <td className="table-td text-slate-600">{c.phone || '—'}</td>
+                          <td className="table-td text-slate-600">01 Apr 2026</td>
+                          <td className="table-td text-right font-black text-slate-900">{money(c.grandTotal)}</td>
+                          <td className="table-td text-center">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                              Pending Due
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Sub Tab: Supplier Opening Payables */}
+          {multiYearSubTab === 'opbal-suppliers' && (
+            <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+              <div className="p-3.5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-bold text-xs text-slate-900">
+                    Carried Forward Supplier Payables as of 01-04-2026
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Unsettled purchase dues from FY 2025-26 rolled forward into FY 2026-27 opening debts</p>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-xs font-black">
+                  Total: {money(opbalPurchasesTotal)} ({opbalPurchases.length} Suppliers)
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="table-full text-xs">
+                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                    <tr>
+                      <th className="table-th">Supplier Name</th>
+                      <th className="table-th">Opening Ref PO</th>
+                      <th className="table-th">Phone Number</th>
+                      <th className="table-th">Effective Date</th>
+                      <th className="table-th text-right">Carried Opening Debt</th>
+                      <th className="table-th text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {filteredOpbalSupp.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-6 text-center text-slate-500">
+                          No supplier opening payables matching search.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredOpbalSupp.map((s) => (
+                        <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="table-td font-bold text-slate-900">{s.supplier}</td>
+                          <td className="table-td font-mono text-blue-700 font-bold">{s.poNumber}</td>
+                          <td className="table-td text-slate-600">{s.phone || '—'}</td>
+                          <td className="table-td text-slate-600">01 Apr 2026</td>
+                          <td className="table-td text-right font-black text-rose-700">{money(s.grandTotal)}</td>
+                          <td className="table-td text-center">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                              Pending Debt
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2750,497 +3422,3 @@ function ChequesReport({
   );
 }
 
-function FinancialYearsReport({
-  sales,
-  purchases,
-}: {
-  sales: SaleRecord[];
-  purchases: PurchaseRecord[];
-}) {
-  const [subTab, setSubTab] = useState<'overview' | 'opbal-customers' | 'opbal-suppliers'>('overview');
-  const [search, setSearch] = useState('');
-
-  // Live FY 2026-27 sales (excluding OP-BAL opening balances)
-  const fy26LiveSales = useMemo(
-    () => sales.filter((s) => !s.invoice?.startsWith('OP-BAL') && s.status !== 'cancelled' && s.status !== 'draft'),
-    [sales]
-  );
-  const fy26LiveSalesTotal = useMemo(
-    () => fy26LiveSales.reduce((acc, s) => acc + s.grandTotal, 0),
-    [fy26LiveSales]
-  );
-
-  // Live FY 2026-27 purchases (excluding OP-PAYABLE opening balances)
-  const fy26LivePurchases = useMemo(
-    () => purchases.filter((p) => !p.poNumber?.startsWith('OP-PAYABLE') && p.status !== 'cancelled'),
-    [purchases]
-  );
-  const fy26LivePurchasesTotal = useMemo(
-    () => fy26LivePurchases.reduce((acc, p) => acc + p.grandTotal, 0),
-    [fy26LivePurchases]
-  );
-
-  // Carried Forward Customer Opening Balances (as of 01-04-2026)
-  const opbalCustomers = useMemo(
-    () => sales.filter((s) => s.invoice?.startsWith('OP-BAL')),
-    [sales]
-  );
-  const opbalCustomersTotal = useMemo(
-    () => opbalCustomers.reduce((acc, s) => acc + s.grandTotal, 0),
-    [opbalCustomers]
-  );
-
-  // Carried Forward Supplier Opening Payables (as of 01-04-2026)
-  const opbalSuppliers = useMemo(
-    () => purchases.filter((p) => p.poNumber?.startsWith('OP-PAYABLE')),
-    [purchases]
-  );
-  const opbalSuppliersTotal = useMemo(
-    () => opbalSuppliers.reduce((acc, p) => acc + p.grandTotal, 0),
-    [opbalSuppliers]
-  );
-
-  const yearsData = [
-    {
-      fy: 'FY 2026-27',
-      period: '01 Apr 2026 – 31 Mar 2027',
-      sales: fy26LiveSalesTotal,
-      salesCount: fy26LiveSales.length,
-      purchases: fy26LivePurchasesTotal,
-      purchasesCount: fy26LivePurchases.length,
-      margin: fy26LiveSalesTotal - fy26LivePurchasesTotal,
-      status: 'Current Active FY',
-      tone: 'emerald',
-      badge: 'Active & In-Progress',
-      note: `Live bill storage with full item details. Receivables carried forward from FY 2025-26: ${money(opbalCustomersTotal)} (${opbalCustomers.length} parties).`,
-    },
-    {
-      fy: 'FY 2025-26',
-      period: '01 Apr 2025 – 31 Mar 2026',
-      sales: 29748970.0,
-      salesCount: 2033,
-      purchases: 24687746.0,
-      purchasesCount: 580,
-      margin: 29748970.0 - 24687746.0,
-      status: 'Audited & Closed',
-      tone: 'blue',
-      badge: 'Audited Final',
-      note: `Closed year. All unsettled dues (${money(opbalCustomersTotal)}) carried forward into FY 2026-27 opening balance.`,
-    },
-    {
-      fy: 'FY 2024-25',
-      period: '01 Apr 2024 – 31 Mar 2025',
-      sales: 26763180.0,
-      salesCount: 1966,
-      purchases: 26085913.06,
-      purchasesCount: 585,
-      margin: 26763180.0 - 26085913.06,
-      status: 'Audited & Closed',
-      tone: 'slate',
-      badge: 'Audited Historical',
-      note: 'Closed year. Historical trade benchmark preserved.',
-    },
-  ];
-
-  const filteredOpbalCust = useMemo(() => {
-    if (!search.trim()) return opbalCustomers;
-    const q = search.toLowerCase();
-    return opbalCustomers.filter(
-      (c) =>
-        c.customer.toLowerCase().includes(q) ||
-        c.invoice.toLowerCase().includes(q) ||
-        (c.phone && c.phone.includes(q))
-    );
-  }, [opbalCustomers, search]);
-
-  const filteredOpbalSupp = useMemo(() => {
-    if (!search.trim()) return opbalSuppliers;
-    const q = search.toLowerCase();
-    return opbalSuppliers.filter(
-      (p) =>
-        p.supplier.toLowerCase().includes(q) ||
-        p.poNumber.toLowerCase().includes(q) ||
-        (p.phone && p.phone.includes(q))
-    );
-  }, [opbalSuppliers, search]);
-
-  const handleExportCSV = () => {
-    if (subTab === 'overview') {
-      const csv = toCSV(
-        yearsData.map((y) => ({
-          'Financial Year': y.fy,
-          Period: y.period,
-          'Sales Turnover (₹)': y.sales.toFixed(2),
-          'Sales Invoices': y.salesCount,
-          'Purchases Total (₹)': y.purchases.toFixed(2),
-          'Purchase Bills': y.purchasesCount,
-          'Gross Trade Margin (₹)': y.margin.toFixed(2),
-          Status: y.status,
-          Notes: y.note,
-        }))
-      );
-      downloadCSV(csv, 'Financial_Years_Summary.csv');
-    } else if (subTab === 'opbal-customers') {
-      const csv = toCSV(
-        opbalCustomers.map((c) => ({
-          'Customer Name': c.customer,
-          'Opening Balance Invoice': c.invoice,
-          'Phone Number': c.phone || '—',
-          'Carried Forward Date': c.date,
-          'Carried Due Amount (₹)': c.grandTotal.toFixed(2),
-          Status: 'Carried Forward into FY 2026-27',
-        }))
-      );
-      downloadCSV(csv, 'FY26_Carried_Forward_Customer_Balances.csv');
-    } else {
-      const csv = toCSV(
-        opbalSuppliers.map((s) => ({
-          'Supplier Name': s.supplier,
-          'Opening Payable Ref': s.poNumber,
-          'Phone Number': s.phone || '—',
-          'Carried Forward Date': s.date,
-          'Carried Payable Debt (₹)': s.grandTotal.toFixed(2),
-          Status: 'Carried Forward into FY 2026-27',
-        }))
-      );
-      downloadCSV(csv, 'FY26_Carried_Forward_Supplier_Payables.csv');
-    }
-  };
-
-  return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Executive Banner */}
-      <div className="card p-6 rounded-2xl bg-gradient-to-r from-brand-900 via-indigo-900 to-slate-900 text-white shadow-md relative overflow-hidden">
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2.5">
-              <span className="px-2.5 py-1 rounded-full text-xs font-black bg-brand-400 text-brand-950 uppercase tracking-wide">
-                Indian Financial Year Standard (1 Apr – 31 Mar)
-              </span>
-              <span className="text-xs text-brand-200">FY 2024-25 • FY 2025-26 • FY 2026-27</span>
-            </div>
-            <h2 className="text-2xl font-black tracking-tight text-white">
-              Multi-Year Financial &amp; Audit Tracking
-            </h2>
-            <p className="text-xs sm:text-sm text-brand-100/90 max-w-2xl">
-              Day-to-day detailed bills are maintained for the active <strong>FY 2026-27</strong>. 
-              Prior financial years (FY 2024-25 &amp; FY 2025-26) are preserved with audited totals, and all unsettled party dues as of 01-04-2026 have been cleanly rolled forward as opening balances.
-            </p>
-          </div>
-          <button
-            onClick={handleExportCSV}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold transition shadow-xs whitespace-nowrap self-start md:self-center"
-          >
-            <Download className="h-4 w-4" />
-            <span>Export View to CSV</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Financial Year Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        {yearsData.map((y) => (
-          <div
-            key={y.fy}
-            className={`card p-5 rounded-2xl border transition-all duration-300 relative overflow-hidden shadow-xs ${
-              y.tone === 'emerald'
-                ? 'border-emerald-200 bg-gradient-to-b from-emerald-50/50 to-white ring-1 ring-emerald-500/20'
-                : y.tone === 'blue'
-                ? 'border-blue-200 bg-gradient-to-b from-blue-50/30 to-white'
-                : 'border-slate-200 bg-gradient-to-b from-slate-50/30 to-white'
-            }`}
-          >
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div>
-                <span className="text-xs font-bold text-slate-500">{y.period}</span>
-                <h3 className="text-xl font-black text-slate-900 mt-0.5">{y.fy}</h3>
-              </div>
-              <span
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                  y.tone === 'emerald'
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : y.tone === 'blue'
-                    ? 'bg-blue-100 text-blue-800'
-                    : 'bg-slate-100 text-slate-800'
-                }`}
-              >
-                {y.badge}
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              <div>
-                <p className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Sales Turnover</p>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <span className="text-lg font-black text-slate-900">{money(y.sales)}</span>
-                  <span className="text-xs font-semibold text-slate-600">{y.salesCount} bills</span>
-                </div>
-              </div>
-
-              <div>
-                <p className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Total Purchases</p>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <span className="text-base font-bold text-slate-800">{money(y.purchases)}</span>
-                  <span className="text-xs font-semibold text-slate-600">{y.purchasesCount} bills</span>
-                </div>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-600">Gross Margin</span>
-                <span className={`text-sm font-black ${y.margin >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {money(y.margin)}
-                </span>
-              </div>
-            </div>
-
-            <p className="mt-3 text-[11px] text-slate-500 font-medium leading-relaxed bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
-              {y.note}
-            </p>
-          </div>
-        ))}
-      </div>
-
-      {/* Sub Tabs navigation */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-        <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
-          <button
-            onClick={() => setSubTab('overview')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all ${
-              subTab === 'overview'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Multi-Year Comparative Table
-          </button>
-          <button
-            onClick={() => setSubTab('opbal-customers')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
-              subTab === 'opbal-customers'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <span>Opening Receivables</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-purple-100 text-purple-800 font-extrabold">
-              {opbalCustomers.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setSubTab('opbal-suppliers')}
-            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
-              subTab === 'opbal-suppliers'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <span>Opening Payables</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-100 text-amber-800 font-extrabold">
-              {opbalSuppliers.length}
-            </span>
-          </button>
-        </div>
-
-        {subTab !== 'overview' && (
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search party or ref no..."
-              className="input pl-9 text-xs py-2 w-full"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Sub Tab: Multi-Year Overview Table */}
-      {subTab === 'overview' && (
-        <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <h4 className="font-bold text-sm text-slate-900">Financial Years Comparative Breakdown</h4>
-            <span className="text-xs text-slate-500">1 April to 31 March cycle</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="table-full text-xs">
-              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                <tr>
-                  <th className="table-th">Financial Year</th>
-                  <th className="table-th">Accounting Period</th>
-                  <th className="table-th text-right">Sales Turnover</th>
-                  <th className="table-th text-center">Invoices</th>
-                  <th className="table-th text-right">Purchases Total</th>
-                  <th className="table-th text-center">Bills</th>
-                  <th className="table-th text-right">Gross Margin</th>
-                  <th className="table-th text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {yearsData.map((y) => (
-                  <tr key={y.fy} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="table-td font-black text-slate-900">{y.fy}</td>
-                    <td className="table-td text-slate-600 font-medium">{y.period}</td>
-                    <td className="table-td text-right font-black text-slate-900">{money(y.sales)}</td>
-                    <td className="table-td text-center font-bold text-slate-700">{y.salesCount}</td>
-                    <td className="table-td text-right font-bold text-slate-800">{money(y.purchases)}</td>
-                    <td className="table-td text-center font-bold text-slate-700">{y.purchasesCount}</td>
-                    <td className="table-td text-right font-black text-emerald-700">{money(y.margin)}</td>
-                    <td className="table-td text-center">
-                      <span
-                        className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                          y.tone === 'emerald'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-blue-100 text-blue-800'
-                        }`}
-                      >
-                        {y.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="bg-slate-100/90 font-bold border-t-2 border-slate-300">
-                <tr>
-                  <td className="table-td font-black text-slate-900" colSpan={2}>All-Time Grand Total</td>
-                  <td className="table-td text-right font-black text-slate-900">
-                    {money(yearsData.reduce((s, y) => s + y.sales, 0))}
-                  </td>
-                  <td className="table-td text-center font-black text-slate-900">
-                    {yearsData.reduce((s, y) => s + y.salesCount, 0)}
-                  </td>
-                  <td className="table-td text-right font-black text-slate-900">
-                    {money(yearsData.reduce((s, y) => s + y.purchases, 0))}
-                  </td>
-                  <td className="table-td text-center font-black text-slate-900">
-                    {yearsData.reduce((s, y) => s + y.purchasesCount, 0)}
-                  </td>
-                  <td className="table-td text-right font-black text-emerald-800">
-                    {money(yearsData.reduce((s, y) => s + y.margin, 0))}
-                  </td>
-                  <td className="table-td text-center text-[11px] text-slate-600">3 Financial Years</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Sub Tab: Carried Forward Customer Receivables */}
-      {subTab === 'opbal-customers' && (
-        <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h4 className="font-bold text-sm text-slate-900">
-                Carried Forward Customer Receivables as of 01-04-2026
-              </h4>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Outstanding dues from FY 2025-26 carried into FY 2026-27 opening balance.
-              </p>
-            </div>
-            <span className="px-3 py-1 rounded-xl bg-purple-50 text-purple-900 border border-purple-200 text-xs font-black self-start sm:self-center">
-              Total Carried Dues: {money(opbalCustomersTotal)} ({opbalCustomers.length} Parties)
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="table-full text-xs">
-              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                <tr>
-                  <th className="table-th">Customer Name</th>
-                  <th className="table-th">Opening Ref Invoice</th>
-                  <th className="table-th">Phone Number</th>
-                  <th className="table-th">Effective Date</th>
-                  <th className="table-th text-right">Carried Opening Due</th>
-                  <th className="table-th text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredOpbalCust.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-slate-500 text-xs">
-                      No opening balance parties matching filter.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredOpbalCust.map((c) => (
-                    <tr key={c.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="table-td font-bold text-slate-900">{c.customer}</td>
-                      <td className="table-td font-mono text-brand-700 font-bold">{c.invoice}</td>
-                      <td className="table-td text-slate-600">{c.phone || '—'}</td>
-                      <td className="table-td text-slate-600">01 Apr 2026</td>
-                      <td className="table-td text-right font-black text-slate-900">{money(c.grandTotal)}</td>
-                      <td className="table-td text-center">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
-                          Pending Receivable
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Sub Tab: Carried Forward Supplier Payables */}
-      {subTab === 'opbal-suppliers' && (
-        <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
-          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h4 className="font-bold text-sm text-slate-900">
-                Carried Forward Supplier Payables as of 01-04-2026
-              </h4>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Unsettled purchase dues from FY 2025-26 carried into FY 2026-27 opening debts.
-              </p>
-            </div>
-            <span className="px-3 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 text-xs font-black self-start sm:self-center">
-              Total Carried Payables: {money(opbalSuppliersTotal)} ({opbalSuppliers.length} Suppliers)
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="table-full text-xs">
-              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                <tr>
-                  <th className="table-th">Supplier Name</th>
-                  <th className="table-th">Opening Ref PO</th>
-                  <th className="table-th">Phone Number</th>
-                  <th className="table-th">Effective Date</th>
-                  <th className="table-th text-right">Carried Opening Debt</th>
-                  <th className="table-th text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredOpbalSupp.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-slate-500 text-xs">
-                      No opening payable suppliers matching filter.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredOpbalSupp.map((s) => (
-                    <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="table-td font-bold text-slate-900">{s.supplier}</td>
-                      <td className="table-td font-mono text-blue-700 font-bold">{s.poNumber}</td>
-                      <td className="table-td text-slate-600">{s.phone || '—'}</td>
-                      <td className="table-td text-slate-600">01 Apr 2026</td>
-                      <td className="table-td text-right font-black text-rose-700">{money(s.grandTotal)}</td>
-                      <td className="table-td text-center">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
-                          Pending Payable
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
