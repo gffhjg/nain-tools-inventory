@@ -531,22 +531,29 @@ export async function getDb(): Promise<PGlite> {
     }
 
     let loadDataDir: Blob | undefined;
-    const dbName = 'idb://nain-tools-v6';
-    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_v6') === 'true';
+    const dbName = 'idb://nain-tools-live-v3';
+    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_live_v3') === 'true';
 
     if (!isSeeded && typeof window !== 'undefined' && typeof fetch !== 'undefined') {
       try {
-        console.log('[db] Downloading pre-migrated TradeSoftGST database tarball (7.6MB)...');
-        const res = await fetch('./migrated-db.tar.gz');
+        console.log('[db] Downloading pre-migrated TradeSoftGST database archive (7.6MB)...');
+        const res = await fetch('./migrated-db-archive.json');
         if (res.ok) {
-          const blob = await res.blob();
-          if (blob.size > 1000000) {
-            loadDataDir = blob;
-            console.log('[db] Tarball loaded successfully into memory. Size:', blob.size);
+          const rawBlob = await res.blob();
+          if (rawBlob.size > 1000000) {
+            console.log('[db] Archive fetched. Decompressing tarball in browser...', rawBlob.size);
+            if (typeof DecompressionStream !== 'undefined') {
+              const ds = new DecompressionStream('gzip');
+              const stream = rawBlob.stream().pipeThrough(ds);
+              loadDataDir = await new Response(stream).blob();
+              console.log('[db] Decompressed tarball successfully. Uncompressed size:', loadDataDir.size);
+            } else {
+              loadDataDir = rawBlob;
+            }
           }
         }
       } catch (err) {
-        console.warn('[db] Could not fetch migrated-db.tar.gz:', err);
+        console.warn('[db] Could not fetch migrated-db-archive.json:', err);
       }
     }
 
@@ -555,12 +562,15 @@ export async function getDb(): Promise<PGlite> {
       if (loadDataDir) {
         try {
           db = new PGlite(dbName, { loadDataDir });
+          await db.waitReady;
         } catch (tarballErr) {
-          console.warn('[db] Tarball initialization error (DB might already exist), falling back:', tarballErr);
+          console.warn('[db] Tarball initialization error, falling back:', tarballErr);
           db = new PGlite(dbName);
+          await db.waitReady;
         }
       } else {
         db = new PGlite(dbName);
+        await db.waitReady;
       }
       await db.exec(SCHEMA_SQL);
       await migrateSchema(db);
@@ -568,11 +578,13 @@ export async function getDb(): Promise<PGlite> {
       console.warn('[db] Error opening IndexedDB, falling back to clean instance:', openErr);
       try {
         db = new PGlite(dbName);
+        await db.waitReady;
         await db.exec(SCHEMA_SQL);
         await migrateSchema(db);
       } catch (inMemoryErr) {
         console.error('[db] IndexedDB unavailable, falling back to in-memory database:', inMemoryErr);
         db = new PGlite();
+        await db.waitReady;
         await db.exec(SCHEMA_SQL);
         await migrateSchema(db);
       }
@@ -587,7 +599,7 @@ export async function getDb(): Promise<PGlite> {
       console.log(`[db] Current database loaded with ${salesCount} sales invoices.`);
       if (salesCount >= 5000) {
         if (typeof window !== 'undefined') {
-          localStorage.setItem('nain_tools_seeded_v6', 'true');
+          localStorage.setItem('nain_tools_seeded_live_v3', 'true');
         }
       } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
         console.log(`[db] Database has ${salesCount} invoices (< 5000). Updating to latest 5,376+ TradeSoft dataset...`);
@@ -598,7 +610,7 @@ export async function getDb(): Promise<PGlite> {
           const { api } = await import('./api');
           await api.importDatabase(text);
           console.log('[db] JSON auto-import complete!');
-          localStorage.setItem('nain_tools_seeded_v6', 'true');
+          localStorage.setItem('nain_tools_seeded_live_v3', 'true');
         }
       }
     } catch (e) {

@@ -9,28 +9,6 @@ const BUILD_DATE = new Date().toISOString().slice(0, 10);
 export default defineConfig({
   plugins: [
     react(),
-    {
-      name: 'serve-db-tarball',
-      configureServer(server) {
-        server.middlewares.use((req, res, next) => {
-          if (req.url && (req.url === '/migrated-db.tar.gz' || req.url.startsWith('/migrated-db.tar.gz?'))) {
-            const filePath = fileURLToPath(new URL('./public/migrated-db.tar.gz', import.meta.url));
-            if (fs.existsSync(filePath)) {
-              const stat = fs.statSync(filePath);
-              res.writeHead(200, {
-                'Content-Type': 'application/gzip',
-                'Content-Length': stat.size,
-                'Cache-Control': 'no-cache',
-                'Access-Control-Allow-Origin': '*',
-              });
-              fs.createReadStream(filePath).pipe(res);
-              return;
-            }
-          }
-          next();
-        });
-      },
-    },
   ],
   define: {
     __BUILD_DATE__: JSON.stringify(BUILD_DATE),
