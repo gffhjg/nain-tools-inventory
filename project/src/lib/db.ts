@@ -537,7 +537,7 @@ export async function getDb(): Promise<PGlite> {
     if (!isSeeded && typeof window !== 'undefined' && typeof fetch !== 'undefined') {
       try {
         console.log('[db] Downloading pre-migrated TradeSoftGST database tarball (7.6MB)...');
-        const res = await fetch('/migrated-db.tar.gz');
+        const res = await fetch('./migrated-db.tar.gz');
         if (res.ok) {
           const blob = await res.blob();
           if (blob.size > 1000000) {
@@ -550,9 +550,33 @@ export async function getDb(): Promise<PGlite> {
       }
     }
 
-    const db = new PGlite(dbName, loadDataDir ? { loadDataDir } : {});
-    await db.exec(SCHEMA_SQL);
-    await migrateSchema(db);
+    let db: PGlite;
+    try {
+      if (loadDataDir) {
+        try {
+          db = new PGlite(dbName, { loadDataDir });
+        } catch (tarballErr) {
+          console.warn('[db] Tarball initialization error (DB might already exist), falling back:', tarballErr);
+          db = new PGlite(dbName);
+        }
+      } else {
+        db = new PGlite(dbName);
+      }
+      await db.exec(SCHEMA_SQL);
+      await migrateSchema(db);
+    } catch (openErr) {
+      console.warn('[db] Error opening IndexedDB, falling back to clean instance:', openErr);
+      try {
+        db = new PGlite(dbName);
+        await db.exec(SCHEMA_SQL);
+        await migrateSchema(db);
+      } catch (inMemoryErr) {
+        console.error('[db] IndexedDB unavailable, falling back to in-memory database:', inMemoryErr);
+        db = new PGlite();
+        await db.exec(SCHEMA_SQL);
+        await migrateSchema(db);
+      }
+    }
 
     dbInstance = db;
 
@@ -567,7 +591,7 @@ export async function getDb(): Promise<PGlite> {
         }
       } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
         console.log(`[db] Database has ${salesCount} invoices (< 5000). Updating to latest 5,376+ TradeSoft dataset...`);
-        const backupRes = await fetch('/nain-tools-backup-migrated.json');
+        const backupRes = await fetch('./nain-tools-backup-migrated.json');
         if (backupRes.ok) {
           const text = await backupRes.text();
           console.log('[db] Importing JSON backup directly...');
@@ -582,7 +606,10 @@ export async function getDb(): Promise<PGlite> {
     }
 
     return db;
-  })();
+  })().catch((err) => {
+    initPromise = null;
+    throw err;
+  });
 
   return initPromise;
 }
