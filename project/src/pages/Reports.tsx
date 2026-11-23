@@ -53,10 +53,11 @@ import {
   type DateRange,
 } from '@/utils/analytics';
 
-type ReportType = 'sales' | 'proforma' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding' | 'cheques';
+type ReportType = 'sales' | 'financial-years' | 'proforma' | 'purchase' | 'inventory' | 'profit' | 'lowstock' | 'topselling' | 'gst' | 'cust-outstanding' | 'sup-outstanding' | 'cheques';
 
 const reportTypes: { id: ReportType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'sales', label: 'Sales Report', icon: ShoppingCart },
+  { id: 'financial-years', label: 'Financial Years (FY)', icon: Calendar },
   { id: 'proforma', label: 'Proforma & Quote Conversion', icon: FileText },
   { id: 'purchase', label: 'Purchase Report', icon: Truck },
   { id: 'cheques', label: 'Cheque Register', icon: Landmark },
@@ -104,6 +105,20 @@ export default function Reports() {
           { label: 'Pending Payments', value: money(stats.pendingPayments), icon: Clock, tone: 'bg-warn-50 text-warn-600' },
           { label: 'Avg. Order Value', value: stats.totalSalesCount > 0 ? money(stats.totalRevenue / stats.totalSalesCount) : '₹0.00', icon: TrendingUp, tone: 'bg-slate-100 text-slate-600' },
         ];
+      case 'financial-years': {
+        const liveSales = sales.filter((s) => !s.invoice?.startsWith('OP-BAL') && s.status !== 'cancelled' && s.status !== 'draft');
+        const livePurc = purchases.filter((p) => !p.poNumber?.startsWith('OP-PAYABLE') && p.status !== 'cancelled');
+        const opbalSales = sales.filter((s) => s.invoice?.startsWith('OP-BAL'));
+        const opbalPurc = purchases.filter((p) => p.poNumber?.startsWith('OP-PAYABLE'));
+        const opbalSalesTotal = opbalSales.reduce((sum, s) => sum + s.grandTotal, 0);
+        const opbalPurcTotal = opbalPurc.reduce((sum, p) => sum + p.grandTotal, 0);
+        return [
+          { label: 'FY 2026-27 Active Sales', value: money(liveSales.reduce((s, r) => s + r.grandTotal, 0)), icon: ShoppingCart, tone: 'bg-emerald-50 text-emerald-600' },
+          { label: 'FY 2026-27 Purchases', value: money(livePurc.reduce((s, p) => s + p.grandTotal, 0)), icon: Truck, tone: 'bg-blue-50 text-blue-600' },
+          { label: 'Carried Forward Receivables', value: `${opbalSales.length} Parties (${money(opbalSalesTotal)})`, icon: Users, tone: 'bg-purple-50 text-purple-600' },
+          { label: 'Carried Forward Payables', value: `${opbalPurc.length} Suppliers (${money(opbalPurcTotal)})`, icon: Wallet, tone: 'bg-amber-50 text-amber-600' },
+        ];
+      }
       case 'proforma': {
         const totalPi = filteredSales.filter((s) => s.documentType === 'PROFORMA INVOICE' || s.convertedFromPiNumber || (s.invoice && s.invoice.startsWith('PI-')));
         const convertedPi = filteredSales.filter((s) => Boolean(s.convertedFromPiNumber));
@@ -506,6 +521,8 @@ export default function Reports() {
               return (
                 <button
                   key={r.id}
+                  id={`report-tab-${r.id}`}
+                  title={r.label}
                   onClick={() => setActiveReport(r.id)}
                   className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold transition ${
                     activeReport === r.id
@@ -569,6 +586,12 @@ export default function Reports() {
             dateRange={dateRange}
             onSelectRange={setDateRange}
             allSales={sales}
+          />
+        )}
+        {activeReport === 'financial-years' && (
+          <FinancialYearsReport
+            sales={sales}
+            purchases={purchases}
           />
         )}
         {activeReport === 'proforma' && (
@@ -2720,6 +2743,501 @@ function ChequesReport({
                 Confirm Bounce
               </button>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FinancialYearsReport({
+  sales,
+  purchases,
+}: {
+  sales: SaleRecord[];
+  purchases: PurchaseRecord[];
+}) {
+  const [subTab, setSubTab] = useState<'overview' | 'opbal-customers' | 'opbal-suppliers'>('overview');
+  const [search, setSearch] = useState('');
+
+  // Live FY 2026-27 sales (excluding OP-BAL opening balances)
+  const fy26LiveSales = useMemo(
+    () => sales.filter((s) => !s.invoice?.startsWith('OP-BAL') && s.status !== 'cancelled' && s.status !== 'draft'),
+    [sales]
+  );
+  const fy26LiveSalesTotal = useMemo(
+    () => fy26LiveSales.reduce((acc, s) => acc + s.grandTotal, 0),
+    [fy26LiveSales]
+  );
+
+  // Live FY 2026-27 purchases (excluding OP-PAYABLE opening balances)
+  const fy26LivePurchases = useMemo(
+    () => purchases.filter((p) => !p.poNumber?.startsWith('OP-PAYABLE') && p.status !== 'cancelled'),
+    [purchases]
+  );
+  const fy26LivePurchasesTotal = useMemo(
+    () => fy26LivePurchases.reduce((acc, p) => acc + p.grandTotal, 0),
+    [fy26LivePurchases]
+  );
+
+  // Carried Forward Customer Opening Balances (as of 01-04-2026)
+  const opbalCustomers = useMemo(
+    () => sales.filter((s) => s.invoice?.startsWith('OP-BAL')),
+    [sales]
+  );
+  const opbalCustomersTotal = useMemo(
+    () => opbalCustomers.reduce((acc, s) => acc + s.grandTotal, 0),
+    [opbalCustomers]
+  );
+
+  // Carried Forward Supplier Opening Payables (as of 01-04-2026)
+  const opbalSuppliers = useMemo(
+    () => purchases.filter((p) => p.poNumber?.startsWith('OP-PAYABLE')),
+    [purchases]
+  );
+  const opbalSuppliersTotal = useMemo(
+    () => opbalSuppliers.reduce((acc, p) => acc + p.grandTotal, 0),
+    [opbalSuppliers]
+  );
+
+  const yearsData = [
+    {
+      fy: 'FY 2026-27',
+      period: '01 Apr 2026 – 31 Mar 2027',
+      sales: fy26LiveSalesTotal,
+      salesCount: fy26LiveSales.length,
+      purchases: fy26LivePurchasesTotal,
+      purchasesCount: fy26LivePurchases.length,
+      margin: fy26LiveSalesTotal - fy26LivePurchasesTotal,
+      status: 'Current Active FY',
+      tone: 'emerald',
+      badge: 'Active & In-Progress',
+      note: `Live bill storage with full item details. Receivables carried forward from FY 2025-26: ${money(opbalCustomersTotal)} (${opbalCustomers.length} parties).`,
+    },
+    {
+      fy: 'FY 2025-26',
+      period: '01 Apr 2025 – 31 Mar 2026',
+      sales: 29748970.0,
+      salesCount: 2033,
+      purchases: 24687746.0,
+      purchasesCount: 580,
+      margin: 29748970.0 - 24687746.0,
+      status: 'Audited & Closed',
+      tone: 'blue',
+      badge: 'Audited Final',
+      note: `Closed year. All unsettled dues (${money(opbalCustomersTotal)}) carried forward into FY 2026-27 opening balance.`,
+    },
+    {
+      fy: 'FY 2024-25',
+      period: '01 Apr 2024 – 31 Mar 2025',
+      sales: 26763180.0,
+      salesCount: 1966,
+      purchases: 26085913.06,
+      purchasesCount: 585,
+      margin: 26763180.0 - 26085913.06,
+      status: 'Audited & Closed',
+      tone: 'slate',
+      badge: 'Audited Historical',
+      note: 'Closed year. Historical trade benchmark preserved.',
+    },
+  ];
+
+  const filteredOpbalCust = useMemo(() => {
+    if (!search.trim()) return opbalCustomers;
+    const q = search.toLowerCase();
+    return opbalCustomers.filter(
+      (c) =>
+        c.customer.toLowerCase().includes(q) ||
+        c.invoice.toLowerCase().includes(q) ||
+        (c.phone && c.phone.includes(q))
+    );
+  }, [opbalCustomers, search]);
+
+  const filteredOpbalSupp = useMemo(() => {
+    if (!search.trim()) return opbalSuppliers;
+    const q = search.toLowerCase();
+    return opbalSuppliers.filter(
+      (p) =>
+        p.supplier.toLowerCase().includes(q) ||
+        p.poNumber.toLowerCase().includes(q) ||
+        (p.phone && p.phone.includes(q))
+    );
+  }, [opbalSuppliers, search]);
+
+  const handleExportCSV = () => {
+    if (subTab === 'overview') {
+      const csv = toCSV(
+        yearsData.map((y) => ({
+          'Financial Year': y.fy,
+          Period: y.period,
+          'Sales Turnover (₹)': y.sales.toFixed(2),
+          'Sales Invoices': y.salesCount,
+          'Purchases Total (₹)': y.purchases.toFixed(2),
+          'Purchase Bills': y.purchasesCount,
+          'Gross Trade Margin (₹)': y.margin.toFixed(2),
+          Status: y.status,
+          Notes: y.note,
+        }))
+      );
+      downloadCSV(csv, 'Financial_Years_Summary.csv');
+    } else if (subTab === 'opbal-customers') {
+      const csv = toCSV(
+        opbalCustomers.map((c) => ({
+          'Customer Name': c.customer,
+          'Opening Balance Invoice': c.invoice,
+          'Phone Number': c.phone || '—',
+          'Carried Forward Date': c.date,
+          'Carried Due Amount (₹)': c.grandTotal.toFixed(2),
+          Status: 'Carried Forward into FY 2026-27',
+        }))
+      );
+      downloadCSV(csv, 'FY26_Carried_Forward_Customer_Balances.csv');
+    } else {
+      const csv = toCSV(
+        opbalSuppliers.map((s) => ({
+          'Supplier Name': s.supplier,
+          'Opening Payable Ref': s.poNumber,
+          'Phone Number': s.phone || '—',
+          'Carried Forward Date': s.date,
+          'Carried Payable Debt (₹)': s.grandTotal.toFixed(2),
+          Status: 'Carried Forward into FY 2026-27',
+        }))
+      );
+      downloadCSV(csv, 'FY26_Carried_Forward_Supplier_Payables.csv');
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* Executive Banner */}
+      <div className="card p-6 rounded-2xl bg-gradient-to-r from-brand-900 via-indigo-900 to-slate-900 text-white shadow-md relative overflow-hidden">
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2.5">
+              <span className="px-2.5 py-1 rounded-full text-xs font-black bg-brand-400 text-brand-950 uppercase tracking-wide">
+                Indian Financial Year Standard (1 Apr – 31 Mar)
+              </span>
+              <span className="text-xs text-brand-200">FY 2024-25 • FY 2025-26 • FY 2026-27</span>
+            </div>
+            <h2 className="text-2xl font-black tracking-tight text-white">
+              Multi-Year Financial &amp; Audit Tracking
+            </h2>
+            <p className="text-xs sm:text-sm text-brand-100/90 max-w-2xl">
+              Day-to-day detailed bills are maintained for the active <strong>FY 2026-27</strong>. 
+              Prior financial years (FY 2024-25 &amp; FY 2025-26) are preserved with audited totals, and all unsettled party dues as of 01-04-2026 have been cleanly rolled forward as opening balances.
+            </p>
+          </div>
+          <button
+            onClick={handleExportCSV}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold transition shadow-xs whitespace-nowrap self-start md:self-center"
+          >
+            <Download className="h-4 w-4" />
+            <span>Export View to CSV</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Financial Year Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {yearsData.map((y) => (
+          <div
+            key={y.fy}
+            className={`card p-5 rounded-2xl border transition-all duration-300 relative overflow-hidden shadow-xs ${
+              y.tone === 'emerald'
+                ? 'border-emerald-200 bg-gradient-to-b from-emerald-50/50 to-white ring-1 ring-emerald-500/20'
+                : y.tone === 'blue'
+                ? 'border-blue-200 bg-gradient-to-b from-blue-50/30 to-white'
+                : 'border-slate-200 bg-gradient-to-b from-slate-50/30 to-white'
+            }`}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div>
+                <span className="text-xs font-bold text-slate-500">{y.period}</span>
+                <h3 className="text-xl font-black text-slate-900 mt-0.5">{y.fy}</h3>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                  y.tone === 'emerald'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : y.tone === 'blue'
+                    ? 'bg-blue-100 text-blue-800'
+                    : 'bg-slate-100 text-slate-800'
+                }`}
+              >
+                {y.badge}
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <div>
+                <p className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Sales Turnover</p>
+                <div className="flex items-baseline justify-between mt-0.5">
+                  <span className="text-lg font-black text-slate-900">{money(y.sales)}</span>
+                  <span className="text-xs font-semibold text-slate-600">{y.salesCount} bills</span>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-[11px] uppercase tracking-wider font-bold text-slate-500">Total Purchases</p>
+                <div className="flex items-baseline justify-between mt-0.5">
+                  <span className="text-base font-bold text-slate-800">{money(y.purchases)}</span>
+                  <span className="text-xs font-semibold text-slate-600">{y.purchasesCount} bills</span>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-600">Gross Margin</span>
+                <span className={`text-sm font-black ${y.margin >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  {money(y.margin)}
+                </span>
+              </div>
+            </div>
+
+            <p className="mt-3 text-[11px] text-slate-500 font-medium leading-relaxed bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
+              {y.note}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Sub Tabs navigation */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+        <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
+          <button
+            onClick={() => setSubTab('overview')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all ${
+              subTab === 'overview'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Multi-Year Comparative Table
+          </button>
+          <button
+            onClick={() => setSubTab('opbal-customers')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+              subTab === 'opbal-customers'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>Opening Receivables</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-purple-100 text-purple-800 font-extrabold">
+              {opbalCustomers.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setSubTab('opbal-suppliers')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+              subTab === 'opbal-suppliers'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>Opening Payables</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-100 text-amber-800 font-extrabold">
+              {opbalSuppliers.length}
+            </span>
+          </button>
+        </div>
+
+        {subTab !== 'overview' && (
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search party or ref no..."
+              className="input pl-9 text-xs py-2 w-full"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Sub Tab: Multi-Year Overview Table */}
+      {subTab === 'overview' && (
+        <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h4 className="font-bold text-sm text-slate-900">Financial Years Comparative Breakdown</h4>
+            <span className="text-xs text-slate-500">1 April to 31 March cycle</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="table-full text-xs">
+              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                <tr>
+                  <th className="table-th">Financial Year</th>
+                  <th className="table-th">Accounting Period</th>
+                  <th className="table-th text-right">Sales Turnover</th>
+                  <th className="table-th text-center">Invoices</th>
+                  <th className="table-th text-right">Purchases Total</th>
+                  <th className="table-th text-center">Bills</th>
+                  <th className="table-th text-right">Gross Margin</th>
+                  <th className="table-th text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {yearsData.map((y) => (
+                  <tr key={y.fy} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="table-td font-black text-slate-900">{y.fy}</td>
+                    <td className="table-td text-slate-600 font-medium">{y.period}</td>
+                    <td className="table-td text-right font-black text-slate-900">{money(y.sales)}</td>
+                    <td className="table-td text-center font-bold text-slate-700">{y.salesCount}</td>
+                    <td className="table-td text-right font-bold text-slate-800">{money(y.purchases)}</td>
+                    <td className="table-td text-center font-bold text-slate-700">{y.purchasesCount}</td>
+                    <td className="table-td text-right font-black text-emerald-700">{money(y.margin)}</td>
+                    <td className="table-td text-center">
+                      <span
+                        className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          y.tone === 'emerald'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}
+                      >
+                        {y.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-slate-100/90 font-bold border-t-2 border-slate-300">
+                <tr>
+                  <td className="table-td font-black text-slate-900" colSpan={2}>All-Time Grand Total</td>
+                  <td className="table-td text-right font-black text-slate-900">
+                    {money(yearsData.reduce((s, y) => s + y.sales, 0))}
+                  </td>
+                  <td className="table-td text-center font-black text-slate-900">
+                    {yearsData.reduce((s, y) => s + y.salesCount, 0)}
+                  </td>
+                  <td className="table-td text-right font-black text-slate-900">
+                    {money(yearsData.reduce((s, y) => s + y.purchases, 0))}
+                  </td>
+                  <td className="table-td text-center font-black text-slate-900">
+                    {yearsData.reduce((s, y) => s + y.purchasesCount, 0)}
+                  </td>
+                  <td className="table-td text-right font-black text-emerald-800">
+                    {money(yearsData.reduce((s, y) => s + y.margin, 0))}
+                  </td>
+                  <td className="table-td text-center text-[11px] text-slate-600">3 Financial Years</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Sub Tab: Carried Forward Customer Receivables */}
+      {subTab === 'opbal-customers' && (
+        <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h4 className="font-bold text-sm text-slate-900">
+                Carried Forward Customer Receivables as of 01-04-2026
+              </h4>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Outstanding dues from FY 2025-26 carried into FY 2026-27 opening balance.
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-xl bg-purple-50 text-purple-900 border border-purple-200 text-xs font-black self-start sm:self-center">
+              Total Carried Dues: {money(opbalCustomersTotal)} ({opbalCustomers.length} Parties)
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="table-full text-xs">
+              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                <tr>
+                  <th className="table-th">Customer Name</th>
+                  <th className="table-th">Opening Ref Invoice</th>
+                  <th className="table-th">Phone Number</th>
+                  <th className="table-th">Effective Date</th>
+                  <th className="table-th text-right">Carried Opening Due</th>
+                  <th className="table-th text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {filteredOpbalCust.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-slate-500 text-xs">
+                      No opening balance parties matching filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredOpbalCust.map((c) => (
+                    <tr key={c.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="table-td font-bold text-slate-900">{c.customer}</td>
+                      <td className="table-td font-mono text-brand-700 font-bold">{c.invoice}</td>
+                      <td className="table-td text-slate-600">{c.phone || '—'}</td>
+                      <td className="table-td text-slate-600">01 Apr 2026</td>
+                      <td className="table-td text-right font-black text-slate-900">{money(c.grandTotal)}</td>
+                      <td className="table-td text-center">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                          Pending Receivable
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Sub Tab: Carried Forward Supplier Payables */}
+      {subTab === 'opbal-suppliers' && (
+        <div className="card rounded-2xl overflow-hidden border border-slate-200 shadow-xs">
+          <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h4 className="font-bold text-sm text-slate-900">
+                Carried Forward Supplier Payables as of 01-04-2026
+              </h4>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Unsettled purchase dues from FY 2025-26 carried into FY 2026-27 opening debts.
+              </p>
+            </div>
+            <span className="px-3 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 text-xs font-black self-start sm:self-center">
+              Total Carried Payables: {money(opbalSuppliersTotal)} ({opbalSuppliers.length} Suppliers)
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="table-full text-xs">
+              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                <tr>
+                  <th className="table-th">Supplier Name</th>
+                  <th className="table-th">Opening Ref PO</th>
+                  <th className="table-th">Phone Number</th>
+                  <th className="table-th">Effective Date</th>
+                  <th className="table-th text-right">Carried Opening Debt</th>
+                  <th className="table-th text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {filteredOpbalSupp.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-slate-500 text-xs">
+                      No opening payable suppliers matching filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredOpbalSupp.map((s) => (
+                    <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="table-td font-bold text-slate-900">{s.supplier}</td>
+                      <td className="table-td font-mono text-blue-700 font-bold">{s.poNumber}</td>
+                      <td className="table-td text-slate-600">{s.phone || '—'}</td>
+                      <td className="table-td text-slate-600">01 Apr 2026</td>
+                      <td className="table-td text-right font-black text-rose-700">{money(s.grandTotal)}</td>
+                      <td className="table-td text-center">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                          Pending Payable
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

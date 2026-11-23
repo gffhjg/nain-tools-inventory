@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useDeferredValue } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Plus, Search, Download, Eye, ShoppingCart, TrendingUp, Clock, CheckCircle2,
   Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3, X,
@@ -178,6 +178,7 @@ interface InvoiceDraftData {
 }
 
 export default function Sales() {
+  const navigate = useNavigate();
   const {
     sales, products, customers, cheques,
     addProduct, updateProduct, addSale, updateSale, deleteSale, updateSaleStatus, updateSaleDocumentType,
@@ -2557,7 +2558,38 @@ export default function Sales() {
                             </div>
                           )}
 
-                          {periodFilter.mode !== 'all' && (
+                          {periodFilter.mode === 'year' && periodFilter.year !== '2026-27' ? (
+                            <div className="text-left bg-blue-50/90 border border-blue-200/80 rounded-2xl p-4 text-xs space-y-2 shadow-2xs">
+                              <div className="flex items-center gap-2">
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-200 text-blue-900 uppercase">
+                                  FY {periodFilter.year} Closed &amp; Audited
+                                </span>
+                                <span className="text-blue-900 font-bold">Historical Record Archive</span>
+                              </div>
+                              <p className="text-blue-800 leading-relaxed font-medium">
+                                {periodFilter.year === '2025-26'
+                                  ? 'FY 2025-26 closed with 2,033 audited sales totaling ₹2,97,48,970.00. Unpaid customer receivables (₹7,00,521.00) have been rolled forward into FY 2026-27 opening balances.'
+                                  : 'FY 2024-25 closed with 1,966 audited sales totaling ₹2,67,63,180.00.'}
+                              </p>
+                              <div className="flex items-center gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => navigate('/reports')}
+                                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <span>View Financial Years Report</span>
+                                  <ArrowRight className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPeriodFilter({ ...periodFilter, mode: 'year', year: '2026-27' })}
+                                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-slate-700 border border-slate-200 hover:bg-slate-100 cursor-pointer"
+                                >
+                                  Switch to FY 2026-27
+                                </button>
+                              </div>
+                            </div>
+                          ) : periodFilter.mode !== 'all' && (
                             <div className="text-xs text-slate-500 space-y-2">
                               <p>Active period: <span className="font-bold text-brand-700">{timelineSummary.label}</span></p>
                               {latestPurchaseDate && (

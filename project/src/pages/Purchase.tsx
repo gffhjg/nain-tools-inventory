@@ -2240,7 +2240,38 @@ export default function Purchase() {
                       <div className="max-w-md mx-auto space-y-3">
                         <Clock className="w-8 h-8 text-slate-300 mx-auto mb-1" />
                         <p className="font-bold text-slate-700">No purchase records found matching current filter</p>
-                        {periodFilter.mode !== 'all' && (
+                        {periodFilter.mode === 'year' && periodFilter.year !== '2026-27' ? (
+                          <div className="text-left bg-blue-50/90 border border-blue-200/80 rounded-2xl p-4 text-xs space-y-2 shadow-2xs">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-200 text-blue-900 uppercase">
+                                FY {periodFilter.year} Closed &amp; Audited
+                              </span>
+                              <span className="text-blue-900 font-bold">Historical Purchase Archive</span>
+                            </div>
+                            <p className="text-blue-800 leading-relaxed font-medium">
+                              {periodFilter.year === '2025-26'
+                                ? 'FY 2025-26 closed with 580 audited purchase bills totaling ₹2,46,87,746.00. Unpaid supplier payables (₹12,02,396.00) have been rolled forward into FY 2026-27 opening debts.'
+                                : 'FY 2024-25 closed with 585 audited purchase bills totaling ₹2,60,85,913.06.'}
+                            </p>
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => navigate('/reports')}
+                                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <span>View Financial Years Report</span>
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPeriodFilter({ ...periodFilter, mode: 'year', year: '2026-27' })}
+                                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-slate-700 border border-slate-200 hover:bg-slate-100 cursor-pointer"
+                              >
+                                Switch to FY 2026-27
+                              </button>
+                            </div>
+                          </div>
+                        ) : periodFilter.mode !== 'all' && (
                           <div className="text-xs text-slate-500 space-y-2">
                             <p>Active period: <span className="font-bold text-brand-700">{timelineSummary.label}</span></p>
                             {latestPurchaseDate && (

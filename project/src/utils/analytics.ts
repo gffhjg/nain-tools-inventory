@@ -27,7 +27,57 @@ export function getCurrentMonthISO(): string {
 }
 
 export function getCurrentYearISO(): string {
-  return String(new Date().getFullYear());
+  return getCurrentFinancialYear();
+}
+
+/**
+ * Indian Financial Year Helper
+ * FY runs from 1 April to 31 March.
+ * E.g., 2026-04-01 to 2027-03-31 is FY 2026-27 (stored as "2026-27")
+ */
+export function getFinancialYear(dateStr?: string): string {
+  if (!dateStr || dateStr.length < 10) {
+    const today = getTodayISO();
+    return getFinancialYear(today);
+  }
+  const y = parseInt(dateStr.slice(0, 4), 10);
+  const m = parseInt(dateStr.slice(5, 7), 10);
+  if (isNaN(y) || isNaN(m)) return '2026-27';
+  if (m >= 4) {
+    return `${y}-${String(y + 1).slice(2)}`;
+  } else {
+    return `${y - 1}-${String(y).slice(2)}`;
+  }
+}
+
+export function getCurrentFinancialYear(): string {
+  return getFinancialYear(getTodayISO());
+}
+
+export function parseFinancialYear(fyStr: string): { startYear: number; endYear: number; fromDate: string; toDate: string } {
+  const match = (fyStr || '').match(/(\d{4})(?:-(\d{2,4}))?/);
+  let startYear = 2026;
+  if (match) {
+    startYear = parseInt(match[1], 10);
+  }
+  const endYear = startYear + 1;
+  return {
+    startYear,
+    endYear,
+    fromDate: `${startYear}-04-01`,
+    toDate: `${endYear}-03-31`,
+  };
+}
+
+export function formatFinancialYearLabel(fyStr: string): string {
+  const { startYear, endYear } = parseFinancialYear(fyStr);
+  return `FY ${startYear}-${String(endYear).slice(2)}`;
+}
+
+export function shiftFinancialYear(fyStr: string, delta: number): string {
+  const { startYear } = parseFinancialYear(fyStr);
+  const nextStart = startYear + delta;
+  return `${nextStart}-${String(nextStart + 1).slice(2)}`;
 }
 
 export function shiftISODate(dateStr: string, days: number): string {
@@ -58,9 +108,7 @@ export function shiftISOMonth(monthStr: string, months: number): string {
 
 export function shiftISOYear(yearStr: string, years: number): string {
   try {
-    const y = parseInt(yearStr, 10);
-    if (isNaN(y)) return yearStr;
-    return String(y + years);
+    return shiftFinancialYear(yearStr, years);
   } catch {
     return yearStr;
   }
@@ -107,7 +155,10 @@ export function getPeriodFilterLabel(filter: PeriodFilter): string {
     return formatFriendlyMonth(filter.month);
   }
   if (filter.mode === 'year') {
-    return `Year ${filter.year}`;
+    const fyLabel = formatFinancialYearLabel(filter.year);
+    const currentFY = getCurrentFinancialYear();
+    const isCurrent = filter.year === currentFY || filter.year.startsWith(currentFY.slice(0, 4));
+    return `${fyLabel} (1 Apr – 31 Mar)${isCurrent ? ' • Current FY' : ''}`;
   }
   return 'All Time';
 }
@@ -136,9 +187,10 @@ export function filterByPeriod<T extends { date?: string; convertedAt?: string }
   if (filter.mode === 'year') {
     const target = filter.year;
     if (!target) return items;
+    const { fromDate, toDate } = parseFinancialYear(target);
     return items.filter((i) => {
-      const d = (i.date || i.convertedAt || '').slice(0, 4);
-      return d === target;
+      const d = (i.date || i.convertedAt || '').slice(0, 10);
+      return d >= fromDate && d <= toDate;
     });
   }
   return items;

@@ -531,12 +531,12 @@ export async function getDb(): Promise<PGlite> {
     }
 
     let loadDataDir: Blob | undefined;
-    const dbName = 'idb://nain-tools-live-v3';
-    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_live_v3') === 'true';
+    const dbName = 'idb://nain-tools-live-v4';
+    const isSeeded = typeof window !== 'undefined' && localStorage.getItem('nain_tools_seeded_live_v4') === 'true';
 
     if (!isSeeded && typeof window !== 'undefined' && typeof fetch !== 'undefined') {
       try {
-        console.log('[db] Downloading pre-migrated TradeSoftGST database archive (7.6MB)...');
+        console.log('[db] Downloading pre-migrated TradeSoftGST database archive (FY 2026-27 + Carried Forward Balances)...');
         const res = await fetch('./migrated-db-archive.json');
         if (res.ok) {
           const rawBlob = await res.blob();
@@ -597,12 +597,12 @@ export async function getDb(): Promise<PGlite> {
       const { rows } = await db.query<{ count: string }>('SELECT count(*) FROM sales');
       const salesCount = Number(rows[0]?.count || 0);
       console.log(`[db] Current database loaded with ${salesCount} sales invoices.`);
-      if (salesCount >= 5000) {
+      if (salesCount >= 1000) {
         if (typeof window !== 'undefined') {
-          localStorage.setItem('nain_tools_seeded_live_v3', 'true');
+          localStorage.setItem('nain_tools_seeded_live_v4', 'true');
         }
       } else if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-        console.log(`[db] Database has ${salesCount} invoices (< 5000). Updating to latest 5,376+ TradeSoft dataset...`);
+        console.log(`[db] Database has ${salesCount} invoices (< 1000). Updating to latest TradeSoft FY 2026-27 dataset...`);
         const backupRes = await fetch('./nain-tools-backup-migrated.json');
         if (backupRes.ok) {
           const text = await backupRes.text();
@@ -610,7 +610,7 @@ export async function getDb(): Promise<PGlite> {
           const { api } = await import('./api');
           await api.importDatabase(text);
           console.log('[db] JSON auto-import complete!');
-          localStorage.setItem('nain_tools_seeded_live_v3', 'true');
+          localStorage.setItem('nain_tools_seeded_live_v4', 'true');
         }
       }
     } catch (e) {

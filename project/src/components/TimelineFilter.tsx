@@ -23,6 +23,7 @@ import {
   shiftISOYear,
   formatFriendlyDate,
   formatFriendlyMonth,
+  formatFinancialYearLabel,
   getPeriodFilterLabel,
   money,
 } from '@/utils/analytics';
@@ -62,16 +63,11 @@ export default function TimelineFilter({
   const currentMonth = getCurrentMonthISO();
   const currentYear = getCurrentYearISO();
 
-  // Generate fallback list of years if not supplied
+  // Generate list of Indian Financial Years (1 April - 31 March)
   const yearOptions = React.useMemo(() => {
     if (availableYears && availableYears.length > 0) return availableYears;
-    const list: string[] = [];
-    const curY = parseInt(currentYear, 10);
-    for (let y = curY; y >= curY - 5; y--) {
-      list.push(String(y));
-    }
-    return list;
-  }, [availableYears, currentYear]);
+    return ['2026-27', '2025-26', '2024-25'];
+  }, [availableYears]);
 
   const activeLabel = getPeriodFilterLabel(filter);
 
@@ -252,7 +248,7 @@ export default function TimelineFilter({
                 }`}
               >
                 <CalendarDays className="w-3.5 h-3.5" />
-                <span>Year</span>
+                <span>Financial Year</span>
               </button>
 
               <button
@@ -414,7 +410,7 @@ export default function TimelineFilter({
               </div>
             )}
 
-            {/* 3. YEAR MODE CONTROLS */}
+            {/* 3. FINANCIAL YEAR MODE CONTROLS */}
             {filter.mode === 'year' && (
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -423,7 +419,7 @@ export default function TimelineFilter({
                     type="button"
                     onClick={() => handleYearChange(shiftISOYear(filter.year, -1))}
                     className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 transition"
-                    title="Previous Year"
+                    title="Previous Financial Year"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
@@ -436,7 +432,7 @@ export default function TimelineFilter({
                   >
                     {yearOptions.map((y) => (
                       <option key={y} value={y}>
-                        Year {y}
+                        {formatFinancialYearLabel(y)} (1 Apr – 31 Mar)
                       </option>
                     ))}
                   </select>
@@ -446,7 +442,7 @@ export default function TimelineFilter({
                     type="button"
                     onClick={() => handleYearChange(shiftISOYear(filter.year, 1))}
                     className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 transition"
-                    title="Next Year"
+                    title="Next Financial Year"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
@@ -461,14 +457,14 @@ export default function TimelineFilter({
                         : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    This Year ({currentYear})
+                    Current FY ({formatFinancialYearLabel(currentYear)})
                   </button>
                 </div>
 
                 <div className="text-xs font-bold text-slate-700">
-                  <span>Year: </span>
+                  <span>Period: </span>
                   <span className="text-brand-700 underline decoration-brand-300 underline-offset-2">
-                    {filter.year}
+                    {formatFinancialYearLabel(filter.year)} (1 Apr – 31 Mar)
                   </span>
                 </div>
               </div>
