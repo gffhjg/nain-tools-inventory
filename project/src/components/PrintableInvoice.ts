@@ -361,7 +361,7 @@ function renderInvoiceCopyHTML(sale: SaleRecord, copyTag: string, cs?: CompanySe
   </div>`;
 }
 
-function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[], cs?: CompanySettings | null): string {
+export function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[], cs?: CompanySettings | null, autoPrint = true): string {
   const defaultCopies = [
     'Original For Recipient',
     'Duplicate For Transporter',
@@ -435,7 +435,7 @@ function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[], cs?: Comp
 </head>
 <body>
   ${copiesHTML}
-  <script>window.onload = () => { setTimeout(() => window.print(), 200); };</script>
+  ${autoPrint ? '<script>window.onload = () => { setTimeout(() => window.print(), 200); };</script>' : ''}
 </body>
 </html>`;
 }
@@ -443,11 +443,11 @@ function buildInvoiceHTML(sale: SaleRecord, selectedCopies?: string[], cs?: Comp
 export function printInvoice(sale: SaleRecord, selectedCopies?: string[], cs?: CompanySettings | null) {
   const win = window.open('', '_blank', 'width=820,height=900');
   if (!win) return;
-  win.document.write(buildInvoiceHTML(sale, selectedCopies, cs));
+  win.document.write(buildInvoiceHTML(sale, selectedCopies, cs, true));
   win.document.close();
 }
 
-function buildPurchaseHTML(po: PurchaseRecord, cs?: CompanySettings | null): string {
+export function buildPurchaseHTML(po: PurchaseRecord, cs?: CompanySettings | null, autoPrint = true): string {
   const biz = resolveBusinessDetails(cs);
   const itemRows = po.items
     .map((it, i) => {
@@ -624,7 +624,7 @@ function buildPurchaseHTML(po: PurchaseRecord, cs?: CompanySettings | null): str
       <div class="footer-text">This is a computer-generated purchase order. | ${esc(biz.name)} | ${esc(biz.phone)} | ${esc(biz.email)}</div>
     </div>
   </div>
-  <script>window.onload = () => { setTimeout(() => window.print(), 200); };</script>
+  ${autoPrint ? '<script>window.onload = () => { setTimeout(() => window.print(), 200); };</script>' : ''}
 </body>
 </html>`;
 }
@@ -632,6 +632,6 @@ function buildPurchaseHTML(po: PurchaseRecord, cs?: CompanySettings | null): str
 export function printPurchase(po: PurchaseRecord, cs?: CompanySettings | null) {
   const win = window.open('', '_blank', 'width=820,height=900');
   if (!win) return;
-  win.document.write(buildPurchaseHTML(po, cs));
+  win.document.write(buildPurchaseHTML(po, cs, true));
   win.document.close();
 }

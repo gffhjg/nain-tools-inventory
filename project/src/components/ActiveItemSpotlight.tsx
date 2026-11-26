@@ -11,12 +11,14 @@ import {
   X,
   Edit3,
   ShoppingCart,
+  ScanLine,
 } from 'lucide-react';
 import { money } from '@/utils/analytics';
 import { smartFilterItems } from '@/utils/search';
 import type { Product, DiscountType } from '@/lib/types';
 import Modal from '@/components/Modal';
 import ProductForm, { type ProductFormData } from '@/components/ProductForm';
+import SmartOrderScannerModal, { type ScannedImportItem } from '@/components/SmartOrderScannerModal';
 import { useStore } from '@/store/AppStore';
 import { handleNumericFocus, handleNumericClick, handleNumericKeyDown, cleanLeadingZeros } from '@/utils/numberInput';
 
@@ -48,6 +50,7 @@ export interface ERPProductItemsManagerProps {
   onQuickEditProduct?: (product: Product) => void;
   onOpenCustomModal?: () => void;
   onOpenProductMasterModal?: () => void;
+  onImportBulkItems?: (items: ScannedImportItem[]) => void;
   searchPlaceholder?: string;
   hideMasterShortcut?: boolean;
 }
@@ -80,6 +83,7 @@ export function ERPProductItemsManager({
   onQuickEditProduct,
   onOpenCustomModal,
   onOpenProductMasterModal,
+  onImportBulkItems,
   searchPlaceholder,
   hideMasterShortcut = false,
 }: ERPProductItemsManagerProps) {
@@ -92,6 +96,7 @@ export function ERPProductItemsManager({
   // Shortcut Product Master Modal State
   const [isMasterModalOpen, setIsMasterModalOpen] = useState(false);
   const [masterInitialName, setMasterInitialName] = useState('');
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -214,7 +219,17 @@ export function ERPProductItemsManager({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsScannerOpen(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg border border-indigo-300 bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-800 hover:from-indigo-100 hover:to-purple-100 transition flex items-center gap-1.5 shadow-2xs"
+            title="Scan or Paste order items from WhatsApp chat, Email, Bill Photo, PDF, or Excel"
+          >
+            <ScanLine className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Scan / Paste (WhatsApp · Email · Photo)</span>
+          </button>
+
           {!hideMasterShortcut && (
             <button
               type="button"
@@ -735,6 +750,30 @@ export function ERPProductItemsManager({
           }}
         />
       </Modal>
+
+      {/* Smart Scan & Import Modal (WhatsApp / Email / Photo / Excel) */}
+      <SmartOrderScannerModal
+        open={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        mode={mode}
+        products={products}
+        onImportItems={(imported) => {
+          if (onImportBulkItems) {
+            onImportBulkItems(imported);
+          } else {
+            for (const item of imported) {
+              if (item.productId) {
+                const prod = products.find((p) => p.id === item.productId);
+                onAddItem(item.productId, prod);
+                if (item.qty > 0) onUpdateQty(item.productId, item.qty);
+                if (item.price !== undefined && item.price > 0) onUpdatePrice(item.productId, item.price);
+              }
+            }
+          }
+          setToastMsg(`✓ Imported ${imported.length} ${imported.length === 1 ? 'item' : 'items'} cleanly!`);
+          setTimeout(() => setToastMsg(null), 4000);
+        }}
+      />
     </div>
   );
 }

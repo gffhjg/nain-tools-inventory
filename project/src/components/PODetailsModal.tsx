@@ -1,5 +1,8 @@
-import { Printer, Truck, Calendar, User, Phone, MapPin, Hash, FileText } from 'lucide-react';
+import { useState } from 'react';
+import { Printer, Truck, Calendar, User, Phone, MapPin, Hash, FileText, Mail, MessageCircle } from 'lucide-react';
 import Modal from '@/components/Modal';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
 import { printPurchase } from '@/components/PrintableInvoice';
 import { money } from '@/utils/analytics';
 import type { PurchaseRecord, CompanySettings } from '@/lib/types';
@@ -11,6 +14,9 @@ type PODetailsModalProps = {
 };
 
 export default function PODetailsModal({ po, onClose, companySettings }: PODetailsModalProps) {
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [whatsappModalOpen, setWhatsappModalOpen] = useState(false);
+
   if (!po) return null;
 
   const totalUnits = po.items.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
@@ -20,34 +26,51 @@ export default function PODetailsModal({ po, onClose, companySettings }: PODetai
   };
 
   return (
-    <Modal
-      open={!!po}
-      onClose={onClose}
-      size="3xl"
-      title={`Purchase Order Details — ${po.poNumber}`}
-      subtitle={`PO Date: ${po.date} · Supplier: ${po.supplier}`}
-      footer={
-        <div className="flex items-center justify-between w-full gap-3">
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span>PO ID: <span className="font-mono text-slate-700">{po.id}</span></span>
+    <>
+      <Modal
+        open={!!po}
+        onClose={onClose}
+        size="3xl"
+        title={`Purchase Order Details — ${po.poNumber}`}
+        subtitle={`PO Date: ${po.date} · Supplier: ${po.supplier}`}
+        footer={
+          <div className="flex items-center justify-between w-full gap-3">
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span>PO ID: <span className="font-mono text-slate-700">{po.id}</span></span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setWhatsappModalOpen(true)}
+                className="btn-secondary text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100 text-xs px-3.5 py-2 flex items-center gap-1.5 font-bold"
+              >
+                <MessageCircle className="h-4 w-4 text-emerald-600" />
+                <span>WhatsApp PDF</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEmailModalOpen(true)}
+                className="btn-secondary text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100 text-xs px-3.5 py-2 flex items-center gap-1.5 font-bold"
+              >
+                <Mail className="h-4 w-4 text-rose-600" />
+                <span>Send via Email</span>
+              </button>
+              <button
+                onClick={handlePrint}
+                className="btn-primary text-xs px-4 py-2 flex items-center gap-2 shadow-sm hover:shadow transition font-bold"
+              >
+                <Printer className="h-4 w-4" /> Print / PDF PO
+              </button>
+              <button
+                onClick={onClose}
+                className="btn-secondary text-xs px-4 py-2"
+              >
+                Close
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handlePrint}
-              className="btn-primary text-xs px-4 py-2 flex items-center gap-2 shadow-sm hover:shadow transition font-bold"
-            >
-              <Printer className="h-4 w-4" /> Print / PDF PO
-            </button>
-            <button
-              onClick={onClose}
-              className="btn-secondary text-xs px-4 py-2"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      }
-    >
+        }
+      >
       <div className="space-y-4">
         {/* Top Info Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -151,6 +174,21 @@ export default function PODetailsModal({ po, onClose, companySettings }: PODetai
           </div>
         </div>
       </div>
-    </Modal>
+      </Modal>
+      <SendEmailModal
+        open={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        mode="purchase"
+        purchase={po}
+        companySettings={companySettings}
+      />
+      <SendWhatsAppPdfModal
+        open={whatsappModalOpen}
+        onClose={() => setWhatsappModalOpen(false)}
+        mode="purchase"
+        purchase={po}
+        companySettings={companySettings}
+      />
+    </>
   );
 }

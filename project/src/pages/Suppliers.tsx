@@ -1,8 +1,13 @@
 import { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, FileText, Trash2, Edit2, Eye, Truck, Building2, AlertTriangle } from 'lucide-react';
+import { Plus, Search, FileText, Trash2, Edit2, Eye, Truck, Building2, AlertTriangle, Mail, MessageCircle } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
+import { buildSupplierLedgerData, type CustomerLedgerData } from '@/components/PrintableLedger';
+import BusinessCardDropBar from '@/components/BusinessCardDropBar';
+import type { AppliedBusinessCardResult } from '@/components/BusinessCardScannerModal';
 import { useStore } from '@/store/AppStore';
 import { money, formatRelativeDate } from '@/utils/analytics';
 import type { Supplier, PurchaseRecord } from '@/lib/types';
@@ -25,7 +30,7 @@ interface SupplierDraftData {
 }
 
 export default function Suppliers() {
-  const { suppliers, purchases, addSupplier, updateSupplier, deleteSupplier } = useStore();
+  const { suppliers, purchases, sales, cheques, addSupplier, updateSupplier, deleteSupplier, companySettings } = useStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
@@ -35,6 +40,8 @@ export default function Suppliers() {
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [form, setForm] = useState<Supplier>(empty);
   const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null);
+  const [ledgerEmailTarget, setLedgerEmailTarget] = useState<CustomerLedgerData | null>(null);
+  const [ledgerWhatsappTarget, setLedgerWhatsappTarget] = useState<CustomerLedgerData | null>(null);
 
   const [hasSupplierDraft, setHasSupplierDraft] = useState(false);
   const [restoredFromSupplierDraft, setRestoredFromSupplierDraft] = useState(false);
@@ -353,6 +360,28 @@ export default function Suppliers() {
                   <td className="table-td">
                     <div className="flex items-center justify-end gap-1">
                       <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLedgerWhatsappTarget(buildSupplierLedgerData(s, purchases, sales, cheques));
+                        }}
+                        className="rounded-lg p-2 text-emerald-600 transition hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer"
+                        title="Send Supplier Ledger PDF via WhatsApp"
+                      >
+                        <MessageCircle className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLedgerEmailTarget(buildSupplierLedgerData(s, purchases, sales, cheques));
+                        }}
+                        className="rounded-lg p-2 text-rose-600 transition hover:bg-rose-50 hover:text-rose-700 cursor-pointer"
+                        title="Send Supplier Ledger PDF via Email"
+                      >
+                        <Mail className="h-4 w-4" />
+                      </button>
+                      <button
                         onClick={(e) => { e.stopPropagation(); navigate(`/suppliers/${s.id}`); }}
                         className="rounded-lg p-2 text-slate-400 transition hover:bg-brand-50 hover:text-brand-600"
                         title="View Ledger"
@@ -467,6 +496,25 @@ export default function Suppliers() {
         }
       >
         <div className="space-y-4">
+          <BusinessCardDropBar
+            partyType="supplier"
+            existingParties={suppliers}
+            showSaveToMasterOption={false}
+            onApplyParty={(data: AppliedBusinessCardResult) => {
+              setForm((prev) => ({
+                ...prev,
+                name: data.businessName || prev.name,
+                contactPerson: data.contactPerson || prev.contactPerson || data.businessName,
+                phone: data.phone || prev.phone,
+                gstin: data.gstin || prev.gstin,
+                email: data.email || prev.email,
+                address: data.address || prev.address,
+                state: data.state || prev.state,
+                stateCode: data.stateCode || prev.stateCode,
+                notes: data.notes || prev.notes,
+              }));
+            }}
+          />
           {restoredFromSupplierDraft && !editing && (
             <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
               <div className="flex items-center gap-2">
@@ -575,6 +623,21 @@ export default function Suppliers() {
         })()}
       </Modal>
 
+      <SendEmailModal
+        open={!!ledgerEmailTarget}
+        onClose={() => setLedgerEmailTarget(null)}
+        mode="ledger"
+        ledgerData={ledgerEmailTarget}
+        companySettings={companySettings}
+      />
+
+      <SendWhatsAppPdfModal
+        open={!!ledgerWhatsappTarget}
+        onClose={() => setLedgerWhatsappTarget(null)}
+        mode="ledger"
+        ledgerData={ledgerWhatsappTarget}
+        companySettings={companySettings}
+      />
     </div>
   );
 }

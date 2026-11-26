@@ -5,13 +5,15 @@ import {
   IndianRupee, XCircle, FileText, ClipboardCheck, ArrowRight, Clock,
   PackageCheck, Boxes, Plus, Users, Building2, CheckCircle2, Wallet,
   MessageCircle, Eye, Printer, ExternalLink, Landmark, RefreshCw, Sparkles, Database,
-  Search, ChevronDown, ChevronRight, X, Calendar, User, Phone
+  Search, ChevronDown, ChevronRight, X, Calendar, User, Phone, Mail
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import InvoiceDetailsModal from '@/components/InvoiceDetailsModal';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
 import { useStore } from '@/store/AppStore';
 import { moneyShort, downloadCSV, toCSV, money } from '@/utils/analytics';
 import { printInvoice } from '@/components/PrintableInvoice';
@@ -28,6 +30,12 @@ export default function Dashboard() {
   const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
   const [selectedSaleForDetails, setSelectedSaleForDetails] = useState<SaleRecord | null>(null);
   const [importingMigrated, setImportingMigrated] = useState(false);
+  const [emailModalTarget, setEmailModalTarget] = useState<{
+    mode: 'sale' | 'reminder';
+    sale?: SaleRecord;
+    reminderData?: { customerId?: string; customerName: string; amount: number; invoiceNumber?: string };
+  } | null>(null);
+  const [whatsappPdfSale, setWhatsappPdfSale] = useState<SaleRecord | null>(null);
 
   const handleImportMigratedData = useCallback(async () => {
     setImportingMigrated(true);
@@ -275,13 +283,6 @@ export default function Dashboard() {
     () => products.filter((p) => p.status === 'low-stock' || p.status === 'out-of-stock').slice(0, 6),
     [products]
   );
-
-  const getWhatsAppReminderLink = (phone: string, customer: string, invoice: string, balance: number) => {
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-    const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    const msg = `Hello ${customer}, payment reminder for Invoice #${invoice} from Nain Tools & SS Bolt Co. Balance due: ₹${balance.toFixed(2)}. Please make the payment at your earliest convenience. Thank you!`;
-    return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
-  };
 
   const getWhatsAppClientSummaryReminderLink = (phone: string, customer: string, invoiceCount: number, totalBalance: number) => {
     const cleanPhone = phone.replace(/[^0-9]/g, '');
@@ -759,6 +760,24 @@ export default function Dashboard() {
                             )}
                             <button
                               type="button"
+                              onClick={() =>
+                                setEmailModalTarget({
+                                  mode: 'reminder',
+                                  reminderData: {
+                                    customerId: group.invoices[0]?.customerId || undefined,
+                                    customerName: group.customer,
+                                    amount: group.totalBalance,
+                                  },
+                                })
+                              }
+                              className="btn-secondary py-1.5 px-2.5 text-[11px] bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 font-bold flex items-center gap-1 shadow-xs"
+                              title="Send Email payment reminder for total pending balance"
+                            >
+                              <Mail className="h-3.5 w-3.5 text-rose-600" />
+                              <span>Email</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => toggleClientExpanded(clientKey)}
                               className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
                             >
@@ -823,19 +842,26 @@ export default function Dashboard() {
                                             <span>Bill Details</span>
                                           </button>
 
-                                          {/* Remind button */}
-                                          {s.phone && (
-                                            <a
-                                              href={getWhatsAppReminderLink(s.phone, s.customer, s.invoice, bal)}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="btn-secondary py-1 px-2.5 text-[11px] bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 font-bold flex items-center gap-1 shadow-2xs"
-                                              title="Send WhatsApp Reminder for this invoice"
-                                            >
-                                              <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
-                                              <span>Remind</span>
-                                            </a>
-                                          )}
+                                          {/* Send Bill PDF on WhatsApp */}
+                                          <button
+                                            type="button"
+                                            onClick={() => setWhatsappPdfSale(s)}
+                                            className="btn-secondary py-1 px-2.5 text-[11px] bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 font-bold flex items-center gap-1 shadow-2xs cursor-pointer"
+                                            title="Send Full Invoice PDF via WhatsApp"
+                                          >
+                                            <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
+                                            <span>WhatsApp PDF</span>
+                                          </button>
+
+                                          {/* Email Bill button */}
+                                          <button
+                                            type="button"
+                                            onClick={() => setEmailModalTarget({ mode: 'sale', sale: s })}
+                                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                            title="Send Invoice / Reminder via Email"
+                                          >
+                                            <Mail className="h-4 w-4" />
+                                          </button>
 
                                           {/* Print button */}
                                           <button
@@ -1227,6 +1253,27 @@ export default function Dashboard() {
           companySettings={companySettings}
         />
       )}
+
+      {/* Email Modal */}
+      {emailModalTarget && (
+        <SendEmailModal
+          open={!!emailModalTarget}
+          onClose={() => setEmailModalTarget(null)}
+          mode={emailModalTarget.mode}
+          sale={emailModalTarget.sale}
+          reminderData={emailModalTarget.reminderData}
+          companySettings={companySettings}
+        />
+      )}
+
+      {/* WhatsApp Invoice PDF Modal */}
+      <SendWhatsAppPdfModal
+        open={!!whatsappPdfSale}
+        onClose={() => setWhatsappPdfSale(null)}
+        mode="sale"
+        sale={whatsappPdfSale}
+        companySettings={companySettings}
+      />
     </div>
   );
 }

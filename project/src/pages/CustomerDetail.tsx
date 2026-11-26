@@ -3,10 +3,14 @@ import { useMemo, useState } from 'react';
 import {
   ArrowLeft, Phone, MapPin, FileText, IndianRupee, TrendingUp,
   ShoppingCart, Clock, Tag, StickyNote, Landmark, CheckCircle2, AlertTriangle, Eye,
+  Mail, MessageCircle, Printer, BookOpen,
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import InvoiceDetailsModal from '@/components/InvoiceDetailsModal';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
+import { buildCustomerLedgerData, printCustomerLedger } from '@/components/PrintableLedger';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
 import type { SaleRecord } from '@/lib/types';
@@ -16,6 +20,11 @@ export default function CustomerDetail() {
   const navigate = useNavigate();
   const { customers, sales, products, cheques, companySettings } = useStore();
   const [viewingSale, setViewingSale] = useState<SaleRecord | null>(null);
+  const [ledgerEmailOpen, setLedgerEmailOpen] = useState(false);
+  const [ledgerWhatsappOpen, setLedgerWhatsappOpen] = useState(false);
+  const [ledgerPeriod, setLedgerPeriod] = useState<'all' | 'fy' | 'custom'>('all');
+  const [customFrom, setCustomFrom] = useState('2026-04-01');
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
 
   const customer = useMemo(() => customers.find((c) => c.id === id), [customers, id]);
 
@@ -83,6 +92,24 @@ export default function CustomerDetail() {
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [customerSales]);
 
+  const ledgerData = useMemo(() => {
+    if (!customer) return null;
+    if (ledgerPeriod === 'fy') {
+      return buildCustomerLedgerData(customer, sales, cheques, {
+        fromDate: '2026-04-01',
+        toDate: new Date().toISOString().slice(0, 10),
+        periodLabel: 'FY 2026-27 (1 Apr 2026 – Today)',
+      });
+    }
+    if (ledgerPeriod === 'custom') {
+      return buildCustomerLedgerData(customer, sales, cheques, {
+        fromDate: customFrom,
+        toDate: customTo,
+      });
+    }
+    return buildCustomerLedgerData(customer, sales, cheques, { periodLabel: 'All Dates' });
+  }, [customer, sales, cheques, ledgerPeriod, customFrom, customTo]);
+
   if (!customer) {
     return (
       <div className="animate-fade-in">
@@ -130,10 +157,41 @@ export default function CustomerDetail() {
         title={customer.name}
         subtitle={`${customer.phone}${customer.gstin ? ' · GSTIN: ' + customer.gstin : ''}`}
         actions={
-          <button className="btn-secondary" onClick={() => navigate('/customers')}>
-            <ArrowLeft className="h-4 w-4" />
-            <span className="hidden sm:inline">Back</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setLedgerWhatsappOpen(true)}
+              className="btn-secondary bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 font-bold"
+              title="Send Customer Ledger PDF on WhatsApp"
+            >
+              <MessageCircle className="h-4 w-4 text-emerald-600" />
+              <span>WhatsApp Ledger PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setLedgerEmailOpen(true)}
+              className="btn-secondary bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 font-bold"
+              title="Send Customer Ledger PDF on Email"
+            >
+              <Mail className="h-4 w-4 text-rose-600" />
+              <span>Email Ledger PDF</span>
+            </button>
+            {ledgerData && (
+              <button
+                type="button"
+                onClick={() => printCustomerLedger(ledgerData, companySettings)}
+                className="btn-secondary"
+                title="Print / Save Ledger PDF"
+              >
+                <Printer className="h-4 w-4" />
+                <span className="hidden sm:inline">Print Ledger</span>
+              </button>
+            )}
+            <button className="btn-secondary" onClick={() => navigate('/customers')}>
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Back</span>
+            </button>
+          </div>
         }
       />
 
@@ -220,6 +278,129 @@ export default function CustomerDetail() {
               <span className="text-[11px] font-bold text-rose-700 block">❌ Did Not Purchase (Expired)</span>
               <span className="text-lg font-black text-rose-900">{piStats.expired} Expired</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Account Ledger Statement (Debit / Credit / Running Balance) */}
+      {ledgerData && (
+        <div className="mt-4 card overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3 bg-slate-50/70">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-brand-600" />
+              <div>
+                <h3 className="font-semibold text-slate-800">Account Ledger Statement</h3>
+                <p className="text-[11px] text-slate-500">
+                  Showing {ledgerData.entries.length} voucher entries · Closing Balance:{' '}
+                  <strong className={ledgerData.closingBalance > 0.01 ? 'text-amber-700' : 'text-emerald-700'}>
+                    {money(Math.abs(ledgerData.closingBalance))} {ledgerData.closingBalance >= 0 ? 'Dr' : 'Cr'}
+                  </strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5">
+                {[
+                  { key: 'all', label: 'All Time' },
+                  { key: 'fy', label: 'FY 2026-27' },
+                  { key: 'custom', label: 'Custom' },
+                ].map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setLedgerPeriod(opt.key as 'all' | 'fy' | 'custom')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
+                      ledgerPeriod === opt.key ? 'bg-brand-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {ledgerPeriod === 'custom' && (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    value={customFrom}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                    className="input py-1 px-2 text-xs bg-white"
+                  />
+                  <span className="text-slate-400">to</span>
+                  <input
+                    type="date"
+                    value={customTo}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                    className="input py-1 px-2 text-xs bg-white"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto max-h-96">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50/90 sticky top-0">
+                <tr>
+                  <th className="table-th">Date</th>
+                  <th className="table-th">Voucher Type</th>
+                  <th className="table-th">Ref No.</th>
+                  <th className="table-th">Particulars</th>
+                  <th className="table-th text-right">Debit (₹)</th>
+                  <th className="table-th text-right">Credit (₹)</th>
+                  <th className="table-th text-right">Running Balance</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {(Math.abs(ledgerData.openingBalance) > 0.005 || ledgerData.fromDate) && (
+                  <tr className="bg-slate-50/70 font-semibold">
+                    <td className="table-td font-mono">{ledgerData.fromDate || 'Opening'}</td>
+                    <td className="table-td">Opening</td>
+                    <td className="table-td">—</td>
+                    <td className="table-td">Opening Balance (b/f)</td>
+                    <td className="table-td text-right">—</td>
+                    <td className="table-td text-right">—</td>
+                    <td className="table-td text-right font-mono font-bold">
+                      {money(Math.abs(ledgerData.openingBalance))} {ledgerData.openingBalance >= 0 ? 'Dr' : 'Cr'}
+                    </td>
+                  </tr>
+                )}
+                {ledgerData.entries.map((entry) => (
+                  <tr key={entry.id} className="hover:bg-slate-50/50">
+                    <td className="table-td text-slate-600 font-mono whitespace-nowrap">{entry.date}</td>
+                    <td className="table-td">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10.5px] font-bold ${
+                          entry.credit > 0
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-slate-100 text-slate-700'
+                        }`}
+                      >
+                        {entry.voucherType}
+                      </span>
+                    </td>
+                    <td className="table-td font-mono font-semibold text-slate-800">{entry.refNo}</td>
+                    <td className="table-td text-slate-700">{entry.particulars}</td>
+                    <td className="table-td text-right font-mono tabular-nums">
+                      {entry.debit > 0 ? money(entry.debit) : '—'}
+                    </td>
+                    <td className="table-td text-right font-mono tabular-nums text-emerald-700 font-semibold">
+                      {entry.credit > 0 ? money(entry.credit) : '—'}
+                    </td>
+                    <td className="table-td text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
+                      {money(Math.abs(entry.runningBalance))} {entry.runningBalance >= 0 ? 'Dr' : 'Cr'}
+                    </td>
+                  </tr>
+                ))}
+                {ledgerData.entries.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="table-td text-center text-slate-400 py-8">
+                      No transactions recorded for this period.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -495,6 +676,24 @@ export default function CustomerDetail() {
           companySettings={companySettings}
         />
       )}
+
+      {/* Email Customer Ledger PDF */}
+      <SendEmailModal
+        open={ledgerEmailOpen}
+        onClose={() => setLedgerEmailOpen(false)}
+        mode="ledger"
+        ledgerData={ledgerData}
+        companySettings={companySettings}
+      />
+
+      {/* WhatsApp Customer Ledger PDF */}
+      <SendWhatsAppPdfModal
+        open={ledgerWhatsappOpen}
+        onClose={() => setLedgerWhatsappOpen(false)}
+        mode="ledger"
+        ledgerData={ledgerData}
+        companySettings={companySettings}
+      />
     </div>
   );
 }

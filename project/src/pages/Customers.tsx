@@ -1,8 +1,13 @@
 import { useState, useMemo, useDeferredValue, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, FileText, Trash2, Edit2, Eye, Users, AlertTriangle, MessageCircle, DollarSign, CheckCircle2, IndianRupee, Landmark } from 'lucide-react';
+import { Plus, Search, FileText, Trash2, Edit2, Eye, Users, AlertTriangle, MessageCircle, DollarSign, CheckCircle2, IndianRupee, Landmark, Mail } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import Modal from '@/components/Modal';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
+import { buildCustomerLedgerData, type CustomerLedgerData } from '@/components/PrintableLedger';
+import BusinessCardDropBar from '@/components/BusinessCardDropBar';
+import type { AppliedBusinessCardResult } from '@/components/BusinessCardScannerModal';
 import { useStore } from '@/store/AppStore';
 import { money, formatRelativeDate } from '@/utils/analytics';
 import { autoSelectNumberProps, cleanLeadingZeros } from '@/utils/numberInput';
@@ -42,6 +47,8 @@ export default function Customers() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [ledgerEmailTarget, setLedgerEmailTarget] = useState<CustomerLedgerData | null>(null);
+  const [ledgerWhatsappTarget, setLedgerWhatsappTarget] = useState<CustomerLedgerData | null>(null);
 
   const [hasCustomerDraft, setHasCustomerDraft] = useState(false);
   const [restoredFromCustomerDraft, setRestoredFromCustomerDraft] = useState(false);
@@ -413,13 +420,6 @@ export default function Customers() {
     setPayTarget(null);
   };
 
-  const getWhatsAppLink = (phone: string, name: string, outstanding: number) => {
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-    const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    const msg = `Hello ${name}, your outstanding payment balance with Nain Tools & Bolt Co. is ${money(outstanding)}. Kindly remit payment at your earliest convenience. Thank you!`;
-    return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
-  };
-
   return (
     <div className="animate-fade-in space-y-6 pb-12">
       <PageHeader
@@ -607,17 +607,22 @@ export default function Customers() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        {c.outstanding > 0 && c.phone && (
-                          <a
-                            href={getWhatsAppLink(c.phone, c.name, c.outstanding)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
-                            title="Send WhatsApp Payment Reminder"
-                          >
-                            <MessageCircle className="h-4 w-4" />
-                          </a>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => setLedgerWhatsappTarget(buildCustomerLedgerData(c, sales, cheques))}
+                          className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                          title="Send Customer Ledger PDF via WhatsApp"
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLedgerEmailTarget(buildCustomerLedgerData(c, sales, cheques))}
+                          className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                          title="Send Customer Ledger PDF via Email"
+                        >
+                          <Mail className="h-4 w-4" />
+                        </button>
                         {c.outstanding > 0 && (
                           <button
                             onClick={() => openQuickPayment(c)}
@@ -719,6 +724,25 @@ export default function Customers() {
           onClose={() => setFormOpen(false)}
         >
           <div className="space-y-4">
+            <BusinessCardDropBar
+              partyType="customer"
+              existingParties={customers}
+              showSaveToMasterOption={false}
+              onApplyParty={(data: AppliedBusinessCardResult) => {
+                setForm((prev) => ({
+                  ...prev,
+                  name: data.businessName || data.contactPerson || prev.name,
+                  businessName: data.businessName || prev.businessName,
+                  phone: data.phone || prev.phone,
+                  gstin: data.gstin || prev.gstin,
+                  email: data.email || prev.email,
+                  address: data.address || prev.address,
+                  state: data.state || prev.state,
+                  stateCode: data.stateCode || prev.stateCode,
+                  notes: data.notes || prev.notes,
+                }));
+              }}
+            />
             {restoredFromCustomerDraft && !editing && (
               <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
                 <div className="flex items-center gap-2">
@@ -1030,6 +1054,22 @@ export default function Customers() {
           </Modal>
         );
       })()}
+
+      <SendEmailModal
+        open={!!ledgerEmailTarget}
+        onClose={() => setLedgerEmailTarget(null)}
+        mode="ledger"
+        ledgerData={ledgerEmailTarget}
+        companySettings={companySettings}
+      />
+
+      <SendWhatsAppPdfModal
+        open={!!ledgerWhatsappTarget}
+        onClose={() => setLedgerWhatsappTarget(null)}
+        mode="ledger"
+        ledgerData={ledgerWhatsappTarget}
+        companySettings={companySettings}
+      />
     </div>
   );
 }

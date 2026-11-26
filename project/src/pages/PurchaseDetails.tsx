@@ -1,9 +1,11 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  ArrowLeft, Truck, Printer, CheckCircle2, Clock, FileText, MapPin, Phone, Trash2
+  ArrowLeft, Truck, Printer, CheckCircle2, Clock, FileText, MapPin, Phone, Trash2, Mail, MessageCircle
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
 import { printPurchase } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { money } from '@/utils/analytics';
@@ -13,6 +15,8 @@ export default function PurchaseDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { purchases, sales, suppliers, markPurchaseReceived, updatePurchaseStatus, deletePurchase, deleteSale, companySettings } = useStore();
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [whatsappModalOpen, setWhatsappModalOpen] = useState(false);
 
   const po = useMemo(() => {
     const foundPo = purchases.find((p) => p.id === id);
@@ -91,6 +95,22 @@ export default function PurchaseDetails() {
             <button className="btn-secondary" onClick={() => navigate('/purchase')}>
               <ArrowLeft className="h-4 w-4" />
               <span className="hidden sm:inline">Back</span>
+            </button>
+            <button
+              className="btn-secondary text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
+              onClick={() => setWhatsappModalOpen(true)}
+              title="Send Purchase Bill / PO PDF via WhatsApp"
+            >
+              <MessageCircle className="h-4 w-4 text-emerald-600" />
+              <span className="hidden sm:inline">WhatsApp PDF</span>
+            </button>
+            <button
+              className="btn-secondary text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100"
+              onClick={() => setEmailModalOpen(true)}
+              title="Send Purchase Bill / PO via Email"
+            >
+              <Mail className="h-4 w-4 text-rose-600" />
+              <span className="hidden sm:inline">Send Email</span>
             </button>
             <button className="btn-secondary" onClick={() => printPurchase(po, companySettings)}>
               <Printer className="h-4 w-4" />
@@ -260,6 +280,22 @@ export default function PurchaseDetails() {
           </p>
         </div>
       )}
+
+      <SendEmailModal
+        open={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        mode="purchase"
+        purchase={po}
+        companySettings={companySettings}
+      />
+
+      <SendWhatsAppPdfModal
+        open={whatsappModalOpen}
+        onClose={() => setWhatsappModalOpen(false)}
+        mode="purchase"
+        purchase={po}
+        companySettings={companySettings}
+      />
     </div>
   );
 }

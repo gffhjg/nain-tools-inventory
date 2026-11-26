@@ -4,13 +4,18 @@ import {
   Plus, Search, Download, Eye, Truck, PackageCheck, Clock, FileText,
   Trash2, Minus, Printer, CheckCircle2, Package, X, AlertTriangle, Sparkles,
   ShoppingCart, ArrowRight, Landmark, CreditCard, Calendar, Edit3,
-  Zap, Wallet, Receipt, SlidersHorizontal, ChevronDown, ChevronUp, RefreshCw
+  Zap, Wallet, Receipt, SlidersHorizontal, ChevronDown, ChevronUp, RefreshCw, Mail, MessageCircle
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 import TimelineFilter from '@/components/TimelineFilter';
 import { ERPProductItemsManager } from '@/components/ActiveItemSpotlight';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
+import type { ScannedImportItem } from '@/components/SmartOrderScannerModal';
+import BusinessCardDropBar from '@/components/BusinessCardDropBar';
+import type { AppliedBusinessCardResult } from '@/components/BusinessCardScannerModal';
 import { printPurchase, printInvoice } from '@/components/PrintableInvoice';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeDiscountAmount, computeGrandTotal, productCategories } from '@/lib/constants';
@@ -407,6 +412,16 @@ export default function Purchase() {
   const [pbProductSearch, setPbProductSearch] = useState('');
   const [pbCategory, setPbCategory] = useState('All');
   const [pbViewing, setPbViewing] = useState<SaleRecord | null>(null);
+  const [emailModalTarget, setEmailModalTarget] = useState<{
+    mode: 'purchase' | 'sale';
+    purchase?: PurchaseRecord;
+    sale?: SaleRecord;
+  } | null>(null);
+  const [whatsappModalTarget, setWhatsappModalTarget] = useState<{
+    mode: 'purchase' | 'sale';
+    purchase?: PurchaseRecord;
+    sale?: SaleRecord;
+  } | null>(null);
   const [pbDocumentType, setPbDocumentType] = useState<'PURCHASE BILL' | 'CREDIT NOTE' | 'DEBIT NOTE'>('PURCHASE BILL');
   const [pbPreviewCopyTag, setPbPreviewCopyTag] = useState('Original For Recipient');
   const [pbExportCopies, setPbExportCopies] = useState<Record<string, boolean>>({
@@ -747,10 +762,101 @@ export default function Purchase() {
     setModalOpen(true);
   };
 
+  const saveScannedSupplierToMaster = async (data: AppliedBusinessCardResult): Promise<string | null> => {
+    const firm = (data.businessName || data.contactPerson || '').trim();
+    if (!firm || data.matchedPartyId || !data.saveToMaster) return null;
+    const newSupId = `sup_${Date.now()}`;
+    try {
+      await addSupplier({
+        id: newSupId,
+        name: firm,
+        contactPerson: (data.contactPerson || firm).trim(),
+        phone: data.phone.trim(),
+        email: data.email.trim(),
+        gstin: data.gstin.trim().toUpperCase(),
+        address: data.address.trim(),
+        state: data.state || 'Haryana',
+        stateCode: data.stateCode || '06',
+        notes: data.notes ? `${data.notes} (Scanned Business Card)` : 'Scanned Business Card',
+      });
+      return newSupId;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleApplyScannedPoSupplier = async (data: AppliedBusinessCardResult) => {
+    const firm = (data.businessName || data.contactPerson || '').trim();
+    if (firm) setSupplier(firm);
+    if (data.phone) setPhone(data.phone);
+    await saveScannedSupplierToMaster(data);
+  };
+
+  const handleApplyScannedPbSupplier = async (data: AppliedBusinessCardResult) => {
+    const firm = (data.businessName || data.contactPerson || '').trim();
+    if (firm) setPbSupplier(firm);
+    if (data.phone) setPbPhone(data.phone);
+    if (data.gstin) setPbGstin(data.gstin);
+    if (data.address) setPbAddress(data.address);
+
+    if (data.matchedPartyId) {
+      setPbSupplierId(data.matchedPartyId);
+      return;
+    }
+    const createdId = await saveScannedSupplierToMaster(data);
+    setPbSupplierId(createdId || 'new');
+  };
+
   const onSupplierSelect = (name: string) => {
     setSupplier(name);
     const s = suppliers.find((x) => x.name === name);
     if (s && !phone) setPhone(s.phone);
+  };
+
+  const handleImportBulkPoItems = (imported: ScannedImportItem[]) => {
+    setLines((prev) => {
+      const next = [...prev];
+      for (const item of imported) {
+        if (item.productId && !item.isCustom) {
+          const prod = products.find((p) => p.id === item.productId);
+          if (!prod) continue;
+          const existingIdx = next.findIndex((l) => l.productId === prod.id);
+          if (existingIdx >= 0) {
+            next[existingIdx] = {
+              ...next[existingIdx],
+              qty: next[existingIdx].qty + item.qty,
+              cost: item.price !== undefined && item.price > 0 ? item.price : next[existingIdx].cost,
+            };
+          } else {
+            next.unshift({
+              productId: prod.id,
+              name: prod.name,
+              cost: item.price !== undefined && item.price > 0 ? item.price : (prod.cost || prod.price),
+              qty: item.qty,
+              gstRate: GST_RATE,
+              hsnCode: item.hsnCode || prod.hsnCode || '7318150',
+            });
+          }
+        } else {
+          const newTempId = `new_p${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+          const costVal = item.price || 0;
+          next.unshift({
+            productId: newTempId,
+            name: item.name,
+            cost: costVal,
+            qty: item.qty,
+            gstRate: GST_RATE,
+            isNewProduct: true,
+            rackNumber: 'General',
+            sellingPrice: +(costVal * 1.25).toFixed(2),
+            boxCapacity: 1000,
+            reorderLevel: 100,
+            hsnCode: item.hsnCode || '7318150',
+          });
+        }
+      }
+      return next;
+    });
   };
 
   const addLine = (productId: string, initialQty?: number, initialCost?: number) => {
@@ -1263,6 +1369,49 @@ export default function Purchase() {
     setRawPurchaseModalOpen(true);
   };
 
+  const handleImportBulkRawPurItems = (imported: ScannedImportItem[]) => {
+    setRawPurLines((prev) => {
+      const next = [...prev];
+      for (const item of imported) {
+        if (item.productId && !item.isCustom) {
+          const prod = products.find((p) => p.id === item.productId);
+          if (!prod) continue;
+          const existingIdx = next.findIndex((l) => l.productId === prod.id);
+          if (existingIdx >= 0) {
+            next[existingIdx] = {
+              ...next[existingIdx],
+              qty: next[existingIdx].qty + item.qty,
+              price: item.price !== undefined && item.price > 0 ? item.price : next[existingIdx].price,
+              cost: item.price !== undefined && item.price > 0 ? item.price : next[existingIdx].cost,
+            };
+          } else {
+            const costRate = item.price !== undefined && item.price > 0 ? item.price : (prod.cost || prod.price);
+            next.unshift({
+              productId: prod.id,
+              name: prod.name,
+              price: costRate,
+              cost: costRate,
+              qty: item.qty,
+              hsnCode: item.hsnCode || prod.hsnCode || '7318150',
+            });
+          }
+        } else {
+          const cid = `custom_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+          next.unshift({
+            productId: cid,
+            name: item.name,
+            price: item.price || 0,
+            cost: item.price || 0,
+            qty: item.qty,
+            isCustom: true,
+            hsnCode: item.hsnCode || '7318150',
+          });
+        }
+      }
+      return next;
+    });
+  };
+
   const addRawProductToPurchase = (p: Product) => {
     setActiveRawPurLineProductId(p.id);
     setJustAddedRawPurLineId(p.id);
@@ -1509,6 +1658,45 @@ export default function Purchase() {
       setPbAddress(sup.address || '');
       setPbGstin(sup.gstin || '');
     }
+  };
+
+  const handleImportBulkPbItems = (imported: ScannedImportItem[]) => {
+    setPbLines((prev) => {
+      const next = [...prev];
+      for (const item of imported) {
+        if (item.productId && !item.isCustom) {
+          const prod = products.find((p) => p.id === item.productId);
+          if (!prod) continue;
+          const existingIdx = next.findIndex((l) => l.productId === prod.id);
+          if (existingIdx >= 0) {
+            next[existingIdx] = {
+              ...next[existingIdx],
+              qty: next[existingIdx].qty + item.qty,
+              price: item.price !== undefined && item.price > 0 ? item.price : next[existingIdx].price,
+            };
+          } else {
+            next.unshift({
+              productId: prod.id,
+              name: prod.name,
+              price: item.price !== undefined && item.price > 0 ? item.price : (prod.cost || prod.price),
+              qty: item.qty,
+              hsnCode: item.hsnCode || prod.hsnCode || '7318150',
+            });
+          }
+        } else {
+          const cid = `custom_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+          next.unshift({
+            productId: cid,
+            name: item.name,
+            price: item.price || 0,
+            qty: item.qty,
+            isCustom: true,
+            hsnCode: item.hsnCode || '7318150',
+          });
+        }
+      }
+      return next;
+    });
   };
 
   const addPbLine = (productId: string, initialQty?: number, initialPrice?: number) => {
@@ -2409,6 +2597,26 @@ export default function Purchase() {
                             </button>
                             <button
                               onClick={() => {
+                                if (isPO) setWhatsappModalTarget({ mode: 'purchase', purchase: rec.raw as PurchaseRecord });
+                                else setWhatsappModalTarget({ mode: 'sale', sale: rec.raw as SaleRecord });
+                              }}
+                              className="rounded-lg p-2 text-emerald-600 transition hover:bg-emerald-50 hover:text-emerald-700"
+                              title="Send Bill / Order PDF via WhatsApp"
+                            >
+                              <MessageCircle className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (isPO) setEmailModalTarget({ mode: 'purchase', purchase: rec.raw as PurchaseRecord });
+                                else setEmailModalTarget({ mode: 'sale', sale: rec.raw as SaleRecord });
+                              }}
+                              className="rounded-lg p-2 text-rose-500 transition hover:bg-rose-50 hover:text-rose-700"
+                              title="Send Bill / Order PDF via Email"
+                            >
+                              <Mail className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => {
                                 if (isPO) handlePrint(rec.raw);
                                 else printInvoice(rec.raw, undefined, companySettings);
                               }}
@@ -2763,6 +2971,11 @@ export default function Purchase() {
         }
       >
         <div className="space-y-5">
+          <BusinessCardDropBar
+            partyType="supplier"
+            existingParties={suppliers}
+            onApplyParty={handleApplyScannedPoSupplier}
+          />
           {restoredFromPoDraft && (
             <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
               <div className="flex items-center gap-2">
@@ -2936,6 +3149,7 @@ export default function Purchase() {
                 });
                 setQuickEditProductModalOpen(true);
               }}
+              onImportBulkItems={handleImportBulkPoItems}
             />
           </div>
 
@@ -3161,6 +3375,11 @@ export default function Purchase() {
           onClose={() => setPbModalOpen(false)}
         >
           <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1 text-xs">
+            <BusinessCardDropBar
+              partyType="supplier"
+              existingParties={suppliers}
+              onApplyParty={handleApplyScannedPbSupplier}
+            />
             {restoredFromPbDraft && (
               <div className="flex items-center justify-between rounded-xl bg-amber-50 border border-amber-300 p-3 text-amber-900 text-xs animate-fade-in shadow-xs">
                 <div className="flex items-center gap-2">
@@ -3450,6 +3669,7 @@ export default function Purchase() {
                 });
                 setQuickEditProductModalOpen(true);
               }}
+              onImportBulkItems={handleImportBulkPbItems}
             />
 
             {/* Calculations Breakdown */}
@@ -3855,6 +4075,22 @@ export default function Purchase() {
               </button>
               <div className="flex gap-2">
                 <button
+                  type="button"
+                  onClick={() => setWhatsappModalTarget({ mode: 'sale', sale: pbViewing })}
+                  className="btn-secondary text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100 flex items-center gap-1.5 font-bold"
+                >
+                  <MessageCircle className="h-4 w-4 text-emerald-600" />
+                  <span>WhatsApp PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEmailModalTarget({ mode: 'sale', sale: pbViewing })}
+                  className="btn-secondary text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100 flex items-center gap-1.5 font-bold"
+                >
+                  <Mail className="h-4 w-4 text-rose-600" />
+                  <span>Send via Email</span>
+                </button>
+                <button
                   onClick={() => {
                     const sel = Object.keys(pbExportCopies).filter((k) => pbExportCopies[k]);
                     printInvoice(pbViewing, sel, companySettings);
@@ -4120,6 +4356,7 @@ export default function Purchase() {
                 });
                 setQuickEditProductModalOpen(true);
               }}
+              onImportBulkItems={handleImportBulkRawPurItems}
             />
 
             {/* Bill Summary & Actions */}
@@ -4381,6 +4618,26 @@ export default function Purchase() {
           </div>
         </Modal>
       )}
+
+      {/* Email Purchase Order / Purchase Bill Modal */}
+      <SendEmailModal
+        open={!!emailModalTarget}
+        onClose={() => setEmailModalTarget(null)}
+        mode={emailModalTarget?.mode || 'purchase'}
+        purchase={emailModalTarget?.purchase}
+        sale={emailModalTarget?.sale}
+        companySettings={companySettings}
+      />
+
+      {/* WhatsApp Purchase Order / Purchase Bill PDF Modal */}
+      <SendWhatsAppPdfModal
+        open={!!whatsappModalTarget}
+        onClose={() => setWhatsappModalTarget(null)}
+        mode={whatsappModalTarget?.mode || 'purchase'}
+        purchase={whatsappModalTarget?.purchase}
+        sale={whatsappModalTarget?.sale}
+        companySettings={companySettings}
+      />
     </div>
   );
 }

@@ -5,7 +5,7 @@ import {
   Trash2, Minus, Printer, Package, AlertTriangle, MessageCircle, UserPlus, Check, Edit3, X,
   CreditCard, Calendar, Landmark, AlertOctagon, CheckSquare, XCircle, ArrowUpRight, ArrowRight,
   ShieldCheck, RefreshCw, FileText, Building2, PackageCheck, ShoppingBag, Zap, Wallet, Receipt, Sparkles,
-  ChevronDown, ChevronUp, SlidersHorizontal
+  ChevronDown, ChevronUp, SlidersHorizontal, Mail
 } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
@@ -13,6 +13,11 @@ import Modal from '@/components/Modal';
 import TimelineFilter from '@/components/TimelineFilter';
 import { printInvoice } from '@/components/PrintableInvoice';
 import { ERPProductItemsManager } from '@/components/ActiveItemSpotlight';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
+import type { ScannedImportItem } from '@/components/SmartOrderScannerModal';
+import BusinessCardDropBar from '@/components/BusinessCardDropBar';
+import type { AppliedBusinessCardResult } from '@/components/BusinessCardScannerModal';
 import { useStore } from '@/store/AppStore';
 import { GST_RATE, computeGrandTotal, computeDiscountAmount, validateGstin } from '@/lib/constants';
 import {
@@ -394,6 +399,8 @@ export default function Sales() {
   const [salesNewProdQty, setSalesNewProdQty] = useState('1');
 
   const [viewing, setViewing] = useState<SaleRecord | null>(null);
+  const [emailModalSale, setEmailModalSale] = useState<SaleRecord | null>(null);
+  const [whatsappModalSale, setWhatsappModalSale] = useState<SaleRecord | null>(null);
   const [stockError, setStockError] = useState('');
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
 
@@ -842,6 +849,41 @@ export default function Sales() {
     }
   };
 
+  const handleApplyScannedCustomer = async (data: AppliedBusinessCardResult) => {
+    const firm = (data.businessName || data.contactPerson || '').trim();
+    if (firm) setCustomer(firm);
+    if (data.phone) setPhone(data.phone);
+    if (data.gstin) setCustomerGstin(data.gstin);
+    if (data.address) setAddress(data.address);
+
+    if (data.matchedPartyId) {
+      setSelectedCustomerId(data.matchedPartyId);
+      return;
+    }
+
+    if (data.saveToMaster && firm) {
+      const newCustId = `c_${Date.now()}`;
+      try {
+        await addCustomer({
+          id: newCustId,
+          name: firm,
+          businessName: firm,
+          phone: data.phone.trim(),
+          gstin: data.gstin.trim().toUpperCase(),
+          email: data.email.trim(),
+          address: data.address.trim(),
+          state: data.state || companySettings?.state || 'Haryana',
+          stateCode: data.stateCode || companySettings?.stateCode || '06',
+          notes: data.notes ? `${data.notes} (Scanned Business Card)` : 'Scanned Business Card',
+        });
+        setSelectedCustomerId(newCustId);
+        return;
+      } catch {}
+    }
+
+    setSelectedCustomerId('new');
+  };
+
   const resetForm = () => {
     setSelectedCustomerId('');
     setCustomer('');
@@ -1169,6 +1211,47 @@ export default function Sales() {
     });
   };
 
+  const handleImportBulkRawSaleItems = (imported: ScannedImportItem[]) => {
+    setRawInvoiceLines((prev) => {
+      const next = [...prev];
+      for (const item of imported) {
+        if (item.productId && !item.isCustom) {
+          const prod = products.find((p) => p.id === item.productId);
+          if (!prod) continue;
+          const existingIdx = next.findIndex((l) => l.productId === prod.id);
+          if (existingIdx >= 0) {
+            next[existingIdx] = {
+              ...next[existingIdx],
+              qty: next[existingIdx].qty + item.qty,
+              price: item.price !== undefined && item.price > 0 ? item.price : next[existingIdx].price,
+            };
+          } else {
+            next.unshift({
+              productId: prod.id,
+              name: prod.name,
+              price: item.price !== undefined && item.price > 0 ? item.price : prod.price,
+              cost: prod.cost,
+              qty: item.qty,
+              hsnCode: item.hsnCode || prod.hsnCode || '7318150',
+            });
+          }
+        } else {
+          const cid = `custom_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+          next.unshift({
+            productId: cid,
+            name: item.name,
+            price: item.price || 0,
+            cost: 0,
+            qty: item.qty,
+            isCustom: true,
+            hsnCode: item.hsnCode || '7318150',
+          });
+        }
+      }
+      return next;
+    });
+  };
+
   const addFastRawLine = (item: {
     productId: string;
     name: string;
@@ -1433,6 +1516,51 @@ export default function Sales() {
     setCustomInvoiceNumber(nextProformaInvoice(sales));
     setPiExpirationDate(addMonthsToDate(todayISO(), 1));
     setModalOpen(true);
+  };
+
+  const handleImportBulkSaleItems = (imported: ScannedImportItem[]) => {
+    setLines((prev) => {
+      const next = [...prev];
+      for (const item of imported) {
+        if (item.productId && !item.isCustom) {
+          const prod = products.find((p) => p.id === item.productId);
+          if (!prod) continue;
+          const existingIdx = next.findIndex((l) => l.productId === prod.id);
+          if (existingIdx >= 0) {
+            next[existingIdx] = {
+              ...next[existingIdx],
+              qty: next[existingIdx].qty + item.qty,
+              price: item.price !== undefined && item.price > 0 ? item.price : next[existingIdx].price,
+            };
+          } else {
+            next.unshift({
+              productId: prod.id,
+              name: prod.name,
+              price: item.price !== undefined && item.price > 0 ? item.price : prod.price,
+              cost: prod.cost,
+              qty: item.qty,
+              discount: 0,
+              isCustom: false,
+              hsnCode: item.hsnCode || prod.hsnCode || '7318150',
+            });
+          }
+        } else {
+          const customId = `custom_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+          next.unshift({
+            productId: customId,
+            name: item.name,
+            price: item.price || 0,
+            cost: 0,
+            qty: item.qty,
+            isCustom: true,
+            hsnCode: item.hsnCode || '7318150',
+            discount: 0,
+            discountType: 'percent',
+          });
+        }
+      }
+      return next;
+    });
   };
 
   const addLine = (productId: string, initialQty?: number, initialRate?: number, initialDisc?: number) => {
@@ -2028,23 +2156,6 @@ export default function Sales() {
         : prev,
     );
     setConvertTargetSale(null);
-  };
-
-  const getWhatsAppInvoiceLink = (s: SaleRecord) => {
-    const cleanPhone = s.phone.replace(/[^0-9]/g, '');
-    const fullPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    const isPo = s.documentType === 'PURCHASE ORDER' || !!s.convertedFromPoNumber;
-    const isPi = s.documentType === 'PROFORMA INVOICE' || !!s.convertedFromPiNumber;
-    let msg = '';
-    if (isPo) {
-      msg = `Hello ${s.customer}, thank you for your Purchase Order #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}. We have scheduled your order. Nain Tools & Bolt Co.`;
-    } else if (isPi) {
-      msg = `Hello ${s.customer}, please find your Proforma Quote #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}. Valid for 1 month. Nain Tools & Bolt Co.`;
-    } else {
-      const dueInfo = s.status !== 'paid' ? ` | Unpaid Balance: ${money(s.grandTotal - (s.amountPaid || 0))}` : ' | Paid in Full';
-      msg = `Hello ${s.customer}, thank you for your business! Your Invoice #${s.invoice} dated ${s.date} for total ${money(s.grandTotal)}${dueInfo} is confirmed. Nain Tools & Bolt Co.`;
-    }
-    return `https://wa.me/${fullPhone}?text=${encodeURIComponent(msg)}`;
   };
 
   const claimableCheques = useMemo(
@@ -2756,16 +2867,23 @@ export default function Sales() {
                               </button>
                             )}
                             {s.phone && (
-                              <a
-                                href={getWhatsAppInvoiceLink(s)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
-                                title="Share Invoice via WhatsApp"
+                              <button
+                                type="button"
+                                onClick={() => setWhatsappModalSale(s)}
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                                title="Send Full Bill PDF via WhatsApp"
                               >
                                 <MessageCircle className="h-4 w-4" />
-                              </a>
+                              </button>
                             )}
+                            <button
+                              type="button"
+                              onClick={() => setEmailModalSale(s)}
+                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                              title="Send Bill via Email"
+                            >
+                              <Mail className="h-4 w-4" />
+                            </button>
                             <button
                               onClick={() => setViewing(s)}
                               className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition"
@@ -3255,16 +3373,23 @@ export default function Sales() {
                                 </button>
                               )}
                               {record.phone && (
-                                <a
-                                  href={getWhatsAppInvoiceLink(record)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
-                                  title="Share via WhatsApp"
+                                <button
+                                  type="button"
+                                  onClick={() => setWhatsappModalSale(record)}
+                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                                  title="Send Full Bill PDF via WhatsApp"
                                 >
                                   <MessageCircle className="h-4 w-4" />
-                                </a>
+                                </button>
                               )}
+                              <button
+                                type="button"
+                                onClick={() => setEmailModalSale(record)}
+                                className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                title="Send via Email"
+                              >
+                                <Mail className="h-4 w-4" />
+                              </button>
                               <button
                                 onClick={() => setViewing(record)}
                                 className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition"
@@ -3855,6 +3980,12 @@ export default function Sales() {
           onClose={() => setModalOpen(false)}
         >
           <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-1">
+            <BusinessCardDropBar
+              partyType="customer"
+              existingParties={customers}
+              onApplyParty={handleApplyScannedCustomer}
+            />
+
             {/* Draft Recovery Alert Banner */}
             {!editingSaleId && restoredFromDraft && (
               <div className="flex flex-wrap items-center justify-between gap-2.5 p-3 bg-amber-50/90 border-2 border-amber-300 rounded-xl text-xs text-amber-950 shadow-xs animate-fade-in">
@@ -4350,6 +4481,7 @@ export default function Sales() {
                 setQuickEditProductModalOpen(true);
               }}
               onOpenCustomModal={() => setIsAddingCustom(true)}
+              onImportBulkItems={handleImportBulkSaleItems}
             />
 
             {/* Calculations & GST */}
@@ -5420,6 +5552,22 @@ export default function Sales() {
                 Close
               </button>
               <button
+                type="button"
+                className="btn-secondary text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100 font-bold"
+                onClick={() => setWhatsappModalSale(viewing)}
+              >
+                <MessageCircle className="h-4 w-4 text-emerald-600" />
+                <span>WhatsApp PDF</span>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100 font-bold"
+                onClick={() => setEmailModalSale(viewing)}
+              >
+                <Mail className="h-4 w-4 text-rose-600" />
+                <span>Send via Email</span>
+              </button>
+              <button
                 className="btn-primary"
                 onClick={() => {
                   const selectedList = Object.keys(exportCopies).filter((k) => exportCopies[k]);
@@ -6270,6 +6418,7 @@ export default function Sales() {
                 });
                 setQuickEditProductModalOpen(true);
               }}
+              onImportBulkItems={handleImportBulkRawSaleItems}
             />
 
             {/* Bill Summary & Actions */}
@@ -6395,6 +6544,24 @@ export default function Sales() {
           </div>
         </Modal>
       )}
+
+      {/* Email Invoice / Quote Modal */}
+      <SendEmailModal
+        open={!!emailModalSale}
+        onClose={() => setEmailModalSale(null)}
+        mode="sale"
+        sale={emailModalSale}
+        companySettings={companySettings}
+      />
+
+      {/* Send Full Bill PDF via WhatsApp */}
+      <SendWhatsAppPdfModal
+        open={!!whatsappModalSale}
+        onClose={() => setWhatsappModalSale(null)}
+        mode="sale"
+        sale={whatsappModalSale}
+        companySettings={companySettings}
+      />
     </div>
   );
 }

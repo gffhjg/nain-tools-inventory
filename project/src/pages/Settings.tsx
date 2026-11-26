@@ -1,10 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { User, Building2, Bell, Shield, Globe, Save, Upload, CheckCircle2, Palette, DollarSign, Download, FileUp, AlertTriangle, Loader2, Info, Database, HardDrive, Calendar, Tag, FolderOpen, Trash2, RotateCcw, Check, Sparkles } from 'lucide-react';
+import { User, Building2, Bell, Shield, Globe, Save, Upload, CheckCircle2, Palette, DollarSign, Download, FileUp, AlertTriangle, Loader2, Info, Database, HardDrive, Calendar, Tag, FolderOpen, Trash2, RotateCcw, Check, Sparkles, Mail, KeyRound } from 'lucide-react';
 import PageHeader from '@/components/PageHeader';
 import { api, APP_VERSION } from '@/lib/api';
 import { getDbInfo, verifyIntegrity } from '@/lib/db';
 import { useStore } from '@/store/AppStore';
+import { getEmailJSConfig, saveEmailJSConfig, type EmailJSConfig } from '@/utils/email';
+import { getGeminiApiKey, saveGeminiApiKey } from '@/utils/smartOrderParser';
 import type { CompanySettings } from '@/lib/types';
 
 type Tab = 'profile' | 'business' | 'notifications' | 'security' | 'about';
@@ -113,6 +115,11 @@ export default function Settings() {
   const [restoring, setRestoring] = useState(false);
   const [dbInfo, setDbInfo] = useState<{ schemaVersion: string; appVersion: string; dbLocation: string; storageType: string } | null>(null);
   const [integrityStatus, setIntegrityStatus] = useState<{ ok: boolean; missingTables: string[] } | null>(null);
+
+  // EmailJS & Gemini AI Integration Config
+  const [emailJsCfg, setEmailJsCfg] = useState<EmailJSConfig>(() => getEmailJSConfig());
+  const [geminiApiKey, setGeminiApiKey] = useState(() => getGeminiApiKey());
+  const [integrationsSaved, setIntegrationsSaved] = useState(false);
 
   useEffect(() => {
     if (activeTab !== 'about') return;
@@ -694,6 +701,84 @@ export default function Settings() {
                   checked={notif.weeklyDigest}
                   onChange={(v) => setNotif((n) => ({ ...n, weeklyDigest: v }))}
                 />
+              </div>
+
+              {/* Email & AI Scanner Integrations */}
+              <div className="mt-8 border-t border-slate-200 pt-6 space-y-5">
+                <div>
+                  <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-rose-600" />
+                    <span>Email Delivery &amp; AI Bill Scanner Integrations</span>
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Sending bills via Gmail / Outlook and scanning WhatsApp/Email/Image orders work out-of-the-box without keys.
+                    Configure optional keys below for 1-click silent EmailJS sending and AI handwritten slip / PDF scanning.
+                  </p>
+                </div>
+
+                {integrationsSaved && (
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2 animate-fade-in">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    <span>Email &amp; AI scanner settings saved locally!</span>
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-indigo-600" />
+                    <p className="text-sm font-bold text-slate-800">Optional: EmailJS Credentials (1-Click Direct Email)</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <ControlledField
+                      label="Service ID"
+                      value={emailJsCfg.serviceId}
+                      onChange={(v) => setEmailJsCfg((c) => ({ ...c, serviceId: v }))}
+                      placeholder="service_xxxxxxx"
+                    />
+                    <ControlledField
+                      label="Template ID"
+                      value={emailJsCfg.templateId}
+                      onChange={(v) => setEmailJsCfg((c) => ({ ...c, templateId: v }))}
+                      placeholder="template_xxxxxxx"
+                    />
+                    <ControlledField
+                      label="Public Key"
+                      value={emailJsCfg.publicKey}
+                      onChange={(v) => setEmailJsCfg((c) => ({ ...c, publicKey: v }))}
+                      placeholder="Your EmailJS public key"
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <KeyRound className="h-4 w-4 text-purple-600" />
+                    <p className="text-sm font-bold text-slate-800">Optional: Google Gemini API Key (AI Handwriting &amp; PDF Scanner)</p>
+                  </div>
+                  <ControlledField
+                    label="Gemini API Key"
+                    type="password"
+                    value={geminiApiKey}
+                    onChange={setGeminiApiKey}
+                    placeholder="AIza..."
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      saveEmailJSConfig(emailJsCfg);
+                      saveGeminiApiKey(geminiApiKey);
+                      setIntegrationsSaved(true);
+                      setTimeout(() => setIntegrationsSaved(false), 3000);
+                    }}
+                    className="btn-primary text-xs flex items-center gap-1.5"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    <span>Save Email &amp; AI Settings</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}

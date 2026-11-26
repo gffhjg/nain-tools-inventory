@@ -16,9 +16,13 @@ import {
   PackageCheck,
   Clock,
   ShoppingCart,
+  Mail,
+  MessageCircle,
 } from 'lucide-react';
 import Modal from '@/components/Modal';
 import StatusBadge from '@/components/StatusBadge';
+import SendEmailModal from '@/components/SendEmailModal';
+import SendWhatsAppPdfModal from '@/components/SendWhatsAppPdfModal';
 import { printInvoice } from '@/components/PrintableInvoice';
 import { money, nextInvoice, formatRelativeDate, getDaysAgo } from '@/utils/analytics';
 import { computeDiscountAmount } from '@/lib/constants';
@@ -40,6 +44,8 @@ export default function InvoiceDetailsModal({ sale, onClose, companySettings }: 
   const [customInvoiceNumber, setCustomInvoiceNumber] = useState('');
   const [isConverting, setIsConverting] = useState(false);
   const [isUpdatingDate, setIsUpdatingDate] = useState(false);
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [whatsappModalOpen, setWhatsappModalOpen] = useState(false);
 
   const handleUpdateDateToToday = async () => {
     const today = new Date().toISOString().slice(0, 10);
@@ -136,6 +142,22 @@ export default function InvoiceDetailsModal({ sale, onClose, companySettings }: 
                   <span>⚡ Convert to Tax Invoice</span>
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setWhatsappModalOpen(true)}
+                className="btn-secondary text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100 text-xs px-3.5 py-2 flex items-center gap-1.5 font-bold"
+              >
+                <MessageCircle className="h-4 w-4 text-emerald-600" />
+                <span>WhatsApp PDF</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEmailModalOpen(true)}
+                className="btn-secondary text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100 text-xs px-3.5 py-2 flex items-center gap-1.5 font-bold"
+              >
+                <Mail className="h-4 w-4 text-rose-600" />
+                <span>Send via Email</span>
+              </button>
               <button
                 onClick={handlePrint}
                 className="btn-primary text-xs px-4 py-2 flex items-center gap-2 shadow-sm hover:shadow transition font-bold"
@@ -651,6 +673,22 @@ export default function InvoiceDetailsModal({ sale, onClose, companySettings }: 
         </div>
       </Modal>
     )}
+
+    <SendEmailModal
+      open={emailModalOpen}
+      onClose={() => setEmailModalOpen(false)}
+      mode="sale"
+      sale={currentSale}
+      companySettings={companySettings}
+    />
+
+    <SendWhatsAppPdfModal
+      open={whatsappModalOpen}
+      onClose={() => setWhatsappModalOpen(false)}
+      mode="sale"
+      sale={currentSale}
+      companySettings={companySettings}
+    />
   </>
   );
 }
